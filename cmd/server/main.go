@@ -68,22 +68,22 @@ type describeKeyResponse struct {
 }
 
 type keyMetadata struct {
-	AWSAccountID               string    `json:"AWSAccountId"`
-	KeyID                      string    `json:"KeyId"`
-	Arn                        string    `json:"Arn"`
-	CreationDate               time.Time `json:"CreationDate"`
-	Enabled                    bool      `json:"Enabled"`
-	Description                string    `json:"Description"`
-	KeyUsage                   string    `json:"KeyUsage"`
-	KeyState                   string    `json:"KeyState"`
-	Origin                     string    `json:"Origin"`
-	KeyManager                 string    `json:"KeyManager"`
-	CustomerMasterKeySpec      string    `json:"CustomerMasterKeySpec"`
-	KeySpec                    string    `json:"KeySpec"`
-	EncryptionAlgorithms       []string  `json:"EncryptionAlgorithms"`
-	MultiRegion                bool      `json:"MultiRegion"`
-	SigningAlgorithms          []string  `json:"SigningAlgorithms"`
-	PendingDeletionWindowInDays int      `json:"PendingDeletionWindowInDays,omitempty"`
+	AWSAccountID                string    `json:"AWSAccountId"`
+	KeyID                       string    `json:"KeyId"`
+	Arn                         string    `json:"Arn"`
+	CreationDate                time.Time `json:"CreationDate"`
+	Enabled                     bool      `json:"Enabled"`
+	Description                 string    `json:"Description"`
+	KeyUsage                    string    `json:"KeyUsage"`
+	KeyState                    string    `json:"KeyState"`
+	Origin                      string    `json:"Origin"`
+	KeyManager                  string    `json:"KeyManager"`
+	CustomerMasterKeySpec       string    `json:"CustomerMasterKeySpec"`
+	KeySpec                     string    `json:"KeySpec"`
+	EncryptionAlgorithms        []string  `json:"EncryptionAlgorithms"`
+	MultiRegion                 bool      `json:"MultiRegion"`
+	SigningAlgorithms           []string  `json:"SigningAlgorithms"`
+	PendingDeletionWindowInDays int       `json:"PendingDeletionWindowInDays,omitempty"`
 }
 
 func main() {
