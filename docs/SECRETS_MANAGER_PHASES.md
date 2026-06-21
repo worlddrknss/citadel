@@ -172,13 +172,15 @@ Implemented so far:
 - Secret resource policy storage and retrieval.
 - Policy JSON validation endpoint support.
 - Secret tag storage suitable for future filtering and authorization hooks.
+- Resource policy enforcement on core secret read/write and management operations.
+- Shared audit coverage that will support future denied-access analysis.
 
 Remaining in phase:
 
-- Actual resource policy evaluation on read/write paths.
 - Tenant-aware ownership and visibility enforcement.
 - Deny-by-default authorization behavior and cross-tenant rejection tests.
 - Reuse of the future KMS principal and grants model once it exists.
+- Authenticated principal mapping from API/UI requests into policy decisions.
 
 ## Phase S4: Rotation Workflows and Operational Automation (Partially implemented for MVP)
 
@@ -237,11 +239,12 @@ Implemented so far:
 
 - UI pages for secret inventory, retrieval, version history, tags, resource policy, and rotation configuration.
 - API-level audit recording through the shared request audit path.
+- Shared audit explorer coverage across Secrets Manager and KMS control-plane events.
 
 Remaining in phase:
 
 - Authenticated UI with RBAC and tenant scoping.
-- Audit explorer and richer secret-specific audit event analysis.
+- Richer secret-specific audit event analysis.
 - Metrics, alerts, backup guidance, restore runbooks, and rotation incident docs.
 - UI support for binary-secret workflows and more advanced operator controls.
 
@@ -261,6 +264,7 @@ Done:
 - Secret tag storage plus resource policy get/put/validate endpoints.
 - Rotation metadata, pending-version creation, and manual promote/cancel flows.
 - AWS-style admin UI pages for overview, retrieve, versions, tags, policy, and rotation.
+- Shared audit explorer coverage across Secrets Manager and KMS control-plane events.
 
 Not done yet:
 
@@ -269,6 +273,7 @@ Not done yet:
 - External rotation executors and retry/rollback orchestration.
 - Dedicated Secrets compatibility matrix document.
 - Metrics, operational runbooks, backup/restore guidance, and production UI hardening.
+- Authenticated UI, tenant scoping, and richer audit workflow UX.
 
 ## Open Design Decisions
 

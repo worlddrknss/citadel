@@ -72,13 +72,14 @@ seal "awskms" {
 - Full phased implementation details are in `docs/PHASES.md`.
 - Phase A compatibility status is tracked in `docs/COMPATIBILITY_MATRIX.md`.
 - AWS Secrets Manager supplemental planning is tracked in `docs/SECRETS_MANAGER_PHASES.md`.
+- The admin console now includes an audit explorer shared across KMS and Secrets Manager.
 
 ## Build Roadmap (5 phases)
 
 1. Phase 1: PostgreSQL-backed key/config storage, default key resolution, migration-safe env fallback.
 2. Phase 2: Lifecycle APIs (`CreateKey`, `ListKeys`, aliases, enable/disable, deletion windows).
 3. Phase 3: AuthZ model (grants/policies), stronger SigV4 validation, tenant boundaries.
-4. Phase 4: Management UI (key inventory, policy/grant management, audit explorer).
+4. Phase 4: Management UI (key inventory, policy/grant management, audit explorer, operator workflows).
 5. Phase 5: Hardening and operations (HA, backups, key wrapping root, SLOs, security tests).
 
 ## Release image on tag

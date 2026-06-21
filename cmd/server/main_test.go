@@ -182,6 +182,74 @@ func TestPutAndGetKeyPolicy(t *testing.T) {
 	}
 }
 
+func TestKeyPolicyDeniesEncrypt(t *testing.T) {
+	k := sampleKey(1)
+	s := &server{cfg: config{}, store: &inMemoryStore{k: k}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleKMS)
+
+	denyPolicy := `{"Version":"2012-10-17","Statement":[{"Sid":"DenyEncrypt","Effect":"Deny","Principal":"*","Action":"kms:Encrypt","Resource":"*"}]}`
+	callKMS(t, mux, "TrentService.PutKeyPolicy", map[string]any{
+		"KeyId":      k.ID,
+		"PolicyName": "default",
+		"Policy":     denyPolicy,
+	})
+
+	rec := post(t, mux, "TrentService.Encrypt", map[string]any{
+		"KeyId":     k.ID,
+		"Plaintext": base64.StdEncoding.EncodeToString([]byte("blocked")),
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status got %d want %d body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	assertAWSErrorType(t, rec.Body.Bytes(), "AccessDeniedException")
+}
+
+func TestGrantLifecycle(t *testing.T) {
+	k := sampleKey(1)
+	s := &server{cfg: config{}, store: &inMemoryStore{k: k}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleKMS)
+
+	createResp := callKMS(t, mux, "TrentService.CreateGrant", map[string]any{
+		"KeyId":            k.ID,
+		"GranteePrincipal": "arn:aws:iam::000000000000:user/app",
+		"Operations":       []string{"Encrypt", "Decrypt"},
+		"Name":             "app-grant",
+	})
+	grantID, _ := createResp["GrantId"].(string)
+	grantToken, _ := createResp["GrantToken"].(string)
+	if grantID == "" || grantToken == "" {
+		t.Fatalf("expected grant id and token: %#v", createResp)
+	}
+
+	listResp := callKMS(t, mux, "TrentService.ListGrants", map[string]any{"KeyId": k.ID})
+	grants, ok := listResp["Grants"].([]any)
+	if !ok || len(grants) != 1 {
+		t.Fatalf("expected one grant: %#v", listResp)
+	}
+
+	callKMS(t, mux, "TrentService.RevokeGrant", map[string]any{"KeyId": k.ID, "GrantId": grantID})
+	listResp = callKMS(t, mux, "TrentService.ListGrants", map[string]any{"KeyId": k.ID})
+	grants, ok = listResp["Grants"].([]any)
+	if !ok || len(grants) != 0 {
+		t.Fatalf("expected no grants after revoke: %#v", listResp)
+	}
+
+	createResp = callKMS(t, mux, "TrentService.CreateGrant", map[string]any{
+		"KeyId":            k.ID,
+		"GranteePrincipal": "arn:aws:iam::000000000000:user/app",
+		"Operations":       []string{"Encrypt"},
+	})
+	grantToken, _ = createResp["GrantToken"].(string)
+	callKMS(t, mux, "TrentService.RetireGrant", map[string]any{"GrantToken": grantToken})
+	listResp = callKMS(t, mux, "TrentService.ListGrants", map[string]any{"KeyId": k.ID})
+	grants, ok = listResp["Grants"].([]any)
+	if !ok || len(grants) != 0 {
+		t.Fatalf("expected no grants after retire: %#v", listResp)
+	}
+}
+
 func TestDeriveDeterministicLegacyKeyID(t *testing.T) {
 	master := bytes.Repeat([]byte{7}, 32)
 	sum := sha256.Sum256(master)
@@ -649,6 +717,31 @@ func TestSecretsManagerLifecycle(t *testing.T) {
 	}
 }
 
+func TestSecretResourcePolicyDeniesGetSecretValue(t *testing.T) {
+	key := sampleKey(1)
+	store := &inMemoryStore{k: key}
+	s := &server{cfg: config{}, store: store}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleKMS)
+
+	callKMS(t, mux, "secretsmanager.CreateSecret", map[string]any{
+		"Name":         "prod/app/blocked",
+		"SecretString": `{"token":"abc"}`,
+	})
+	callKMS(t, mux, "secretsmanager.PutResourcePolicy", map[string]any{
+		"SecretId":       "prod/app/blocked",
+		"ResourcePolicy": `{"Version":"2012-10-17","Statement":[{"Sid":"DenyRead","Effect":"Deny","Principal":"*","Action":"secretsmanager:GetSecretValue","Resource":"*"}]}`,
+	})
+
+	rec := post(t, mux, "secretsmanager.GetSecretValue", map[string]any{
+		"SecretId": "prod/app/blocked",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status got %d want %d body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	assertAWSErrorType(t, rec.Body.Bytes(), "AccessDeniedException")
+}
+
 func TestSecretsAdminPageRenders(t *testing.T) {
 	key := sampleKey(1)
 	store := &inMemoryStore{k: key}
@@ -673,6 +766,9 @@ func TestSecretsAdminPageRenders(t *testing.T) {
 	if !strings.Contains(listBody, "Secrets Manager") || !strings.Contains(listBody, "prod/ui/secret") {
 		t.Fatalf("unexpected list page body: %s", listBody)
 	}
+	if !strings.Contains(listBody, "Audit Explorer") {
+		t.Fatalf("expected audit explorer nav link in secrets list body: %s", listBody)
+	}
 
 	detailReq := httptest.NewRequest(http.MethodGet, "/admin/secrets?secret_id=prod/ui/secret&tab=retrieve", nil)
 	detailRec := httptest.NewRecorder()
@@ -694,6 +790,34 @@ func TestSecretsAdminPageRenders(t *testing.T) {
 	policyBody := policyRec.Body.String()
 	if !strings.Contains(policyBody, "Resource policy") || !strings.Contains(policyBody, "Rotation") || !strings.Contains(policyBody, "Tags") {
 		t.Fatalf("unexpected policy page body: %s", policyBody)
+	}
+}
+
+func TestAuditExplorerRenders(t *testing.T) {
+	key := sampleKey(1)
+	store := &inMemoryStore{k: key}
+	if err := store.RecordAudit(context.Background(), auditEvent{Action: "TrentService.Encrypt", KeyID: key.ID, Result: "ok", Actor: "127.0.0.1"}); err != nil {
+		t.Fatalf("record audit kms: %v", err)
+	}
+	if err := store.RecordAudit(context.Background(), auditEvent{Action: "secretsmanager.CreateSecret", KeyID: key.ID, Result: "error", ErrorType: "ValidationException", Actor: "127.0.0.1"}); err != nil {
+		t.Fatalf("record audit secrets: %v", err)
+	}
+	s := &server{cfg: config{}, store: store}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin/audit", s.handleAudit)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/audit?service=kms&q=Encrypt", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected audit page status: %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Audit Explorer") || !strings.Contains(body, "TrentService.Encrypt") || !strings.Contains(body, "KMS / Secrets") {
+		t.Fatalf("unexpected audit page body: %s", body)
+	}
+	if strings.Contains(body, "secretsmanager.CreateSecret") {
+		t.Fatalf("service filter should hide secrets events: %s", body)
 	}
 }
 

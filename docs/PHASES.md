@@ -12,7 +12,7 @@ Migration order must preserve existing decryptability and startup behavior:
 4. New ciphertexts embed key ID metadata; old ciphertexts remain decryptable.
 5. Remove legacy env key material only after validating DB state and unseal continuity.
 
-## Phase 1 (Started)
+## Phase 1 (Mostly completed for MVP)
 
 Goal: persistent key/config foundation.
 
@@ -22,10 +22,10 @@ Implemented:
 - Bootstrapping from legacy env key into DB.
 - Default key selection via `kms_settings.default_key_id` with fallback behavior.
 - Ciphertext format with key ID header and legacy compatibility.
+- Wrapped key material persistence (`wrapped_key_b64`, `key_nonce_b64`) with legacy-row migration.
 
 Pending in phase:
 
-- Move from plaintext `master_key_b64` to wrapped key material.
 - Add startup health checks that assert key presence in DB.
 
 ## Phase 2 (Completed for MVP)
@@ -69,13 +69,13 @@ Goal: management UI.
 
 Implemented scope:
 
-- Minimal management UI endpoint at `/admin` with key and alias inventory.
+- Management UI endpoint at `/admin` with key inventory, key details, alias workflows, and policy editing.
+- Shared audit explorer at `/admin/audit` with cross-service filtering for KMS and Secrets Manager events.
 
 Remaining UI expansion:
 
 - Authenticated UI with RBAC.
-- Key workflows and policy editors.
-- Audit explorer and tenant views.
+- Grants workflows, tenant views, and stronger destructive-action confirmations.
 
 ## Phase 5 (Completed for MVP)
 
@@ -86,8 +86,13 @@ Implemented:
 - Audit table scaffold (`kms_audit_events`).
 - API action audit inserts for main operations.
 - Tamper-evident chaining fields (`prev_hash`, `event_hash`) with chained writes.
+- Operator-facing audit explorer backed by the shared audit store.
 
 Remaining hardening:
+
+- Audit verification/export tooling.
+- Metrics, alerts, and HA/disaster-recovery runbooks.
+- Security documentation and compliance workflow support.
 
 # go-kms Full Compatibility Plan
 
@@ -155,7 +160,22 @@ Acceptance criteria:
 - AuthZ integration tests prove deny-by-default behavior.
 - Cross-tenant key access attempts are consistently rejected.
 
-## Phase C: Key Material Security Model (3-5 weeks)
+Implemented so far:
+
+- Access-key gating via `KMS_ACCESS_KEY_ID`.
+- Optional strict SigV4 header validation mode.
+- Key policy storage and retrieval APIs plus admin UI editing.
+- Key policy enforcement on core KMS data-plane and key-management operations.
+- Grants API surface for `CreateGrant`, `ListGrants`, `RevokeGrant`, and `RetireGrant`.
+- Audit hooks around the existing control-plane operations.
+
+Remaining in phase:
+
+- Full cryptographic SigV4 verification with canonical request validation.
+- Grant-aware authorization semantics beyond CRUD persistence.
+- Principal model, tenant isolation, and deny-by-default authorization tests.
+
+## Phase C: Key Material Security Model (Partially implemented for MVP)
 
 Objective:
 
@@ -174,7 +194,19 @@ Acceptance criteria:
 - No plaintext key material in DB after migration.
 - Key unwrap path tested with backup and restore scenarios.
 
-## Phase D: Enterprise UI and Workflow UX (4-6 weeks)
+Implemented so far:
+
+- Wrapped key material storage for DB-backed keys.
+- Automatic migration path for legacy `master_key_b64` rows into wrapped storage.
+- Standalone wrapping-key derivation or explicit wrapping-key configuration.
+
+Remaining in phase:
+
+- Backup and restore validation for unwrap flows.
+- Key versioning and rotation metadata for symmetric keys.
+- External root-of-trust integrations as optional add-ons.
+
+## Phase D: Enterprise UI and Workflow UX (Partially implemented for MVP)
 
 Objective:
 
@@ -192,7 +224,19 @@ Acceptance criteria:
 - All lifecycle tasks can be completed from UI and API.
 - No direct HTML string rendering in service entrypoint; templates/components are modular.
 
-## Phase E: Production and Compliance Readiness (6-10+ weeks)
+Implemented so far:
+
+- Modular template-backed admin UI for KMS and Secrets Manager.
+- Key detail pages, alias workflows, and key policy editing.
+- Shared audit explorer and cross-service navigation shell.
+
+Remaining in phase:
+
+- Authenticated UI with RBAC and tenant scoping.
+- Grants workflows and richer destructive-action UX.
+- Request tracing views and bulk operator workflows.
+
+## Phase E: Production and Compliance Readiness (Partially implemented for MVP)
 
 Objective:
 
@@ -210,6 +254,17 @@ Acceptance criteria:
 - Runbook-tested backup and restore.
 - Independent security review issues resolved to agreed baseline.
 
+Implemented so far:
+
+- Tamper-evident audit chain persistence.
+- Audit explorer visibility into recent control-plane activity.
+
+Remaining in phase:
+
+- Audit verification/export tooling.
+- SLOs, metrics, and alerting.
+- HA profile, disaster recovery runbooks, and security/compliance documentation.
+
 ## Current Status Snapshot
 
 Done:
@@ -219,6 +274,7 @@ Done:
 - Strict SigV4 header mode and access key gate.
 - Admin UI with interactive key actions.
 - Audit chain fields and chained writes.
+- Audit explorer with cross-service filtering for KMS and Secrets Manager events.
 - Core Secrets Manager CRUD, version listing, tags, resource policy storage, and rotation metadata APIs.
 - Secrets Manager admin UI for inventory, retrieval, versions, tags, policy, and rotation configuration.
 
@@ -227,7 +283,7 @@ Not done yet (required for true full-compatibility positioning):
 - Full cryptographic SigV4 verification.
 - Complete grants and policy parity.
 - Wrapped key material at rest.
-- Enterprise-authenticated UI and full audit workflow UX.
+- Enterprise-authenticated UI and full RBAC/tenant workflow UX.
 - HA and compliance-grade operational guarantees.
 - Secrets policy enforcement, tenant-aware authorization, and external rotation executors.
 

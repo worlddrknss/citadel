@@ -236,6 +236,11 @@ func (s *server) handleDescribeSecret(w http.ResponseWriter, r *http.Request) {
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
+	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:DescribeSecret"); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
 	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, describeSecretResponse{
 		ARN:                meta.ARN,
@@ -263,6 +268,17 @@ func (s *server) handleGetSecretValue(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.SecretID) == "" {
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", "SecretId is required")
+		return
+	}
+	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
+	if err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
+	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:GetSecretValue"); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	value, err := s.store.GetSecretValue(r.Context(), req.SecretID, req.VersionID, req.VersionStage)
@@ -305,6 +321,17 @@ func (s *server) handlePutSecretValue(w http.ResponseWriter, r *http.Request) {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidRequestException", err.Error())
 		return
 	}
+	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
+	if err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
+	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:PutSecretValue"); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
 	value, err := s.store.PutSecretValue(r.Context(), req)
 	if err != nil {
 		secretError(w, err)
@@ -335,7 +362,19 @@ func (s *server) handleUpdateSecret(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	meta, value, err := s.store.UpdateSecret(r.Context(), req)
+	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
+	if err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
+	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:UpdateSecret"); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
+	var value *secretValueRecord
+	meta, value, err = s.store.UpdateSecret(r.Context(), req)
 	if err != nil {
 		secretError(w, err)
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
@@ -362,7 +401,18 @@ func (s *server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", "SecretId is required")
 		return
 	}
-	meta, err := s.store.DeleteSecret(r.Context(), req.SecretID, req.RecoveryWindowInDays, req.ForceDeleteWithoutRecovery)
+	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
+	if err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
+	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:DeleteSecret"); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
+	meta, err = s.store.DeleteSecret(r.Context(), req.SecretID, req.RecoveryWindowInDays, req.ForceDeleteWithoutRecovery)
 	if err != nil {
 		secretError(w, err)
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
@@ -385,7 +435,18 @@ func (s *server) handleRestoreSecret(w http.ResponseWriter, r *http.Request) {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", "SecretId is required")
 		return
 	}
-	meta, err := s.store.RestoreSecret(r.Context(), req.SecretID)
+	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
+	if err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
+	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:RestoreSecret"); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
+	meta, err = s.store.RestoreSecret(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
@@ -1122,6 +1183,8 @@ func classifySecretError(err error) string {
 	switch {
 	case errors.Is(err, errSecretExists):
 		return "ResourceExistsException"
+	case errors.Is(err, errAccessDenied):
+		return "AccessDeniedException"
 	case errors.Is(err, sql.ErrNoRows):
 		return "ResourceNotFoundException"
 	case errors.Is(err, errSecretPendingDeletion):
@@ -1143,10 +1206,29 @@ func secretError(w http.ResponseWriter, err error) {
 	typ := classifySecretError(err)
 	status := http.StatusInternalServerError
 	switch typ {
-	case "ResourceExistsException", "ResourceNotFoundException", "InvalidRequestException", "InvalidParameterException":
+	case "AccessDeniedException", "ResourceExistsException", "ResourceNotFoundException", "InvalidRequestException", "InvalidParameterException":
 		status = http.StatusBadRequest
 	}
 	writeAWSJSONError(w, status, typ, err.Error())
+}
+
+func (s *server) authorizeSecretAction(ctx context.Context, r *http.Request, meta secretMetadataRecord, action string) error {
+	policy := strings.TrimSpace(meta.PolicyDocument)
+	if policy == "" {
+		var err error
+		policy, err = s.store.GetSecretResourcePolicy(ctx, meta.Name)
+		if err != nil {
+			return err
+		}
+	}
+	allowed, err := policyAllows(policy, requestPrincipal(r), action, meta.ARN)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return errAccessDenied
+	}
+	return nil
 }
 
 func mapSecretDBError(err error) error {

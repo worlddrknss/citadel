@@ -121,6 +121,11 @@ func (s *server) handleListSecretVersionIDs(w http.ResponseWriter, r *http.Reque
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
+	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:ListSecretVersionIds"); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
 	versions, err := s.store.ListSecretVersionIDs(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
@@ -145,13 +150,23 @@ func (s *server) handleTagSecret(w http.ResponseWriter, r *http.Request) {
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
 		return
 	}
+	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
+	if err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
+	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:TagResource"); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
 	if err := s.store.TagSecret(r.Context(), req.SecretID, toSecretTags(req.Tags)); err != nil {
 		secretError(w, err)
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
-	meta, _ := s.store.DescribeSecret(r.Context(), req.SecretID)
 	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 }
 
@@ -163,13 +178,23 @@ func (s *server) handleUntagSecret(w http.ResponseWriter, r *http.Request) {
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
 		return
 	}
+	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
+	if err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
+	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:UntagResource"); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
 	if err := s.store.UntagSecret(r.Context(), req.SecretID, req.TagKeys); err != nil {
 		secretError(w, err)
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
-	meta, _ := s.store.DescribeSecret(r.Context(), req.SecretID)
 	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 }
 
@@ -185,6 +210,11 @@ func (s *server) handleGetSecretResourcePolicy(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		secretError(w, err)
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
+	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:GetResourcePolicy"); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	policy, err := s.store.GetSecretResourcePolicy(r.Context(), req.SecretID)
@@ -209,6 +239,17 @@ func (s *server) handlePutSecretResourcePolicy(w http.ResponseWriter, r *http.Re
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", "ResourcePolicy is required")
 		return
 	}
+	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
+	if err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
+	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:PutResourcePolicy"); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
 	policy, err := normalizePolicyDocument(req.ResourcePolicy)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "MalformedPolicyDocumentException", "ResourcePolicy must be valid JSON")
@@ -219,7 +260,6 @@ func (s *server) handlePutSecretResourcePolicy(w http.ResponseWriter, r *http.Re
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
-	meta, _ := s.store.DescribeSecret(r.Context(), req.SecretID)
 	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 }
 
@@ -248,6 +288,16 @@ func (s *server) handleRotateSecret(w http.ResponseWriter, r *http.Request) {
 	if req.RotateImmediately != nil {
 		rotateImmediately = *req.RotateImmediately
 	}
+	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
+	if err != nil {
+		secretError(w, err)
+		return
+	}
+	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:RotateSecret"); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
 	result, err := s.store.RotateSecret(r.Context(), req.SecretID, req.RotationLambdaARN, req.AutomaticallyAfterDays, rotateImmediately, req.ClientRequestToken)
 	if err != nil {
 		secretError(w, err)
@@ -264,7 +314,17 @@ func (s *server) handleCancelRotateSecret(w http.ResponseWriter, r *http.Request
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
 		return
 	}
-	meta, err := s.store.CancelRotateSecret(r.Context(), req.SecretID)
+	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
+	if err != nil {
+		secretError(w, err)
+		return
+	}
+	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:CancelRotateSecret"); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
+	meta, err = s.store.CancelRotateSecret(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
 		return
@@ -280,7 +340,17 @@ func (s *server) handleUpdateSecretVersionStage(w http.ResponseWriter, r *http.R
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
 		return
 	}
-	meta, err := s.store.UpdateSecretVersionStage(r.Context(), req.SecretID, req.VersionStage, req.MoveToVersionID, req.RemoveFromVersionID)
+	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
+	if err != nil {
+		secretError(w, err)
+		return
+	}
+	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:UpdateSecretVersionStage"); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		return
+	}
+	meta, err = s.store.UpdateSecretVersionStage(r.Context(), req.SecretID, req.VersionStage, req.MoveToVersionID, req.RemoveFromVersionID)
 	if err != nil {
 		secretError(w, err)
 		return
@@ -713,8 +783,8 @@ func defaultSecretResourcePolicy(meta secretMetadataRecord) string {
 		"Statement": []map[string]any{{
 			"Sid":       "AllowAccountSecretAccess",
 			"Effect":    "Allow",
-			"Principal": map[string]string{"AWS": "*"},
-			"Action":    []string{"secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"},
+			"Principal": "*",
+			"Action":    "secretsmanager:*",
 			"Resource":  meta.ARN,
 		}},
 	}
