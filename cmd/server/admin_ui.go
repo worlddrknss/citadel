@@ -240,7 +240,7 @@ func (s *server) handleAdminCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	description := strings.TrimSpace(r.FormValue("description"))
-	k, err := s.store.CreateKey(r.Context(), description)
+	k, err := s.store.CreateKey(r.Context(), description, keyUsageEncryptDecrypt, keySpecSymmetricDefault)
 	if err != nil {
 		s.redirectAdminError(w, r, fmt.Sprintf("create key failed: %v", err))
 		return
@@ -456,11 +456,11 @@ func (s *server) handleAdminRevokeGrant(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *server) redirectAdminOK(w http.ResponseWriter, r *http.Request, msg string) {
-	http.Redirect(w, r, "/admin?ok="+url.QueryEscape(msg), http.StatusSeeOther)
+	http.Redirect(w, r, "/?ok="+url.QueryEscape(msg), http.StatusSeeOther)
 }
 
 func (s *server) redirectAdminError(w http.ResponseWriter, r *http.Request, msg string) {
-	http.Redirect(w, r, "/admin?err="+url.QueryEscape(msg), http.StatusSeeOther)
+	http.Redirect(w, r, "/?err="+url.QueryEscape(msg), http.StatusSeeOther)
 }
 
 func (s *server) redirectAdminKeyOK(w http.ResponseWriter, r *http.Request, keyID, tab, msg string) {
@@ -472,7 +472,7 @@ func (s *server) redirectAdminKeyOK(w http.ResponseWriter, r *http.Request, keyI
 	if tab != "" {
 		v.Set("tab", tab)
 	}
-	http.Redirect(w, r, "/admin?"+v.Encode(), http.StatusSeeOther)
+	http.Redirect(w, r, "/?"+v.Encode(), http.StatusSeeOther)
 }
 
 func (s *server) redirectAdminKeyError(w http.ResponseWriter, r *http.Request, keyID, tab, msg string) {
@@ -484,7 +484,7 @@ func (s *server) redirectAdminKeyError(w http.ResponseWriter, r *http.Request, k
 	if tab != "" {
 		v.Set("tab", tab)
 	}
-	http.Redirect(w, r, "/admin?"+v.Encode(), http.StatusSeeOther)
+	http.Redirect(w, r, "/?"+v.Encode(), http.StatusSeeOther)
 }
 
 func normalizeAlias(alias string) string {

@@ -477,7 +477,7 @@ func (s *server) handleAdminBulkSecrets(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *server) redirectAdminSecretsError(w http.ResponseWriter, r *http.Request, msg string) {
-	http.Redirect(w, r, "/admin/secrets?err="+url.QueryEscape(msg), http.StatusSeeOther)
+	http.Redirect(w, r, "/secrets?err="+url.QueryEscape(msg), http.StatusSeeOther)
 }
 
 func (s *server) redirectAdminSecretOK(w http.ResponseWriter, r *http.Request, secretID, tab, msg string) {
@@ -489,7 +489,7 @@ func (s *server) redirectAdminSecretOK(w http.ResponseWriter, r *http.Request, s
 	if tab != "" {
 		v.Set("tab", tab)
 	}
-	http.Redirect(w, r, "/admin/secrets?"+v.Encode(), http.StatusSeeOther)
+	http.Redirect(w, r, "/secrets?"+v.Encode(), http.StatusSeeOther)
 }
 
 func (s *server) redirectAdminSecretError(w http.ResponseWriter, r *http.Request, secretID, tab, msg string) {
@@ -501,7 +501,7 @@ func (s *server) redirectAdminSecretError(w http.ResponseWriter, r *http.Request
 	if tab != "" {
 		v.Set("tab", tab)
 	}
-	http.Redirect(w, r, "/admin/secrets?"+v.Encode(), http.StatusSeeOther)
+	http.Redirect(w, r, "/secrets?"+v.Encode(), http.StatusSeeOther)
 }
 
 func adminSecretState(meta secretMetadataRecord) string {

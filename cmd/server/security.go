@@ -297,7 +297,7 @@ func withPanicRecovery(next http.Handler) http.Handler {
 // withSecurityHeaders adds defensive headers, primarily for the admin UI.
 func withSecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/admin") {
+		if r.URL.Path == "/" || r.URL.Path == "/login" || r.URL.Path == "/logout" || r.URL.Path == "/secrets" || r.URL.Path == "/audit" || strings.HasPrefix(r.URL.Path, "/admin") {
 			h := w.Header()
 			h.Set("X-Frame-Options", "DENY")
 			h.Set("X-Content-Type-Options", "nosniff")

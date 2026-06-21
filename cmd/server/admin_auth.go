@@ -131,7 +131,7 @@ func (s *server) uiRuntime() *uiRuntime {
 func (s *server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	runtime := s.uiRuntime()
 	if !runtime.enabled {
-		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 	nextPath := sanitizeAdminNextPath(r.URL.Query().Get("next"))
@@ -176,7 +176,7 @@ func (s *server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 		runtime.mu.Unlock()
 	}
 	http.SetCookie(w, &http.Cookie{Name: adminSessionCookieName, Value: "", Path: "/", Expires: time.Unix(0, 0), MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
-	http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 func (s *server) requireUISession(w http.ResponseWriter, r *http.Request, minRole string) (*uiSession, bool) {
@@ -186,7 +186,7 @@ func (s *server) requireUISession(w http.ResponseWriter, r *http.Request, minRol
 	}
 	cookie, err := r.Cookie(adminSessionCookieName)
 	if err != nil || strings.TrimSpace(cookie.Value) == "" {
-		http.Redirect(w, r, "/admin/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
+		http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
 		return nil, false
 	}
 	runtime.mu.Lock()
@@ -202,7 +202,7 @@ func (s *server) requireUISession(w http.ResponseWriter, r *http.Request, minRol
 	}
 	runtime.mu.Unlock()
 	if !ok {
-		http.Redirect(w, r, "/admin/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
+		http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
 		return nil, false
 	}
 	if !uiRoleAtLeast(session.Role, minRole) {
@@ -214,7 +214,7 @@ func (s *server) requireUISession(w http.ResponseWriter, r *http.Request, minRol
 
 func (s *server) renderAdminLogin(w http.ResponseWriter, view adminLoginView) {
 	if view.NextPath == "" {
-		view.NextPath = "/admin"
+		view.NextPath = "/"
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := adminLoginTemplate.Execute(w, view); err != nil {
@@ -248,10 +248,19 @@ func normalizeUIRole(role string) string {
 
 func sanitizeAdminNextPath(raw string) string {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || !strings.HasPrefix(raw, "/admin") {
-		return "/admin"
+	if raw == "" || !strings.HasPrefix(raw, "/") {
+		return "/"
 	}
-	return raw
+	if strings.HasPrefix(raw, "//") {
+		return "/"
+	}
+	allowedPrefixes := []string{"/", "/secrets", "/audit", "/admin"}
+	for _, p := range allowedPrefixes {
+		if strings.HasPrefix(raw, p) {
+			return raw
+		}
+	}
+	return "/"
 }
 
 func normalizeTenants(values []string) []string {

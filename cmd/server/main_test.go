@@ -826,7 +826,7 @@ func TestAdminUIAuthenticationFlow(t *testing.T) {
 	s := &server{cfg: config{uiUsers: map[string]uiUserConfig{"admin": {Username: "admin", Password: "secret", Role: "admin", DisplayName: "Admin"}}}, store: &inMemoryStore{k: key}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/admin", s.handleAdmin)
-	mux.HandleFunc("/admin/login", s.handleAdminLogin)
+	mux.HandleFunc("/login", s.handleAdminLogin)
 
 	unauthReq := httptest.NewRequest(http.MethodGet, "/admin", nil)
 	unauthRec := httptest.NewRecorder()
@@ -834,11 +834,11 @@ func TestAdminUIAuthenticationFlow(t *testing.T) {
 	if unauthRec.Code != http.StatusSeeOther {
 		t.Fatalf("unexpected unauthenticated status: %d", unauthRec.Code)
 	}
-	if location := unauthRec.Header().Get("Location"); !strings.HasPrefix(location, "/admin/login") {
+	if location := unauthRec.Header().Get("Location"); !strings.HasPrefix(location, "/login") {
 		t.Fatalf("expected login redirect, got %q", location)
 	}
 
-	loginReq := httptest.NewRequest(http.MethodPost, "/admin/login?next=/admin", strings.NewReader("username=admin&password=secret"))
+	loginReq := httptest.NewRequest(http.MethodPost, "/login?next=/admin", strings.NewReader("username=admin&password=secret"))
 	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	loginRec := httptest.NewRecorder()
 	mux.ServeHTTP(loginRec, loginReq)

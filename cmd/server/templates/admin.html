@@ -145,14 +145,14 @@
     <div class="sb-section">
       <div class="sb-label">Services</div>
       <ul class="sb-nav">
-        <li><a class="sb-link active" href="/admin"><span class="ico">🔑</span> Key Management</a></li>
-        <li><a class="sb-link" href="/admin/secrets"><span class="ico">🔒</span> Secrets Manager</a></li>
+        <li><a class="sb-link active" href="/"><span class="ico">🔑</span> Key Management</a></li>
+        <li><a class="sb-link" href="/secrets"><span class="ico">🔒</span> Secrets Manager</a></li>
       </ul>
     </div>
     <div class="sb-section">
       <div class="sb-label">Operations</div>
       <ul class="sb-nav">
-        <li><a class="sb-link" href="/admin/audit"><span class="ico">📋</span> Audit Explorer</a></li>
+        <li><a class="sb-link" href="/audit"><span class="ico">📋</span> Audit Explorer</a></li>
       </ul>
     </div>
     <div class="sb-footer">
@@ -160,16 +160,16 @@
         <div class="u-av">{{if .CurrentUserName}}{{slice .CurrentUserName 0 1}}{{else}}A{{end}}</div>
         <div><div class="u-name">{{if .CurrentUserName}}{{.CurrentUserName}}{{else}}Local Admin{{end}}</div><div class="u-role">{{if .CurrentUserRole}}{{.CurrentUserRole}}{{else}}admin{{end}}</div></div>
       </div>
-      <ul class="sb-nav"><li><a class="sb-link logout" href="/admin/logout"><span class="ico">↩</span> Sign out</a></li></ul>
+      <ul class="sb-nav"><li><a class="sb-link logout" href="/logout"><span class="ico">↩</span> Sign out</a></li></ul>
     </div>
   </nav>
 
   <div class="main">
     <header class="topbar">
       <div class="bc">
-        <a href="/admin">KMS</a>
+        <a href="/">KMS</a>
         {{if .SelectedKey}}
-          <span class="bc-sep">/</span><a href="/admin">Customer managed keys</a>
+          <span class="bc-sep">/</span><a href="/">Customer managed keys</a>
           <span class="bc-sep">/</span><span class="bc-cur">{{.SelectedKey.ID}}</span>
         {{else}}
           <span class="bc-sep">/</span><span class="bc-cur">Customer managed keys</span>
@@ -192,7 +192,7 @@
       </div>
       <div class="ph-actions">
         {{if .CanAdmin}}
-        <form method="post" action="/admin?action=create_key" class="flex">
+        <form method="post" action="/?action=create_key" class="flex">
           <input type="text" name="description" placeholder="Key description (optional)" class="input-sm">
           <button class="btn btn-p" type="submit">+ Create key</button>
         </form>
@@ -201,7 +201,7 @@
     </div>
 
     <div class="content">
-      <form method="post" action="/admin?action=bulk_keys">
+      <form method="post" action="/?action=bulk_keys">
       <div class="toolbar">
         <div class="tb-l"><input type="text" placeholder="Filter keys…" class="input-sm" disabled></div>
         {{if .CanEdit}}
@@ -228,8 +228,8 @@
             {{if .Keys}}{{range .Keys}}
             <tr>
               {{if $.CanEdit}}<td><input type="checkbox" name="key_id" value="{{.ID}}"></td>{{end}}
-              <td>{{if .Alias}}<a href="/admin?key_id={{.ID}}&tab=aliases">{{.Alias}}</a>{{else}}<span class="muted">—</span>{{end}}</td>
-              <td><a class="mono" href="/admin?key_id={{.ID}}&tab=key-policy">{{.ID}}</a></td>
+              <td>{{if .Alias}}<a href="/?key_id={{.ID}}&tab=aliases">{{.Alias}}</a>{{else}}<span class="muted">—</span>{{end}}</td>
+              <td><a class="mono" href="/?key_id={{.ID}}&tab=key-policy">{{.ID}}</a></td>
               <td>
                 {{if eq .State "Enabled"}}<span class="badge badge-en">Enabled</span>
                 {{else if eq .State "Disabled"}}<span class="badge badge-dis">Disabled</span>
@@ -238,7 +238,7 @@
               <td class="muted sm">SYMMETRIC_DEFAULT</td>
               <td class="muted sm">Encrypt &amp; decrypt</td>
               <td class="muted sm">{{.CreatedAt}}</td>
-              <td><a href="/admin/audit?q={{.ID}}" class="muted sm">Trace →</a></td>
+              <td><a href="/audit?q={{.ID}}" class="muted sm">Trace →</a></td>
             </tr>
             {{end}}{{else}}
             <tr class="empty-row"><td colspan="8">No keys found. Create a key to get started.</td></tr>
@@ -263,17 +263,17 @@
       </div>
       <div class="ph-actions">
         {{if .CanEdit}}
-        <form method="post" action="/admin?action=enable_key"><input type="hidden" name="key_id" value="{{.SelectedKey.ID}}"><button class="btn btn-s btn-sm">Enable</button></form>
-        <form method="post" action="/admin?action=disable_key"><input type="hidden" name="key_id" value="{{.SelectedKey.ID}}"><button class="btn btn-s btn-sm">Disable</button></form>
+        <form method="post" action="/?action=enable_key"><input type="hidden" name="key_id" value="{{.SelectedKey.ID}}"><button class="btn btn-s btn-sm">Enable</button></form>
+        <form method="post" action="/?action=disable_key"><input type="hidden" name="key_id" value="{{.SelectedKey.ID}}"><button class="btn btn-s btn-sm">Disable</button></form>
         {{end}}
         {{if .CanAdmin}}
           {{if .SelectedKey.DeletionDate}}
-          <form method="post" action="/admin?action=cancel_deletion"><input type="hidden" name="key_id" value="{{.SelectedKey.ID}}"><button class="btn btn-s btn-sm">Cancel deletion</button></form>
+          <form method="post" action="/?action=cancel_deletion"><input type="hidden" name="key_id" value="{{.SelectedKey.ID}}"><button class="btn btn-s btn-sm">Cancel deletion</button></form>
           {{else}}
-          <form method="post" action="/admin?action=schedule_deletion"><input type="hidden" name="key_id" value="{{.SelectedKey.ID}}"><input type="hidden" name="window_days" value="30"><button class="btn btn-d btn-sm">Schedule deletion</button></form>
+          <form method="post" action="/?action=schedule_deletion"><input type="hidden" name="key_id" value="{{.SelectedKey.ID}}"><input type="hidden" name="window_days" value="30"><button class="btn btn-d btn-sm">Schedule deletion</button></form>
           {{end}}
         {{end}}
-        <a class="btn btn-s btn-sm" href="/admin/audit?q={{.SelectedKey.ID}}">Trace activity</a>
+        <a class="btn btn-s btn-sm" href="/audit?q={{.SelectedKey.ID}}">Trace activity</a>
       </div>
     </div>
 
@@ -298,24 +298,24 @@
       </div>
 
       <nav class="tabs-bar">
-        <a class="tab-lnk {{if eq .SelectedTab "key-policy"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-policy">Key policy</a>
-        <a class="tab-lnk {{if eq .SelectedTab "cryptographic-configuration"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=cryptographic-configuration">Cryptographic config</a>
-        <a class="tab-lnk {{if eq .SelectedTab "grants"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=grants">Grants</a>
-        <a class="tab-lnk {{if eq .SelectedTab "tags"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=tags">Tags</a>
-        <a class="tab-lnk {{if eq .SelectedTab "key-rotation"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-rotation">Key rotation</a>
-        <a class="tab-lnk {{if eq .SelectedTab "aliases"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=aliases">Aliases</a>
+        <a class="tab-lnk {{if eq .SelectedTab "key-policy"}}active{{end}}" href="/?key_id={{.SelectedKey.ID}}&tab=key-policy">Key policy</a>
+        <a class="tab-lnk {{if eq .SelectedTab "cryptographic-configuration"}}active{{end}}" href="/?key_id={{.SelectedKey.ID}}&tab=cryptographic-configuration">Cryptographic config</a>
+        <a class="tab-lnk {{if eq .SelectedTab "grants"}}active{{end}}" href="/?key_id={{.SelectedKey.ID}}&tab=grants">Grants</a>
+        <a class="tab-lnk {{if eq .SelectedTab "tags"}}active{{end}}" href="/?key_id={{.SelectedKey.ID}}&tab=tags">Tags</a>
+        <a class="tab-lnk {{if eq .SelectedTab "key-rotation"}}active{{end}}" href="/?key_id={{.SelectedKey.ID}}&tab=key-rotation">Key rotation</a>
+        <a class="tab-lnk {{if eq .SelectedTab "aliases"}}active{{end}}" href="/?key_id={{.SelectedKey.ID}}&tab=aliases">Aliases</a>
       </nav>
 
       {{if eq .SelectedTab "key-policy"}}
       <div class="fc">
         <h3>Key policy</h3>
-        <form method="post" action="/admin?action=put_key_policy">
+        <form method="post" action="/?action=put_key_policy">
           <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
           <input type="hidden" name="policy_name" value="{{.PolicyName}}">
           <div class="f-row"><textarea name="policy_document" spellcheck="false">{{.PolicyDocument}}</textarea></div>
           <div class="f-actions">
             <button class="btn btn-p" type="submit">Save policy</button>
-            <a class="btn btn-s" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-policy">Discard</a>
+            <a class="btn btn-s" href="/?key_id={{.SelectedKey.ID}}&tab=key-policy">Discard</a>
           </div>
         </form>
       </div>
@@ -341,7 +341,7 @@
       <div class="g2" style="margin-bottom:20px;">
         <div class="fc">
           <h3>Create grant</h3>
-          <form method="post" action="/admin?action=create_grant">
+          <form method="post" action="/?action=create_grant">
             <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
             <div class="f-row"><label>Grantee principal</label><input type="text" name="grantee_principal" placeholder="arn:aws:iam::000000000000:user/app" required></div>
             <div class="f-row"><label>Operations <span class="muted">(comma-separated)</span></label><input type="text" name="operations" placeholder="Encrypt,Decrypt" required></div>
@@ -353,7 +353,7 @@
         <div class="kv-card">
           <div class="kv-title">About grants</div>
           <p class="muted sm mt-2">Grants delegate key usage to principals without modifying the key policy. Grants can be revoked at any time by an admin.</p>
-          <div class="mt-3"><a class="btn btn-s btn-sm" href="/admin/audit?q={{.SelectedKey.ID}}">View key activity</a></div>
+          <div class="mt-3"><a class="btn btn-s btn-sm" href="/audit?q={{.SelectedKey.ID}}">View key activity</a></div>
         </div>
       </div>
       <div class="t-card">
@@ -367,7 +367,7 @@
               <td class="sm">{{.Operations}}</td>
               <td class="sm muted">{{if .Name}}{{.Name}}{{else}}—{{end}}</td>
               <td class="sm muted">{{.CreatedAt}}</td>
-              <td><form method="post" action="/admin?action=revoke_grant"><input type="hidden" name="key_id" value="{{$.SelectedKey.ID}}"><input type="hidden" name="grant_id" value="{{.GrantID}}"><button class="btn btn-s btn-sm" type="submit">Revoke</button></form></td>
+              <td><form method="post" action="/?action=revoke_grant"><input type="hidden" name="key_id" value="{{$.SelectedKey.ID}}"><input type="hidden" name="grant_id" value="{{.GrantID}}"><button class="btn btn-s btn-sm" type="submit">Revoke</button></form></td>
             </tr>
             {{end}}{{else}}<tr class="empty-row"><td colspan="6">No grants found.</td></tr>{{end}}
           </tbody>
@@ -378,7 +378,7 @@
       <div class="g2" style="margin-bottom:20px;">
         <div class="fc">
           <h3>Create alias</h3>
-          <form method="post" action="/admin?action=create_alias">
+          <form method="post" action="/?action=create_alias">
             <input type="hidden" name="target_key_id" value="{{.SelectedKey.ID}}">
             <div class="f-row"><label>Alias name</label><input type="text" name="alias_name" placeholder="alias/my-key" required></div>
             <div class="f-actions"><button class="btn btn-p" type="submit">Create alias</button></div>
@@ -386,7 +386,7 @@
         </div>
         <div class="fc">
           <h3>Reassign alias</h3>
-          <form method="post" action="/admin?action=update_alias">
+          <form method="post" action="/?action=update_alias">
             <div class="f-row"><label>Alias name</label><input type="text" name="alias_name" placeholder="alias/my-key" required></div>
             <div class="f-row"><label>New target key</label>
               <select name="target_key_id" required>

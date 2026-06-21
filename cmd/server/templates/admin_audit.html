@@ -98,14 +98,14 @@
     <div class="sb-section">
       <div class="sb-label">Services</div>
       <ul class="sb-nav">
-        <li><a class="sb-link" href="/admin"><span class="ico">🔑</span> Key Management</a></li>
-        <li><a class="sb-link" href="/admin/secrets"><span class="ico">🔒</span> Secrets Manager</a></li>
+        <li><a class="sb-link" href="/"><span class="ico">🔑</span> Key Management</a></li>
+        <li><a class="sb-link" href="/secrets"><span class="ico">🔒</span> Secrets Manager</a></li>
       </ul>
     </div>
     <div class="sb-section">
       <div class="sb-label">Operations</div>
       <ul class="sb-nav">
-        <li><a class="sb-link active" href="/admin/audit"><span class="ico">📋</span> Audit Explorer</a></li>
+        <li><a class="sb-link active" href="/audit"><span class="ico">📋</span> Audit Explorer</a></li>
       </ul>
     </div>
     <div class="sb-footer">
@@ -113,14 +113,14 @@
         <div class="u-av">{{if .CurrentUserName}}{{slice .CurrentUserName 0 1}}{{else}}A{{end}}</div>
         <div><div class="u-name">{{if .CurrentUserName}}{{.CurrentUserName}}{{else}}Local Admin{{end}}</div><div class="u-role">{{if .CurrentUserRole}}{{.CurrentUserRole}}{{else}}admin{{end}}</div></div>
       </div>
-      <ul class="sb-nav"><li><a class="sb-link logout" href="/admin/logout"><span class="ico">↩</span> Sign out</a></li></ul>
+      <ul class="sb-nav"><li><a class="sb-link logout" href="/logout"><span class="ico">↩</span> Sign out</a></li></ul>
     </div>
   </nav>
 
   <div class="main">
     <header class="topbar">
       <div class="bc">
-        <a href="/admin/audit">Audit Explorer</a>
+        <a href="/audit">Audit Explorer</a>
         <span class="bc-sep">/</span>
         <span class="bc-cur">Control-plane events</span>
       </div>
@@ -137,7 +137,7 @@
     </div>
 
     <div class="content">
-      <form class="filter-bar" method="get" action="/admin/audit">
+      <form class="filter-bar" method="get" action="/audit">
         <div class="filter-field" style="max-width:200px;">
           <label for="service">Service</label>
           <select id="service" name="service">
@@ -157,7 +157,7 @@
         </div>
         <div class="flex" style="align-items:flex-end;gap:8px;">
           <button class="btn btn-p" type="submit">Apply filters</button>
-          <a class="btn btn-s" href="/admin/audit">Reset</a>
+          <a class="btn btn-s" href="/audit">Reset</a>
         </div>
       </form>
 
@@ -189,7 +189,7 @@
               <td class="sm">{{if .ErrorType}}{{.ErrorType}}{{else}}<span class="muted">—</span>{{end}}</td>
               <td class="mono sm muted">{{if .Actor}}{{.Actor}}{{else}}—{{end}}</td>
               <td class="mono sm muted" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;">{{if .EventHash}}{{slice .EventHash 0 12}}…{{end}}</td>
-              <td><a href="/admin/audit?service={{$.SelectedServer}}&q={{$.Query}}&actor={{$.ActorFilter}}&event={{.ID}}" class="sm">Open</a></td>
+              <td><a href="/audit?service={{$.SelectedServer}}&q={{$.Query}}&actor={{$.ActorFilter}}&event={{.ID}}" class="sm">Open</a></td>
             </tr>
             {{end}}{{else}}
             <tr class="empty-row"><td colspan="9">No events matched the current filters.</td></tr>

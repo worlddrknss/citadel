@@ -72,7 +72,7 @@ type keyStore interface {
 	ResolveByID(ctx context.Context, keyID string) (kmsKey, error)
 	ResolveDefault(ctx context.Context) (kmsKey, error)
 	EnsureBootstrap(ctx context.Context, k kmsKey) error
-	CreateKey(ctx context.Context, description string) (kmsKey, error)
+	CreateKey(ctx context.Context, description, keyUsage, keySpec string) (kmsKey, error)
 	ListKeys(ctx context.Context) ([]kmsKey, error)
 	GetKeyPolicy(ctx context.Context, keyID, policyName string) (string, error)
 	PutKeyPolicy(ctx context.Context, keyID, policyName, policyDocument string) error
@@ -107,6 +107,18 @@ type keyStore interface {
 	ListUIUsers(ctx context.Context) ([]uiUserConfig, error)
 	UpsertUIUser(ctx context.Context, user uiUserConfig) error
 	DeleteUIUser(ctx context.Context, username string) error
+	ListUITenants(ctx context.Context) ([]string, error)
+	UpsertUITenant(ctx context.Context, tenant string) error
+	DeleteUITenant(ctx context.Context, tenant string) error
+
+	// Private CA (acm-pca) methods
+	CreateCertificateAuthority(ctx context.Context, ca pcaCertificateAuthority) error
+	DescribeCertificateAuthority(ctx context.Context, arn string) (pcaCertificateAuthority, error)
+	ListCertificateAuthorities(ctx context.Context) ([]pcaCertificateAuthority, error)
+	CreateCertificate(ctx context.Context, cert pcaCertificate) error
+	GetCertificate(ctx context.Context, certID string) (pcaCertificate, error)
+	ListCertificates(ctx context.Context, caID string) ([]pcaCertificate, error)
+	RevokeCertificate(ctx context.Context, certID, reason string) error
 }
 
 type dbStore struct {
@@ -128,21 +140,58 @@ type inMemoryStore struct {
 	auditSeq     int64
 	auditHMACKey []byte
 	uiUsers      map[string]uiUserConfig
+	uiTenants    map[string]struct{}
 }
 
 type kmsKey struct {
 	ID           string
 	ARN          string
 	MasterKeyRaw []byte
+	PublicKeyRaw []byte
 	Description  string
 	CreatedAt    time.Time
 	Enabled      bool
 	DeletionDate *time.Time
+	KeyUsage     string
+	KeySpec      string
 }
 
 type kmsAlias struct {
 	AliasName   string
 	TargetKeyID string
+}
+
+type pcaCertificateAuthority struct {
+	CAID        string
+	ARN         string
+	Type        string
+	KMSKeyID    string
+	SubjectDN   string
+	State       string
+	CACertB64   string
+	PathLength  *int
+	NotBefore   time.Time
+	NotAfter    time.Time
+	Description string
+	Tenant      string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+type pcaCertificate struct {
+	CertID           string
+	CAID             string
+	Serial           string
+	CSRB64           string
+	CertB64          string
+	Status           string
+	NotBefore        time.Time
+	NotAfter         time.Time
+	RevokedAt        *time.Time
+	RevocationReason string
+	Template         string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type kmsGrant struct {
@@ -214,10 +263,183 @@ type describeKeyResponse struct {
 
 type createKeyRequest struct {
 	Description string `json:"Description"`
+	KeyUsage    string `json:"KeyUsage"`
+	KeySpec     string `json:"KeySpec"`
 }
 
 type createKeyResponse struct {
 	KeyMetadata keyMetadata `json:"KeyMetadata"`
+}
+
+type signRequest struct {
+	KeyID            string `json:"KeyId"`
+	Message          string `json:"Message"`
+	MessageType      string `json:"MessageType"`
+	SigningAlgorithm string `json:"SigningAlgorithm"`
+}
+
+type signResponse struct {
+	KeyID            string `json:"KeyId"`
+	Signature        string `json:"Signature"`
+	SigningAlgorithm string `json:"SigningAlgorithm,omitempty"`
+}
+
+type verifyRequest struct {
+	KeyID            string `json:"KeyId"`
+	Message          string `json:"Message"`
+	MessageType      string `json:"MessageType"`
+	Signature        string `json:"Signature"`
+	SigningAlgorithm string `json:"SigningAlgorithm"`
+}
+
+type verifyResponse struct {
+	KeyID            string `json:"KeyId"`
+	SignatureValid   bool   `json:"SignatureValid"`
+	SigningAlgorithm string `json:"SigningAlgorithm,omitempty"`
+}
+
+type getPublicKeyRequest struct {
+	KeyID string `json:"KeyId"`
+}
+
+type getPublicKeyResponse struct {
+	KeyID             string   `json:"KeyId"`
+	PublicKey         string   `json:"PublicKey"`
+	SigningAlgorithms []string `json:"SigningAlgorithms,omitempty"`
+	KeySpec           string   `json:"KeySpec,omitempty"`
+}
+
+type certificateAuthorityConfig struct {
+	KeyAlgorithm     string        `json:"KeyAlgorithm"`
+	SigningAlgorithm string        `json:"SigningAlgorithm"`
+	Subject          subjectConfig `json:"Subject"`
+}
+
+type subjectConfig struct {
+	Country          string `json:"Country,omitempty"`
+	State            string `json:"State,omitempty"`
+	Locality         string `json:"Locality,omitempty"`
+	Organization     string `json:"Organization,omitempty"`
+	OrganizationUnit string `json:"OrganizationalUnit,omitempty"`
+	CommonName       string `json:"CommonName,omitempty"`
+}
+
+type createCertificateAuthorityRequest struct {
+	CertificateAuthorityConfiguration certificateAuthorityConfig `json:"CertificateAuthorityConfiguration"`
+	CAType                            string                     `json:"Type"`
+}
+
+type createCertificateAuthorityResponse struct {
+	CertificateAuthorityARN string `json:"CertificateAuthorityArn"`
+}
+
+type describeCertificateAuthorityRequest struct {
+	CertificateAuthorityARN string `json:"CertificateAuthorityArn"`
+}
+
+type certificateAuthorityRecord struct {
+	ARN         string `json:"Arn"`
+	Type        string `json:"Type"`
+	Status      string `json:"Status"`
+	Certificate string `json:"Certificate,omitempty"`
+	CreatedAt   string `json:"CreatedAt,omitempty"`
+}
+
+type describeCertificateAuthorityResponse struct {
+	CertificateAuthority certificateAuthorityRecord `json:"CertificateAuthority"`
+}
+
+type issueCertificateRequest struct {
+	CertificateAuthorityARN string       `json:"CertificateAuthorityArn"`
+	CSR                     string       `json:"Csr"`
+	SigningAlgorithm        string       `json:"SigningAlgorithm"`
+	Validity                validitySpec `json:"Validity"`
+}
+
+type validitySpec struct {
+	Value int64  `json:"Value"`
+	Type  string `json:"Type"`
+}
+
+type issueCertificateResponse struct {
+	CertificateARN string `json:"CertificateArn"`
+}
+
+type getCertificateRequest struct {
+	CertificateAuthorityARN string `json:"CertificateAuthorityArn"`
+	CertificateARN          string `json:"CertificateArn"`
+}
+
+type getCertificateResponse struct {
+	Certificate string `json:"Certificate"`
+}
+
+type revokeCertificateRequest struct {
+	CertificateAuthorityARN string `json:"CertificateAuthorityArn"`
+	CertificateARN          string `json:"CertificateArn"`
+	RevocationReason        string `json:"RevocationReason"`
+}
+
+// ACM (Certificate Manager) types - facade over acm-pca
+type requestCertificateRequest struct {
+	DomainName       string   `json:"DomainName"`
+	ValidationMethod string   `json:"ValidationMethod"`
+	SubjectAltNames  []string `json:"SubjectAlternativeNames,omitempty"`
+	Idempotency      string   `json:"IdempotencyToken,omitempty"`
+}
+
+type requestCertificateResponse struct {
+	CertificateARN string `json:"CertificateArn"`
+}
+
+type describeCertificateRequest struct {
+	CertificateARN string `json:"CertificateArn"`
+}
+
+type describeCertificateResponse struct {
+	Certificate certificateDetail `json:"Certificate"`
+}
+
+type certificateDetail struct {
+	ARN                     string   `json:"CertificateArn"`
+	DomainName              string   `json:"DomainName"`
+	SubjectAlternativeNames []string `json:"SubjectAlternativeNames,omitempty"`
+	Status                  string   `json:"Status"`
+	Serial                  string   `json:"Serial,omitempty"`
+	NotBefore               string   `json:"NotBefore,omitempty"`
+	NotAfter                string   `json:"NotAfter,omitempty"`
+	CreatedAt               string   `json:"CreatedAt,omitempty"`
+}
+
+type listCertificatesRequest struct {
+	Limit  int    `json:"MaxItems,omitempty"`
+	Marker string `json:"Marker,omitempty"`
+}
+
+type listCertificatesResponse struct {
+	CertificateSummaryList []certificateSummary `json:"CertificateSummaryList"`
+	NextMarker             string               `json:"NextMarker,omitempty"`
+}
+
+type certificateSummary struct {
+	ARN        string `json:"CertificateArn"`
+	DomainName string `json:"DomainName"`
+	Status     string `json:"Status"`
+	CreatedAt  string `json:"CreatedAt,omitempty"`
+}
+
+type deleteCertificateRequest struct {
+	CertificateARN string `json:"CertificateArn"`
+}
+
+type acmGetCertificateRequest struct {
+	CertificateARN string `json:"CertificateArn"`
+}
+
+type acmGetCertificateResponse struct {
+	Certificate string `json:"Certificate"`
+	CertChain   string `json:"CertificateChain,omitempty"`
+	PrivateKey  string `json:"PrivateKey,omitempty"`
 }
 
 type listKeysResponse struct {
@@ -377,13 +599,42 @@ func main() {
 
 	s := &server{cfg: cfg, store: store}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleKMS)
+	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/healthz", s.handleHealth)
-	mux.HandleFunc("/admin/login", s.handleAdminLogin)
-	mux.HandleFunc("/admin/logout", s.handleAdminLogout)
-	mux.HandleFunc("/admin", s.handleAdmin)
-	mux.HandleFunc("/admin/audit", s.handleAudit)
-	mux.HandleFunc("/admin/secrets", s.handleSecretsAdmin)
+	mux.HandleFunc("/login", s.handleAdminLogin)
+	mux.HandleFunc("/logout", s.handleAdminLogout)
+	mux.HandleFunc("/secrets", s.handleSecretsAdmin)
+	mux.HandleFunc("/audit", s.handleAudit)
+
+	// Master admin UI pages
+	mux.HandleFunc("/admin", s.handleMasterAdminOverview)
+	mux.HandleFunc("/admin/users", s.handleMasterAdminUsers)
+	mux.HandleFunc("/admin/rbac", s.handleMasterAdminRBAC)
+	mux.HandleFunc("/admin/tenants", s.handleMasterAdminTenants)
+
+	// Compatibility aliases for old UI paths
+	mux.Handle("/admin/login", http.RedirectHandler("/login", http.StatusMovedPermanently))
+	mux.Handle("/admin/logout", http.RedirectHandler("/logout", http.StatusMovedPermanently))
+	mux.Handle("/admin/secrets", http.RedirectHandler("/secrets", http.StatusMovedPermanently))
+	mux.Handle("/admin/audit", http.RedirectHandler("/audit", http.StatusMovedPermanently))
+
+	// API endpoint remains available for AWS JSON-RPC clients
+	mux.HandleFunc("/api", s.handleKMS)
+
+	// ACME endpoints (RFC 8555)
+	mux.HandleFunc("GET /acme/directory", s.handleACMEDirectory)
+	mux.HandleFunc("GET /acme/new-nonce", s.handleACMENewNonce)
+	mux.HandleFunc("POST /acme/new-nonce", s.handleACMENewNonce)
+	mux.HandleFunc("POST /acme/new-account", s.handleACMENewAccount)
+	mux.HandleFunc("POST /acme/new-order", s.handleACMENewOrder)
+	mux.HandleFunc("GET /acme/order/{order_id}", s.handleACMEOrder)
+	mux.HandleFunc("POST /acme/order/{order_id}", s.handleACMEOrder)
+	mux.HandleFunc("POST /acme/order/{order_id}/finalize", s.handleACMEFinalize)
+	mux.HandleFunc("GET /acme/authz/{authz_id}", s.handleACMEAuthorization)
+	mux.HandleFunc("POST /acme/authz/{authz_id}", s.handleACMEAuthorization)
+	mux.HandleFunc("POST /acme/challenge/{challenge_id}", s.handleACMEChallenge)
+	mux.HandleFunc("GET /acme/cert/{cert_id}", s.handleACMECertificate)
+	mux.HandleFunc("POST /acme/revoke-cert", s.handleACMERevokeCert)
 
 	// Middleware chain (outermost first): panic recovery, security headers,
 	// request logging.
@@ -551,6 +802,9 @@ CREATE TABLE IF NOT EXISTS kms_keys (
   master_key_b64 TEXT NOT NULL,
 	wrapped_key_b64 TEXT NOT NULL DEFAULT '',
 	key_nonce_b64 TEXT NOT NULL DEFAULT '',
+	public_key_b64 TEXT NOT NULL DEFAULT '',
+	key_usage TEXT NOT NULL DEFAULT 'ENCRYPT_DECRYPT',
+	key_spec TEXT NOT NULL DEFAULT 'SYMMETRIC_DEFAULT',
   description TEXT NOT NULL DEFAULT '',
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
 	deletion_date TIMESTAMPTZ,
@@ -659,6 +913,12 @@ CREATE TABLE IF NOT EXISTS ui_users (
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS ui_tenants (
+	tenant TEXT PRIMARY KEY,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS rotation_enabled BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS rotation_lambda_arn TEXT NOT NULL DEFAULT '';
 ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS rotation_days INTEGER NOT NULL DEFAULT 0;
@@ -669,6 +929,62 @@ ALTER TABLE kms_audit_events ADD COLUMN IF NOT EXISTS event_hash TEXT;
 ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS deletion_date TIMESTAMPTZ;
 ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS wrapped_key_b64 TEXT NOT NULL DEFAULT '';
 ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS key_nonce_b64 TEXT NOT NULL DEFAULT '';
+ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS public_key_b64 TEXT NOT NULL DEFAULT '';
+ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS key_usage TEXT NOT NULL DEFAULT 'ENCRYPT_DECRYPT';
+ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS key_spec TEXT NOT NULL DEFAULT 'SYMMETRIC_DEFAULT';
+
+CREATE TABLE IF NOT EXISTS pca_certificate_authorities (
+	ca_id TEXT PRIMARY KEY,
+	urn TEXT NOT NULL UNIQUE,
+	type TEXT NOT NULL DEFAULT 'ROOT',
+	kms_key_id TEXT NOT NULL REFERENCES kms_keys(id),
+	subject_dn TEXT NOT NULL,
+	state TEXT NOT NULL DEFAULT 'CREATING',
+	ca_cert_b64 TEXT NOT NULL DEFAULT '',
+	path_length INTEGER,
+	not_before TIMESTAMPTZ NOT NULL,
+	not_after TIMESTAMPTZ NOT NULL,
+	description TEXT NOT NULL DEFAULT '',
+	tenant TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS pca_certificates (
+	cert_id TEXT PRIMARY KEY,
+	ca_id TEXT NOT NULL REFERENCES pca_certificate_authorities(ca_id) ON DELETE CASCADE,
+	serial TEXT NOT NULL,
+	csr_b64 TEXT NOT NULL DEFAULT '',
+	cert_b64 TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'ISSUED',
+	not_before TIMESTAMPTZ NOT NULL,
+	not_after TIMESTAMPTZ NOT NULL,
+	revoked_at TIMESTAMPTZ,
+	revocation_reason TEXT,
+	template TEXT NOT NULL DEFAULT 'EndEntityCertificate',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS pca_certificates_ca_serial_idx
+	ON pca_certificates (ca_id, serial);
+
+CREATE TABLE IF NOT EXISTS pca_ca_policies (
+	ca_id TEXT NOT NULL REFERENCES pca_certificate_authorities(ca_id) ON DELETE CASCADE,
+	policy_name TEXT NOT NULL,
+	policy_document TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	PRIMARY KEY (ca_id, policy_name)
+);
+
+CREATE TABLE IF NOT EXISTS pca_crl_state (
+	ca_id TEXT PRIMARY KEY REFERENCES pca_certificate_authorities(ca_id) ON DELETE CASCADE,
+	crl_number BIGINT NOT NULL DEFAULT 1,
+	last_generated TIMESTAMPTZ,
+	next_update TIMESTAMPTZ,
+	crl_b64 TEXT NOT NULL DEFAULT ''
+);
 `
 	if _, err := db.ExecContext(ctx, ddl); err != nil {
 		return fmt.Errorf("initialize schema: %w", err)
@@ -697,6 +1013,8 @@ func maybeBootstrapFromLegacy(ctx context.Context, cfg config, store keyStore) e
 		Description:  "go-kms key",
 		CreatedAt:    time.Now().UTC(),
 		Enabled:      true,
+		KeyUsage:     keyUsageEncryptDecrypt,
+		KeySpec:      keySpecSymmetricDefault,
 	}
 	if err := store.EnsureBootstrap(ctx, k); err != nil {
 		return err
@@ -784,6 +1102,34 @@ func (s *server) handleKMS(w http.ResponseWriter, r *http.Request) {
 		s.handleGetKeyPolicy(w, r)
 	case "TrentService.PutKeyPolicy":
 		s.handlePutKeyPolicy(w, r)
+	case "TrentService.Sign":
+		s.handleSign(w, r)
+	case "TrentService.Verify":
+		s.handleVerify(w, r)
+	case "TrentService.GetPublicKey":
+		s.handleGetPublicKey(w, r)
+	case "acm-pca.CreateCertificateAuthority":
+		s.handleCreateCertificateAuthority(w, r)
+	case "acm-pca.DescribeCertificateAuthority":
+		s.handleDescribeCertificateAuthority(w, r)
+	case "acm-pca.IssueCertificate":
+		s.handleIssueCertificate(w, r)
+	case "acm-pca.GetCertificate":
+		s.handleGetCertificate(w, r)
+	case "acm-pca.RevokeCertificate":
+		s.handleRevokeCertificate(w, r)
+	case "acm-pca.GetCRL":
+		s.handleGetCRL(w, r)
+	case "acm.RequestCertificate":
+		s.handleACMRequestCertificate(w, r)
+	case "acm.DescribeCertificate":
+		s.handleACMDescribeCertificate(w, r)
+	case "acm.ListCertificates":
+		s.handleACMListCertificates(w, r)
+	case "acm.GetCertificate":
+		s.handleACMGetCertificate(w, r)
+	case "acm.DeleteCertificate":
+		s.handleACMDeleteCertificate(w, r)
 	case "secretsmanager.CreateSecret":
 		s.handleCreateSecret(w, r)
 	case "secretsmanager.DescribeSecret":
@@ -940,6 +1286,16 @@ func (s *server) handleEncrypt(w http.ResponseWriter, r *http.Request) {
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "key lookup failed")
 		return
 	}
+	if keyUsage, _ := keyUsageAndSpecForMetadata(key); keyUsage != keyUsageEncryptDecrypt {
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidKeyUsageException", Actor: r.RemoteAddr})
+		writeAWSJSONError(w, http.StatusBadRequest, "InvalidKeyUsageException", "key does not support encryption")
+		return
+	}
+	if keyUsage, _ := keyUsageAndSpecForMetadata(key); keyUsage != keyUsageEncryptDecrypt {
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidKeyUsageException", Actor: r.RemoteAddr})
+		writeAWSJSONError(w, http.StatusBadRequest, "InvalidKeyUsageException", "key does not support decryption")
+		return
+	}
 	if !key.Enabled {
 		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DisabledException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "DisabledException", "key is disabled")
@@ -1084,7 +1440,7 @@ func (s *server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
-	key, err := s.store.CreateKey(r.Context(), req.Description)
+	key, err := s.store.CreateKey(r.Context(), req.Description, req.KeyUsage, req.KeySpec)
 	if err != nil {
 		errType := "DependencyTimeoutException"
 		if errors.Is(err, errUnsupported) {
@@ -1095,9 +1451,6 @@ func (s *server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		}
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: errType, Actor: r.RemoteAddr})
 		return
-	}
-	if req.Description != "" {
-		key.Description = req.Description
 	}
 	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, createKeyResponse{KeyMetadata: toKeyMetadata(key)})
@@ -1477,6 +1830,7 @@ func keyState(key kmsKey) string {
 }
 
 func toKeyMetadata(key kmsKey) keyMetadata {
+	keyUsage, keySpec := keyUsageAndSpecForMetadata(key)
 	return keyMetadata{
 		AWSAccountID:                "000000000000",
 		KeyID:                       key.ID,
@@ -1484,16 +1838,25 @@ func toKeyMetadata(key kmsKey) keyMetadata {
 		CreationDate:                key.CreatedAt,
 		Enabled:                     key.Enabled,
 		Description:                 key.Description,
-		KeyUsage:                    "ENCRYPT_DECRYPT",
+		KeyUsage:                    keyUsage,
 		KeyState:                    keyState(key),
 		Origin:                      "AWS_KMS",
 		KeyManager:                  "CUSTOMER",
-		CustomerMasterKeySpec:       "SYMMETRIC_DEFAULT",
-		KeySpec:                     "SYMMETRIC_DEFAULT",
-		EncryptionAlgorithms:        []string{"SYMMETRIC_DEFAULT"},
+		CustomerMasterKeySpec:       keySpec,
+		KeySpec:                     keySpec,
+		EncryptionAlgorithms:        keyEncryptionAlgorithms(key),
+		SigningAlgorithms:           keySigningAlgorithms(key),
 		MultiRegion:                 false,
 		PendingDeletionWindowInDays: pendingDeletionDays(key.DeletionDate),
 	}
+}
+
+func keyEncryptionAlgorithms(key kmsKey) []string {
+	usage, _ := keyUsageAndSpecForMetadata(key)
+	if usage != keyUsageEncryptDecrypt {
+		return nil
+	}
+	return []string{keySpecSymmetricDefault}
 }
 
 func pendingDeletionDays(deletionDate *time.Time) int {
@@ -1544,7 +1907,7 @@ func (s *dbStore) ResolveByID(ctx context.Context, keyID string) (kmsKey, error)
 		keyID = target
 	}
 	const q = `
-	SELECT id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, description, enabled, deletion_date, created_at
+	SELECT id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at
 FROM kms_keys
 WHERE id = $1
 `
@@ -1553,14 +1916,31 @@ WHERE id = $1
 		masterB64    string
 		wrappedB64   string
 		nonceB64     string
+		publicB64    string
+		keyUsage     string
+		keySpec      string
 		deletionDate sql.NullTime
 	)
-	err := s.db.QueryRowContext(ctx, q, keyID).Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt)
+	err := s.db.QueryRowContext(ctx, q, keyID).Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &publicB64, &keyUsage, &keySpec, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt)
 	if err != nil {
 		return kmsKey{}, err
 	}
 	if deletionDate.Valid {
 		k.DeletionDate = &deletionDate.Time
+	}
+	k.KeyUsage = normalizeKeyUsage(keyUsage)
+	if k.KeyUsage == "" {
+		k.KeyUsage = keyUsageEncryptDecrypt
+	}
+	k.KeySpec = strings.ToUpper(strings.TrimSpace(keySpec))
+	if k.KeySpec == "" {
+		k.KeySpec = defaultKeySpecForUsage(k.KeyUsage)
+	}
+	if publicB64 != "" {
+		k.PublicKeyRaw, err = base64.StdEncoding.DecodeString(publicB64)
+		if err != nil {
+			return kmsKey{}, err
+		}
 	}
 	k.MasterKeyRaw, err = s.resolveKeyMaterial(ctx, k.ID, masterB64, wrappedB64, nonceB64)
 	if err != nil {
@@ -1604,11 +1984,11 @@ func (s *dbStore) EnsureBootstrap(ctx context.Context, k kmsKey) error {
 		return fmt.Errorf("wrap bootstrap key material: %w", err)
 	}
 	const upsertKey = `
-INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, description, enabled, created_at)
-VALUES ($1, $2, '', $3, $4, $5, $6, $7)
+INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, created_at)
+VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (id) DO NOTHING
 `
-	if _, err := s.db.ExecContext(ctx, upsertKey, k.ID, k.ARN, wrappedB64, nonceB64, k.Description, k.Enabled, k.CreatedAt); err != nil {
+	if _, err := s.db.ExecContext(ctx, upsertKey, k.ID, k.ARN, wrappedB64, nonceB64, base64.StdEncoding.EncodeToString(k.PublicKeyRaw), k.KeyUsage, k.KeySpec, k.Description, k.Enabled, k.CreatedAt); err != nil {
 		return fmt.Errorf("bootstrap key row: %w", err)
 	}
 
@@ -1623,9 +2003,9 @@ ON CONFLICT (setting_key) DO NOTHING
 	return nil
 }
 
-func (s *dbStore) CreateKey(ctx context.Context, description string) (kmsKey, error) {
-	raw := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, raw); err != nil {
+func (s *dbStore) CreateKey(ctx context.Context, description, keyUsage, keySpec string) (kmsKey, error) {
+	raw, publicRaw, normalizedUsage, normalizedSpec, err := generateKeyMaterial(keyUsage, keySpec)
+	if err != nil {
 		return kmsKey{}, err
 	}
 	id := "go-kms-" + randomHex(12)
@@ -1633,19 +2013,22 @@ func (s *dbStore) CreateKey(ctx context.Context, description string) (kmsKey, er
 		ID:           id,
 		ARN:          fmt.Sprintf("arn:aws:kms:local:000000000000:key/%s", id),
 		MasterKeyRaw: raw,
+		PublicKeyRaw: publicRaw,
 		Description:  description,
 		Enabled:      true,
 		CreatedAt:    time.Now().UTC(),
+		KeyUsage:     normalizedUsage,
+		KeySpec:      normalizedSpec,
 	}
 	wrappedB64, nonceB64, err := s.wrapKeyMaterial(k.ID, k.MasterKeyRaw)
 	if err != nil {
 		return kmsKey{}, err
 	}
 	const q = `
-INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, description, enabled, deletion_date, created_at)
-VALUES ($1, $2, '', $3, $4, $5, $6, NULL, $7)
+INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at)
+VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, NULL, $10)
 `
-	if _, err := s.db.ExecContext(ctx, q, k.ID, k.ARN, wrappedB64, nonceB64, k.Description, k.Enabled, k.CreatedAt); err != nil {
+	if _, err := s.db.ExecContext(ctx, q, k.ID, k.ARN, wrappedB64, nonceB64, base64.StdEncoding.EncodeToString(publicRaw), k.KeyUsage, k.KeySpec, k.Description, k.Enabled, k.CreatedAt); err != nil {
 		return kmsKey{}, err
 	}
 	return k, nil
@@ -1653,7 +2036,7 @@ VALUES ($1, $2, '', $3, $4, $5, $6, NULL, $7)
 
 func (s *dbStore) ListKeys(ctx context.Context) ([]kmsKey, error) {
 	const q = `
-	SELECT id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, description, enabled, deletion_date, created_at
+	SELECT id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at
 FROM kms_keys
 ORDER BY created_at ASC
 `
@@ -1670,13 +2053,30 @@ ORDER BY created_at ASC
 			masterB64    string
 			wrappedB64   string
 			nonceB64     string
+			publicB64    string
+			keyUsage     string
+			keySpec      string
 			deletionDate sql.NullTime
 		)
-		if err := rows.Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt); err != nil {
+		if err := rows.Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &publicB64, &keyUsage, &keySpec, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt); err != nil {
 			return nil, err
 		}
 		if deletionDate.Valid {
 			k.DeletionDate = &deletionDate.Time
+		}
+		k.KeyUsage = normalizeKeyUsage(keyUsage)
+		if k.KeyUsage == "" {
+			k.KeyUsage = keyUsageEncryptDecrypt
+		}
+		k.KeySpec = strings.ToUpper(strings.TrimSpace(keySpec))
+		if k.KeySpec == "" {
+			k.KeySpec = defaultKeySpecForUsage(k.KeyUsage)
+		}
+		if publicB64 != "" {
+			k.PublicKeyRaw, err = base64.StdEncoding.DecodeString(publicB64)
+			if err != nil {
+				return nil, err
+			}
 		}
 		k.MasterKeyRaw, err = s.resolveKeyMaterial(ctx, k.ID, masterB64, wrappedB64, nonceB64)
 		if err != nil {
@@ -1980,7 +2380,7 @@ func (s *inMemoryStore) EnsureBootstrap(_ context.Context, _ kmsKey) error {
 	return nil
 }
 
-func (s *inMemoryStore) CreateKey(_ context.Context, _ string) (kmsKey, error) {
+func (s *inMemoryStore) CreateKey(_ context.Context, _ string, _ string, _ string) (kmsKey, error) {
 	return kmsKey{}, errUnsupported
 }
 

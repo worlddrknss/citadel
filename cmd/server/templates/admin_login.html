@@ -40,7 +40,7 @@
     </div>
     <div class="card-body">
       {{if .Error}}<div class="err-banner">⚠ {{.Error}}</div>{{end}}
-      <form method="post" action="/admin/login?next={{.NextPath}}">
+      <form method="post" action="/login?next={{.NextPath}}">
         <div class="f-row">
           <label for="username">Username</label>
           <input id="username" type="text" name="username" autocomplete="username" autofocus required>

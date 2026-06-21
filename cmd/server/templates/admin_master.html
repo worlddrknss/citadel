@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Citadel Master Admin</title>
+  <style>
+    :root{--bg:#f4f6fa;--panel:#fff;--line:#e5e7eb;--text:#111827;--muted:#6b7280;--blue:#0b74d1;--blue2:#0759a3;--red:#b91c1c;--side:#1f2937;--side2:#111827;--link:#93c5fd}
+    *{box-sizing:border-box}body{margin:0;font:14px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
+    .shell{display:flex;min-height:100vh}.side{width:240px;background:linear-gradient(180deg,var(--side),var(--side2));color:#fff;padding:16px}
+    .brand{font-size:18px;font-weight:700;margin-bottom:16px}.group{margin:14px 0}.label{font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px}
+    .nav a{display:block;color:#d1d5db;text-decoration:none;padding:8px 10px;border-radius:8px}.nav a:hover{background:#374151}.nav a.active{background:#1d4ed8;color:#fff}
+    .main{flex:1;padding:20px 24px}.bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}.title{font-size:24px;font-weight:700}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+    .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+    .card h3{margin:0 0 8px 0;font-size:15px}.muted{color:var(--muted)}.chip{display:inline-block;padding:3px 8px;border-radius:999px;background:#dbeafe;color:#1d4ed8;font-size:12px;font-weight:600}
+    table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid var(--line);text-align:left;font-size:13px}th{font-size:11px;text-transform:uppercase;color:var(--muted)}
+    input,select{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:8px}
+    .row{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.row>div{flex:1;min-width:160px}
+    .actions{display:flex;gap:8px}.btn{padding:7px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--text);text-decoration:none}.btn:hover{background:#f9fafb}.btn-primary{background:var(--blue);border-color:var(--blue2);color:#fff}
+    .btn-danger{background:#fff;border-color:#fecaca;color:var(--red)}
+    .flash{padding:10px 12px;border-radius:8px;margin-bottom:12px;border:1px solid}.flash.ok{background:#ecfdf3;border-color:#86efac;color:#166534}.flash.err{background:#fef2f2;border-color:#fca5a5;color:#991b1b}
+    @media (max-width:960px){.grid,.grid2{grid-template-columns:1fr}.shell{display:block}.side{width:100%}}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <div class="brand">Citadel Master Admin</div>
+      <div class="group">
+        <div class="label">Operator Console</div>
+        <nav class="nav">
+          <a href="/">Key Management</a>
+          <a href="/secrets">Secrets Manager</a>
+          <a href="/audit">Audit Explorer</a>
+        </nav>
+      </div>
+      <div class="group">
+        <div class="label">Master Admin</div>
+        <nav class="nav">
+          <a class="{{if eq .Section "overview"}}active{{end}}" href="/admin">Overview</a>
+          <a class="{{if eq .Section "users"}}active{{end}}" href="/admin/users">User Management</a>
+          <a class="{{if eq .Section "rbac"}}active{{end}}" href="/admin/rbac">RBAC</a>
+          <a class="{{if eq .Section "tenants"}}active{{end}}" href="/admin/tenants">Tenant Creation</a>
+        </nav>
+      </div>
+      <div class="group">
+        <div class="label">Session</div>
+        <div>{{if .CurrentUserName}}{{.CurrentUserName}}{{else}}Admin{{end}}</div>
+        <div class="muted">{{if .CurrentUserRole}}{{.CurrentUserRole}}{{else}}admin{{end}}</div>
+        <div style="margin-top:8px"><a style="color:#fecaca" href="/logout">Sign out</a></div>
+      </div>
+    </aside>
+    <main class="main">
+      <div class="bar">
+        <div class="title">{{if eq .Section "overview"}}Overview{{else if eq .Section "users"}}User Management{{else if eq .Section "rbac"}}RBAC{{else}}Tenant Creation{{end}}</div>
+        {{if .CanAdmin}}<span class="chip">admin</span>{{end}}
+      </div>
+
+      {{if .Flash}}<div class="flash ok">{{.Flash}}</div>{{end}}
+      {{if .Error}}<div class="flash err">{{.Error}}</div>{{end}}
+
+      {{if eq .Section "overview"}}
+      <div class="grid">
+        <section class="card"><h3>Users</h3><div class="muted">{{len .Users}} configured</div></section>
+        <section class="card"><h3>Roles</h3><div class="muted">{{if .Roles}}{{range $i, $r := .Roles}}{{if $i}}, {{end}}{{$r}}{{end}}{{else}}None{{end}}</div></section>
+        <section class="card"><h3>Tenants</h3><div class="muted">{{len .Tenants}} discovered</div></section>
+      </div>
+      {{end}}
+
+      {{if eq .Section "users"}}
+      <section class="card">
+        <h3>Create User</h3>
+        <form method="post" action="/admin/users?action=create_user">
+          <div class="row">
+            <div><label>Username</label><input name="username" required></div>
+            <div><label>Display Name</label><input name="display_name"></div>
+            <div><label>Role</label><select name="role"><option>viewer</option><option>editor</option><option>admin</option></select></div>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <div><label>Password</label><input name="password" type="password" required></div>
+            <div><label>Tenants (comma separated)</label><input name="tenants" placeholder="tenant-a, tenant-b"></div>
+            <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit">Create</button></div>
+          </div>
+        </form>
+      </section>
+      <section class="card" style="margin-top:12px;">
+        <h3>Configured Users</h3>
+        <table>
+          <thead><tr><th>Username</th><th>Display Name</th><th>Role</th><th>Tenants</th><th>Actions</th></tr></thead>
+          <tbody>
+            {{if .Users}}
+              {{range .Users}}
+              <tr>
+                <td>{{.Username}}</td>
+                <td>{{.DisplayName}}</td>
+                <td>{{.Role}}</td>
+                <td>{{if .Tenants}}{{.Tenants}}{{else}}-{{end}}</td>
+                <td>
+                  <div class="actions">
+                    <form method="post" action="/admin/users?action=delete_user" onsubmit="return confirm('Delete user {{.Username}}?');">
+                      <input type="hidden" name="username" value="{{.Username}}">
+                      <button class="btn btn-danger" type="submit">Delete</button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td colspan="5">
+                  <form method="post" action="/admin/users?action=update_user">
+                    <input type="hidden" name="username" value="{{.Username}}">
+                    <div class="row">
+                      <div><label>Display Name</label><input name="display_name" value="{{.DisplayName}}"></div>
+                      <div><label>Role</label><select name="role"><option value="viewer" {{if eq .Role "viewer"}}selected{{end}}>viewer</option><option value="editor" {{if eq .Role "editor"}}selected{{end}}>editor</option><option value="admin" {{if eq .Role "admin"}}selected{{end}}>admin</option></select></div>
+                      <div><label>Tenants (comma separated)</label><input name="tenants" value="{{.Tenants}}"></div>
+                      <div><label>New Password (optional)</label><input name="password" type="password"></div>
+                      <div style="display:flex;align-items:flex-end;"><button class="btn" type="submit">Update</button></div>
+                    </div>
+                  </form>
+                </td>
+              </tr>
+              {{end}}
+            {{else}}
+              <tr><td colspan="5" class="muted">No users configured.</td></tr>
+            {{end}}
+          </tbody>
+        </table>
+      </section>
+      {{end}}
+
+      {{if eq .Section "rbac"}}
+      <section class="card" style="margin-bottom:12px;">
+        <h3>RBAC Roles</h3>
+        <p class="muted">Current effective roles discovered from configured users.</p>
+        <div style="margin-top:8px">{{if .Roles}}{{range .Roles}}<span class="chip" style="margin-right:6px">{{.}}</span>{{end}}{{else}}<span class="muted">No roles found.</span>{{end}}</div>
+      </section>
+      <section class="card">
+        <h3>Assign Role</h3>
+        <form method="post" action="/admin/rbac?action=set_role">
+          <div class="row">
+            <div>
+              <label>User</label>
+              <select name="username" required>
+                {{range .Users}}<option value="{{.Username}}">{{.Username}}</option>{{end}}
+              </select>
+            </div>
+            <div>
+              <label>Role</label>
+              <select name="role">
+                <option value="viewer">viewer</option>
+                <option value="editor">editor</option>
+                <option value="admin">admin</option>
+              </select>
+            </div>
+            <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit">Apply Role</button></div>
+          </div>
+        </form>
+      </section>
+      {{end}}
+
+      {{if eq .Section "tenants"}}
+      <div class="grid2">
+        <section class="card">
+          <h3>Create Tenant</h3>
+          <form method="post" action="/admin/tenants?action=create_tenant">
+            <div class="row">
+              <div><label>Tenant Name</label><input name="tenant" placeholder="tenant-id" required></div>
+              <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit">Create</button></div>
+            </div>
+          </form>
+          <h3 style="margin-top:14px;">Existing Tenants</h3>
+          {{if .Tenants}}
+            <table>
+              <thead><tr><th>Tenant</th><th>Action</th></tr></thead>
+              <tbody>
+              {{range .Tenants}}
+                <tr>
+                  <td>{{.}}</td>
+                  <td>
+                    <form method="post" action="/admin/tenants?action=delete_tenant" onsubmit="return confirm('Delete tenant {{.}} and remove it from all users?');">
+                      <input type="hidden" name="tenant" value="{{.}}">
+                      <button class="btn btn-danger" type="submit">Delete</button>
+                    </form>
+                  </td>
+                </tr>
+              {{end}}
+              </tbody>
+            </table>
+          {{else}}<p class="muted">No tenants found.</p>{{end}}
+        </section>
+        <section class="card">
+          <h3>Assign Tenant to User</h3>
+          <form method="post" action="/admin/tenants?action=assign_tenant">
+            <div class="row">
+              <div><label>User</label><select name="username" required>{{range .Users}}<option value="{{.Username}}">{{.Username}}</option>{{end}}</select></div>
+              <div><label>Tenant</label><select name="tenant" required>{{range .Tenants}}<option value="{{.}}">{{.}}</option>{{end}}</select></div>
+            </div>
+            <div style="margin-top:8px;"><button class="btn btn-primary" type="submit">Assign</button></div>
+          </form>
+          <h3 style="margin-top:14px;">Remove Tenant from User</h3>
+          <form method="post" action="/admin/tenants?action=remove_tenant">
+            <div class="row">
+              <div><label>User</label><select name="username" required>{{range .Users}}<option value="{{.Username}}">{{.Username}}</option>{{end}}</select></div>
+              <div><label>Tenant</label><select name="tenant" required>{{range .Tenants}}<option value="{{.}}">{{.}}</option>{{end}}</select></div>
+            </div>
+            <div style="margin-top:8px;"><button class="btn" type="submit">Remove</button></div>
+          </form>
+        </section>
+      </div>
+      {{end}}
+    </main>
+  </div>
+</body>
+</html>
