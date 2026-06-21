@@ -5,142 +5,262 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Citadel - Certificate Management</title>
   <style>
-    :root{--bg:#f3f4f6;--panel:#fff;--line:#e5e7eb;--text:#111827;--muted:#6b7280;--blue:#0b74d1;--green:#166534;--red:#991b1b;--side:#1f2937;--side2:#111827}
-    *{box-sizing:border-box}body{margin:0;font:14px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
-    .shell{display:flex;min-height:100vh}.side{width:232px;background:linear-gradient(180deg,var(--side),var(--side2));color:#fff;padding:14px}
-    .logo{font-size:18px;font-weight:700;margin-bottom:12px}.label{font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;margin:12px 0 6px}
-    .nav a{display:block;color:#d1d5db;text-decoration:none;padding:8px 10px;border-radius:8px}.nav a:hover{background:#374151}.nav a.active{background:#1d4ed8;color:#fff}
-    .main{flex:1;padding:18px}.head{display:flex;justify-content:space-between;align-items:center}.title{font-size:24px;font-weight:700}
-    .flash{padding:10px 12px;border:1px solid;border-radius:8px;margin:10px 0}.ok{background:#ecfdf3;border-color:#86efac;color:var(--green)}.err{background:#fef2f2;border-color:#fca5a5;color:var(--red)}
-    .grid{display:grid;grid-template-columns:340px 1fr;gap:12px}.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
-    .card h3{margin:0 0 8px;font-size:15px}.row{display:flex;gap:8px;flex-wrap:wrap}.row>div{flex:1;min-width:130px}
-    label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}input,select,textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius:8px}
-    textarea{min-height:110px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-    .btn{display:inline-block;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;text-decoration:none;color:var(--text);cursor:pointer}
-    .btn.primary{background:var(--blue);border-color:#0a5aa4;color:#fff}.btn.danger{border-color:#fecaca;color:var(--red)}
-    table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid var(--line);text-align:left;font-size:13px}th{font-size:11px;text-transform:uppercase;color:var(--muted)}
-    .muted{color:var(--muted)}
-    @media(max-width:1000px){.shell{display:block}.side{width:100%}.grid{grid-template-columns:1fr}}
+    :root {
+      --c-bg:#f0f2f5;--c-surface:#ffffff;--c-border:#dde1e9;--c-border-lo:#eaecf0;
+      --c-text:#111827;--c-muted:#6b7280;--c-blue:#0070c4;--c-blue-lo:#e8f2fb;
+      --c-blue-h:#0059a0;--c-green:#16a34a;--c-green-lo:#dcfce7;
+      --c-red:#dc2626;--c-red-lo:#fee2e2;--c-warn:#d97706;--c-warn-lo:#fef3c7;
+      --c-side:#1e2433;--c-side-hi:#2c3347;--c-side-txt:#c9d1e0;
+      --c-side-mut:#7a839a;--c-side-act:#38bdf8;
+      --r-sm:6px;--r:10px;
+      --sh-sm:0 1px 3px rgba(0,0,0,.08);
+      --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+      --mono:"SF Mono","Fira Code",Consolas,monospace;
+      --sw:232px;--th:56px;
+    }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:var(--font);font-size:14px;color:var(--c-text);background:var(--c-bg)}
+    a{color:var(--c-blue);text-decoration:none}a:hover{text-decoration:underline}
+    .shell{display:flex;min-height:100vh}
+    .sidebar{width:var(--sw);min-width:var(--sw);background:var(--c-side);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:100;overflow-y:auto}
+    .sb-brand{padding:18px 16px 14px;border-bottom:1px solid rgba(255,255,255,.07)}
+    .sb-logo{display:flex;align-items:center;gap:10px}
+    .sb-icon{width:32px;height:32px;background:linear-gradient(135deg,var(--c-blue),#38bdf8);border-radius:var(--r-sm);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:#fff;flex-shrink:0}
+    .sb-name{font-size:15px;font-weight:700;color:#fff;line-height:1.1}
+    .sb-ver{font-size:11px;color:var(--c-side-mut);margin-top:2px}
+    .sb-section{padding:12px 8px 4px}
+    .sb-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--c-side-mut);padding:0 8px;margin-bottom:4px}
+    .sb-nav{list-style:none}
+    .sb-nav li{margin-bottom:1px}
+    .sb-link{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:var(--r-sm);color:var(--c-side-txt);font-size:13px;font-weight:500;transition:background .12s,color .12s;text-decoration:none}
+    .sb-link:hover{background:var(--c-side-hi);color:#fff;text-decoration:none}
+    .sb-link.active{background:rgba(56,189,248,.18);color:var(--c-side-act);font-weight:700}
+    .sb-link .ico{font-size:15px;width:18px;text-align:center;flex-shrink:0}
+    .sb-link.logout{color:#f87171}
+    .sb-link.logout:hover{background:rgba(248,113,113,.12)}
+    .sb-footer{margin-top:auto;padding:12px 8px;border-top:1px solid rgba(255,255,255,.07)}
+    .u-chip{display:flex;align-items:center;gap:8px;padding:8px 10px}
+    .u-av{width:28px;height:28px;background:var(--c-blue);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff;flex-shrink:0}
+    .u-name{font-size:12px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .u-role{font-size:11px;color:var(--c-side-mut)}
+    .main{margin-left:var(--sw);flex:1;display:flex;flex-direction:column;min-height:100vh}
+    .topbar{height:var(--th);background:var(--c-surface);border-bottom:1px solid var(--c-border);display:flex;align-items:center;padding:0 24px;gap:12px;position:sticky;top:0;z-index:50}
+    .bc{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--c-muted);flex:1;min-width:0}
+    .bc a{color:var(--c-muted)}.bc a:hover{color:var(--c-blue);text-decoration:none}
+    .bc-sep{color:var(--c-border);user-select:none}
+    .bc-cur{color:var(--c-text);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .tb-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+    .scope-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;background:var(--c-blue-lo);color:var(--c-blue);font-size:11px;font-weight:700}
+    .alerts{padding:16px 24px 0;display:flex;flex-direction:column;gap:8px}
+    .flash{display:flex;align-items:flex-start;gap:10px;padding:11px 14px;border-radius:var(--r);font-size:13px;border:1px solid}
+    .flash.ok{background:var(--c-green-lo);border-color:#86efac;color:#15803d}
+    .flash.err{background:var(--c-red-lo);border-color:#fca5a5;color:#b91c1c}
+    .ph{padding:24px 24px 0;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+    .ph-title{font-size:22px;font-weight:700;letter-spacing:-.02em;line-height:1.2}
+    .ph-sub{margin-top:4px;font-size:13px;color:var(--c-muted)}
+    .content{padding:20px 24px 48px;flex:1}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 16px;border-radius:var(--r-sm);font:inherit;font-size:13px;font-weight:600;cursor:pointer;border:1px solid transparent;white-space:nowrap;transition:background .12s,text-decoration .12s}
+    .btn-p{background:var(--c-blue);color:#fff;border-color:var(--c-blue-h)}.btn-p:hover{background:var(--c-blue-h);text-decoration:none}
+    .btn-s{background:var(--c-surface);color:var(--c-text);border-color:var(--c-border)}.btn-s:hover{background:#f5f6fa;text-decoration:none}
+    .btn-d{background:var(--c-red);color:#fff;border-color:#b91c1c}.btn-d:hover{background:#b91c1c;text-decoration:none}
+    .btn-sm{padding:5px 10px;font-size:12px}
+    input,select,textarea{font:inherit;font-size:13px;color:var(--c-text);background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-sm);padding:8px 10px;width:100%;transition:border-color .15s,box-shadow .15s}
+    input:focus,select:focus,textarea:focus{outline:none;border-color:var(--c-blue);box-shadow:0 0 0 3px rgba(0,112,196,.12)}
+    textarea{min-height:170px;resize:vertical;font-family:var(--mono);font-size:12px;line-height:1.6}
+    .f-row{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
+    .f-row label{font-size:12px;font-weight:700}
+    .f-row:last-child{margin-bottom:0}
+    .f-actions{display:flex;gap:8px;align-items:center;margin-top:14px}
+    .t-card{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh-sm)}
+    .t-head{padding:14px 16px;border-bottom:1px solid var(--c-border-lo);display:flex;align-items:center;justify-content:space-between;gap:10px;background:#fafbfc}
+    .t-head h2{font-size:14px;font-weight:700}
+    .t-head .cnt{font-size:12px;color:var(--c-muted)}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    thead th{text-align:left;padding:10px 14px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-muted);background:#fafbfc;border-bottom:1px solid var(--c-border-lo);white-space:nowrap}
+    tbody td{padding:12px 14px;border-bottom:1px solid var(--c-border-lo);vertical-align:middle}
+    tbody tr:last-child td{border-bottom:none}
+    tbody tr:hover td{background:#f8f9fb}
+    .empty-row td{text-align:center;padding:32px;color:var(--c-muted)}
+    .badge{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid transparent}
+    .badge::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor}
+    .badge-active{background:var(--c-green-lo);color:var(--c-green);border-color:#86efac}
+    .badge-rev{background:var(--c-red-lo);color:#b91c1c;border-color:#fca5a5}
+    .badge-other{background:var(--c-warn-lo);color:var(--c-warn);border-color:#fde68a}
+    .g2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+    @media(max-width:860px){.g2{grid-template-columns:1fr}}
+    .fc{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);padding:20px;box-shadow:var(--sh-sm)}
+    .fc h3{font-size:14px;font-weight:700;margin-bottom:14px}
+    .row{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap}
+    .row > div{flex:1;min-width:160px}
+    .muted{color:var(--c-muted)}
+    .sm{font-size:12px}
+    .mono{font-family:var(--mono);font-size:12px;word-break:break-all}
   </style>
 </head>
 <body>
 <div class="shell">
-  <aside class="side">
-    <div class="logo">Citadel</div>
-    <div class="label">Services</div>
-    <nav class="nav">
-      <a href="/">Key Management</a>
-      <a href="/secrets">Secrets Manager</a>
-      <a class="active" href="/certificates">Certificate Management</a>
-    </nav>
-    <div class="label">Operations</div>
-    <nav class="nav">
-      <a href="/audit">Audit Explorer</a>
-    </nav>
-    <div class="label">Scope</div>
-    <div class="muted" style="padding:0 10px;">
-      {{if .TenantScope}}{{range $i,$t := .TenantScope}}{{if $i}}, {{end}}{{$t}}{{end}}{{else}}all tenants{{end}}
+  <nav class="sidebar">
+    <div class="sb-brand">
+      <div class="sb-logo">
+        <div class="sb-icon">C</div>
+        <div><div class="sb-name">Citadel</div><div class="sb-ver">Control Plane</div></div>
+      </div>
     </div>
-    <div style="margin-top:12px;"><a style="color:#fecaca;text-decoration:none;padding:8px 10px;display:inline-block" href="/logout">Sign out</a></div>
-  </aside>
-  <main class="main">
-    <div class="head">
-      <div class="title">Certificate Management</div>
-      <div class="muted">{{if .CurrentUserName}}{{.CurrentUserName}} ({{.CurrentUserRole}}){{end}}</div>
+    <div class="sb-section">
+      <div class="sb-label">Services</div>
+      <ul class="sb-nav">
+        <li><a class="sb-link" href="/"><span class="ico">🔑</span> Key Management</a></li>
+        <li><a class="sb-link" href="/secrets"><span class="ico">🔒</span> Secrets Manager</a></li>
+        <li><a class="sb-link active" href="/certificates"><span class="ico">📜</span> Certificate Management</a></li>
+      </ul>
     </div>
-    {{if .Flash}}<div class="flash ok">{{.Flash}}</div>{{end}}
-    {{if .Error}}<div class="flash err">{{.Error}}</div>{{end}}
+    <div class="sb-section">
+      <div class="sb-label">Operations</div>
+      <ul class="sb-nav">
+        <li><a class="sb-link" href="/audit"><span class="ico">📋</span> Audit Explorer</a></li>
+      </ul>
+    </div>
+    <div class="sb-footer">
+      <div class="u-chip">
+        <div class="u-av">{{if .CurrentUserName}}{{slice .CurrentUserName 0 1}}{{else}}A{{end}}</div>
+        <div><div class="u-name">{{if .CurrentUserName}}{{.CurrentUserName}}{{else}}Local Admin{{end}}</div><div class="u-role">{{if .CurrentUserRole}}{{.CurrentUserRole}}{{else}}admin{{end}}</div></div>
+      </div>
+      <ul class="sb-nav"><li><a class="sb-link logout" href="/logout"><span class="ico">↩</span> Sign out</a></li></ul>
+    </div>
+  </nav>
 
-    <div class="grid">
-      <section class="card">
-        <h3>Create Certificate Authority</h3>
-        {{if .CanAdmin}}
-        <form method="post" action="/certificates?action=create_ca">
-          <div class="row">
-            <div><label>Type</label><select name="ca_type"><option value="ROOT">ROOT</option><option value="SUBORDINATE">SUBORDINATE</option></select></div>
-            <div><label>Key Algorithm</label><select name="key_algorithm"><option value="RSA_2048">RSA_2048</option><option value="RSA_3072">RSA_3072</option><option value="RSA_4096">RSA_4096</option><option value="EC_prime256v1">EC_prime256v1</option><option value="EC_secp384r1">EC_secp384r1</option></select></div>
-          </div>
-          <div class="row" style="margin-top:8px;">
-            <div><label>Signing Algorithm</label><select name="signing_algorithm"><option value="">Auto</option><option value="RSASSA_PKCS1_V1_5_SHA_256">RSASSA_PKCS1_V1_5_SHA_256</option><option value="ECDSA_SHA_256">ECDSA_SHA_256</option><option value="ECDSA_SHA_384">ECDSA_SHA_384</option></select></div>
-            <div><label>Country</label><input name="country" placeholder="US"></div>
-          </div>
-          <div class="row" style="margin-top:8px;">
-            <div><label>Organization</label><input name="organization" placeholder="Citadel"></div>
-            <div><label>Common Name</label><input name="common_name" placeholder="Citadel Root CA" required></div>
-          </div>
-          <div style="margin-top:10px;"><button class="btn primary" type="submit">Create CA</button></div>
-        </form>
-        {{else}}
-        <p class="muted">Admin role required to create certificate authorities.</p>
-        {{end}}
-
-        <h3 style="margin-top:14px;">Certificate Authorities</h3>
-        {{if .CAs}}
-        <table>
-          <thead><tr><th>CA ID</th><th>Type</th><th>Status</th></tr></thead>
-          <tbody>
-          {{range .CAs}}
-            <tr>
-              <td><a href="/certificates?ca_arn={{.ARN}}">{{.CAID}}</a></td>
-              <td>{{.Type}}</td>
-              <td>{{.State}}</td>
-            </tr>
-          {{end}}
-          </tbody>
-        </table>
-        {{else}}<p class="muted">No CAs created yet.</p>{{end}}
-      </section>
-
-      <section class="card">
-        <h3>Issue Certificate{{if .SelectedCA}} - {{.SelectedCA.CAID}}{{end}}</h3>
+  <div class="main">
+    <header class="topbar">
+      <div class="bc">
+        <a href="/certificates">Certificates</a>
         {{if .SelectedCA}}
-        {{if .CanEdit}}
-        <form method="post" action="/certificates?action=issue_cert">
-          <input type="hidden" name="ca_arn" value="{{.SelectedCA.ARN}}">
-          <div class="row">
-            <div><label>Validity Days</label><input name="validity_days" type="number" value="365" min="1" max="3650"></div>
-            <div><label>Signing Algorithm</label><select name="signing_algorithm"><option value="">Auto</option><option value="RSASSA_PKCS1_V1_5_SHA_256">RSASSA_PKCS1_V1_5_SHA_256</option><option value="ECDSA_SHA_256">ECDSA_SHA_256</option><option value="ECDSA_SHA_384">ECDSA_SHA_384</option></select></div>
-          </div>
-          <div style="margin-top:8px;"><label>CSR (PEM)</label><textarea name="csr_pem" placeholder="-----BEGIN CERTIFICATE REQUEST-----" required></textarea></div>
-          <div style="margin-top:10px;"><button class="btn primary" type="submit">Issue Certificate</button></div>
-        </form>
+          <span class="bc-sep">/</span><a href="/certificates">Certificate authorities</a>
+          <span class="bc-sep">/</span><span class="bc-cur">{{.SelectedCA.CAID}}</span>
         {{else}}
-        <p class="muted">Editor role required to issue certificates.</p>
+          <span class="bc-sep">/</span><span class="bc-cur">Certificate authorities</span>
         {{end}}
-        {{else}}<p class="muted">Select or create a CA first.</p>{{end}}
+      </div>
+      <div class="tb-actions">
+        {{if .TenantScope}}<span class="scope-badge">🏷 {{range $i,$t := .TenantScope}}{{if $i}}, {{end}}{{$t}}{{end}}</span>{{end}}
+      </div>
+    </header>
 
-        <h3 style="margin-top:14px;">Issued Certificates</h3>
-        {{if .Certificates}}
-        <table>
-          <thead><tr><th>ID</th><th>Status</th><th>Not After</th><th>Actions</th></tr></thead>
-          <tbody>
-          {{range .Certificates}}
-            <tr>
-              <td>{{.CertID}}</td>
-              <td>{{.Status}}</td>
-              <td>{{.NotAfter}}</td>
-              <td>
-                {{if and $.CanAdmin (ne .Status "REVOKED")}}
-                <form method="post" action="/certificates?action=revoke_cert" style="display:flex;gap:6px;align-items:center;">
-                  {{if $.SelectedCA}}<input type="hidden" name="ca_arn" value="{{$.SelectedCA.ARN}}">{{end}}
-                  <input type="hidden" name="cert_id" value="{{.CertID}}">
-                  <input name="reason" placeholder="Reason" style="width:120px">
-                  <button class="btn danger" type="submit">Revoke</button>
-                </form>
-                {{else if eq .Status "REVOKED"}}
-                <span class="muted">{{.RevocationReason}}</span>
-                {{else}}
-                <span class="muted">Admin role required</span>
-                {{end}}
-              </td>
-            </tr>
-          {{end}}
-          </tbody>
-        </table>
-        {{else}}<p class="muted">No certificates issued for the selected CA.</p>{{end}}
-      </section>
+    {{if .Flash}}<div class="alerts"><div class="flash ok">✓ {{.Flash}}</div></div>{{end}}
+    {{if .Error}}<div class="alerts"><div class="flash err">⚠ {{.Error}}</div></div>{{end}}
+
+    <div class="ph">
+      <div>
+        <h1 class="ph-title">Certificate Management</h1>
+        <p class="ph-sub">Private CA lifecycle and certificate issuance managed with KMS-backed keys.</p>
+      </div>
     </div>
-  </main>
+
+    <div class="content">
+      <div class="g2">
+        <section class="fc">
+          <h3>Create Certificate Authority</h3>
+          {{if .CanAdmin}}
+          <form method="post" action="/certificates?action=create_ca">
+            <div class="row">
+              <div><label>Type</label><select name="ca_type"><option value="ROOT">ROOT</option><option value="SUBORDINATE">SUBORDINATE</option></select></div>
+              <div><label>Key Algorithm</label><select name="key_algorithm"><option value="RSA_2048">RSA_2048</option><option value="RSA_3072">RSA_3072</option><option value="RSA_4096">RSA_4096</option><option value="EC_prime256v1">EC_prime256v1</option><option value="EC_secp384r1">EC_secp384r1</option></select></div>
+            </div>
+            <div class="row" style="margin-top:10px;">
+              <div><label>Signing Algorithm</label><select name="signing_algorithm"><option value="">Auto</option><option value="RSASSA_PKCS1_V1_5_SHA_256">RSASSA_PKCS1_V1_5_SHA_256</option><option value="ECDSA_SHA_256">ECDSA_SHA_256</option><option value="ECDSA_SHA_384">ECDSA_SHA_384</option></select></div>
+              <div><label>Country</label><input name="country" placeholder="US"></div>
+            </div>
+            <div class="row" style="margin-top:10px;">
+              <div><label>Organization</label><input name="organization" placeholder="Citadel"></div>
+              <div><label>Common Name</label><input name="common_name" placeholder="Citadel Root CA" required></div>
+            </div>
+            <div class="f-actions"><button class="btn btn-p" type="submit">+ Create CA</button></div>
+          </form>
+          {{else}}
+          <p class="muted">Admin role required to create certificate authorities.</p>
+          {{end}}
+
+          <div class="t-card" style="margin-top:16px;">
+            <div class="t-head"><h2>Certificate Authorities</h2><span class="cnt">{{len .CAs}} total</span></div>
+            <table>
+              <thead><tr><th>CA ID</th><th>Type</th><th>Status</th></tr></thead>
+              <tbody>
+                {{if .CAs}}{{range .CAs}}
+                <tr>
+                  <td><a class="mono" href="/certificates?ca_arn={{.ARN}}">{{.CAID}}</a></td>
+                  <td>{{.Type}}</td>
+                  <td>
+                    {{if eq .State "ACTIVE"}}<span class="badge badge-active">{{.State}}</span>
+                    {{else if eq .State "REVOKED"}}<span class="badge badge-rev">{{.State}}</span>
+                    {{else}}<span class="badge badge-other">{{.State}}</span>{{end}}
+                  </td>
+                </tr>
+                {{end}}{{else}}
+                <tr class="empty-row"><td colspan="3">No certificate authorities created yet.</td></tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="fc">
+          <h3>Issue Certificate{{if .SelectedCA}} - {{.SelectedCA.CAID}}{{end}}</h3>
+          {{if .SelectedCA}}
+            {{if .CanEdit}}
+            <form method="post" action="/certificates?action=issue_cert">
+              <input type="hidden" name="ca_arn" value="{{.SelectedCA.ARN}}">
+              <div class="row">
+                <div><label>Validity Days</label><input name="validity_days" type="number" value="365" min="1" max="3650"></div>
+                <div><label>Signing Algorithm</label><select name="signing_algorithm"><option value="">Auto</option><option value="RSASSA_PKCS1_V1_5_SHA_256">RSASSA_PKCS1_V1_5_SHA_256</option><option value="ECDSA_SHA_256">ECDSA_SHA_256</option><option value="ECDSA_SHA_384">ECDSA_SHA_384</option></select></div>
+              </div>
+              <div class="f-row" style="margin-top:10px;"><label>CSR (PEM)</label><textarea name="csr_pem" placeholder="-----BEGIN CERTIFICATE REQUEST-----" required></textarea></div>
+              <div class="f-actions"><button class="btn btn-p" type="submit">Issue Certificate</button></div>
+            </form>
+            {{else}}
+            <p class="muted">Editor role required to issue certificates.</p>
+            {{end}}
+          {{else}}
+          <p class="muted">Select or create a CA first.</p>
+          {{end}}
+
+          <div class="t-card" style="margin-top:16px;">
+            <div class="t-head"><h2>Issued Certificates</h2><span class="cnt">{{len .Certificates}} total</span></div>
+            <table>
+              <thead><tr><th>Cert ID</th><th>Status</th><th>Not After</th><th>Actions</th></tr></thead>
+              <tbody>
+                {{if .Certificates}}{{range .Certificates}}
+                <tr>
+                  <td class="mono">{{.CertID}}</td>
+                  <td>
+                    {{if eq .Status "ISSUED"}}<span class="badge badge-active">{{.Status}}</span>
+                    {{else if eq .Status "REVOKED"}}<span class="badge badge-rev">{{.Status}}</span>
+                    {{else}}<span class="badge badge-other">{{.Status}}</span>{{end}}
+                  </td>
+                  <td>{{.NotAfter}}</td>
+                  <td>
+                    {{if and $.CanAdmin (ne .Status "REVOKED")}}
+                    <form method="post" action="/certificates?action=revoke_cert" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                      {{if $.SelectedCA}}<input type="hidden" name="ca_arn" value="{{$.SelectedCA.ARN}}">{{end}}
+                      <input type="hidden" name="cert_id" value="{{.CertID}}">
+                      <input name="reason" placeholder="Reason" style="width:140px">
+                      <button class="btn btn-d btn-sm" type="submit">Revoke</button>
+                    </form>
+                    {{else if eq .Status "REVOKED"}}
+                    <span class="muted sm">{{.RevocationReason}}</span>
+                    {{else}}
+                    <span class="muted sm">Admin role required</span>
+                    {{end}}
+                  </td>
+                </tr>
+                {{end}}{{else}}
+                <tr class="empty-row"><td colspan="4">No certificates issued for the selected CA.</td></tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
 </div>
 </body>
 </html>
