@@ -756,44 +756,6 @@ func (s *server) handleCancelKeyDeletion(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"KeyMetadata": toKeyMetadata(key)})
 }
 
-func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	keys, err := s.store.ListKeys(r.Context())
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte("failed to list keys"))
-		return
-	}
-	aliases, err := s.store.ListAliases(r.Context())
-	if err != nil {
-		aliases = nil
-	}
-	var b strings.Builder
-	b.WriteString("<html><head><title>go-kms admin</title></head><body><h1>go-kms admin</h1>")
-	b.WriteString("<h2>Keys</h2><ul>")
-	for _, k := range keys {
-		b.WriteString("<li>")
-		b.WriteString(k.ID)
-		b.WriteString(" state=")
-		b.WriteString(keyState(k))
-		b.WriteString("</li>")
-	}
-	b.WriteString("</ul><h2>Aliases</h2><ul>")
-	for _, a := range aliases {
-		b.WriteString("<li>")
-		b.WriteString(a.AliasName)
-		b.WriteString(" -> ")
-		b.WriteString(a.TargetKeyID)
-		b.WriteString("</li>")
-	}
-	b.WriteString("</ul></body></html>")
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(b.String()))
-}
-
 func keyState(key kmsKey) string {
 	if key.DeletionDate != nil {
 		return "PendingDeletion"
