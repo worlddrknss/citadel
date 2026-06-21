@@ -37,14 +37,11 @@
     <nav class="nav">
       <a href="/audit">Audit Explorer</a>
     </nav>
-    <div class="label">Master Admin</div>
-    <nav class="nav">
-      <a href="/admin">Overview</a>
-      <a href="/admin/users">Users</a>
-      <a href="/admin/rbac">RBAC</a>
-      <a href="/admin/tenants">Tenants</a>
-    </nav>
-    <div style="margin-top:12px;"><a style="color:#fecaca;text-decoration:none" href="/logout">Sign out</a></div>
+    <div class="label">Scope</div>
+    <div class="muted" style="padding:0 10px;">
+      {{if .TenantScope}}{{range $i,$t := .TenantScope}}{{if $i}}, {{end}}{{$t}}{{end}}{{else}}all tenants{{end}}
+    </div>
+    <div style="margin-top:12px;"><a style="color:#fecaca;text-decoration:none;padding:8px 10px;display:inline-block" href="/logout">Sign out</a></div>
   </aside>
   <main class="main">
     <div class="head">
@@ -57,6 +54,7 @@
     <div class="grid">
       <section class="card">
         <h3>Create Certificate Authority</h3>
+        {{if .CanAdmin}}
         <form method="post" action="/certificates?action=create_ca">
           <div class="row">
             <div><label>Type</label><select name="ca_type"><option value="ROOT">ROOT</option><option value="SUBORDINATE">SUBORDINATE</option></select></div>
@@ -72,6 +70,9 @@
           </div>
           <div style="margin-top:10px;"><button class="btn primary" type="submit">Create CA</button></div>
         </form>
+        {{else}}
+        <p class="muted">Admin role required to create certificate authorities.</p>
+        {{end}}
 
         <h3 style="margin-top:14px;">Certificate Authorities</h3>
         {{if .CAs}}
@@ -93,6 +94,7 @@
       <section class="card">
         <h3>Issue Certificate{{if .SelectedCA}} - {{.SelectedCA.CAID}}{{end}}</h3>
         {{if .SelectedCA}}
+        {{if .CanEdit}}
         <form method="post" action="/certificates?action=issue_cert">
           <input type="hidden" name="ca_arn" value="{{.SelectedCA.ARN}}">
           <div class="row">
@@ -102,6 +104,9 @@
           <div style="margin-top:8px;"><label>CSR (PEM)</label><textarea name="csr_pem" placeholder="-----BEGIN CERTIFICATE REQUEST-----" required></textarea></div>
           <div style="margin-top:10px;"><button class="btn primary" type="submit">Issue Certificate</button></div>
         </form>
+        {{else}}
+        <p class="muted">Editor role required to issue certificates.</p>
+        {{end}}
         {{else}}<p class="muted">Select or create a CA first.</p>{{end}}
 
         <h3 style="margin-top:14px;">Issued Certificates</h3>
@@ -115,15 +120,17 @@
               <td>{{.Status}}</td>
               <td>{{.NotAfter}}</td>
               <td>
-                {{if ne .Status "REVOKED"}}
+                {{if and $.CanAdmin (ne .Status "REVOKED")}}
                 <form method="post" action="/certificates?action=revoke_cert" style="display:flex;gap:6px;align-items:center;">
                   {{if $.SelectedCA}}<input type="hidden" name="ca_arn" value="{{$.SelectedCA.ARN}}">{{end}}
                   <input type="hidden" name="cert_id" value="{{.CertID}}">
                   <input name="reason" placeholder="Reason" style="width:120px">
                   <button class="btn danger" type="submit">Revoke</button>
                 </form>
-                {{else}}
+                {{else if eq .Status "REVOKED"}}
                 <span class="muted">{{.RevocationReason}}</span>
+                {{else}}
+                <span class="muted">Admin role required</span>
                 {{end}}
               </td>
             </tr>
