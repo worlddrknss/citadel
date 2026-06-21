@@ -3,72 +3,201 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>go-kms admin</title>
+  <title>go-kms control plane</title>
   <style>
     :root {
-      --bg: #0b1020;
-      --panel: #131a2e;
-      --text: #e7ecff;
-      --muted: #a7b2d9;
-      --accent: #4f7cff;
-      --good: #29d391;
-      --warn: #f8b84e;
+      --bg: #0b0f18;
+      --panel: #141b2b;
+      --panel-alt: #111726;
+      --text: #ebf0ff;
+      --muted: #95a3c6;
+      --accent: #2e8fff;
+      --danger: #ff5d74;
+      --good: #30d89e;
+      --warn: #ffc45d;
+      --line: #263455;
     }
     body {
       margin: 0;
       font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-      background: radial-gradient(circle at top, #142042 0%, var(--bg) 55%);
+      background:
+        radial-gradient(circle at 20% -10%, #16335d 0%, transparent 45%),
+        radial-gradient(circle at 100% 0%, #1c2640 0%, transparent 40%),
+        var(--bg);
       color: var(--text);
       min-height: 100vh;
-      display: grid;
-      place-items: center;
-      padding: 24px;
+      padding: 20px;
     }
     .wrap {
-      width: min(920px, 100%);
-      background: color-mix(in srgb, var(--panel) 92%, black);
-      border: 1px solid #243154;
-      border-radius: 16px;
-      box-shadow: 0 18px 50px rgba(0,0,0,.45);
+      width: min(1280px, 100%);
+      margin: 0 auto;
+      background: color-mix(in srgb, var(--panel) 95%, black);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.45);
       overflow: hidden;
     }
     header {
-      padding: 20px 24px;
-      border-bottom: 1px solid #243154;
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--line);
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 14px;
+      flex-wrap: wrap;
     }
     h1 {
       margin: 0;
-      font-size: 24px;
-      letter-spacing: .3px;
+      font-size: 25px;
+      letter-spacing: .4px;
     }
-    .badge {
-      background: rgba(79,124,255,.2);
-      border: 1px solid rgba(79,124,255,.35);
-      color: #9cb6ff;
+    .sub {
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .tag {
+      background: rgba(46,143,255,.18);
+      border: 1px solid rgba(46,143,255,.42);
+      color: #9fcbff;
       border-radius: 999px;
       font-size: 12px;
-      padding: 4px 10px;
+      padding: 4px 11px;
     }
-    .grid {
+
+    .flash {
+      margin: 14px 16px 0;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+      border: 1px solid;
+    }
+    .flash.ok {
+      background: rgba(48,216,158,.11);
+      border-color: rgba(48,216,158,.35);
+      color: #8af0cb;
+    }
+    .flash.err {
+      background: rgba(255,93,116,.11);
+      border-color: rgba(255,93,116,.35);
+      color: #ff9fb0;
+    }
+
+    .layout {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      grid-template-columns: 340px minmax(0, 1fr);
       gap: 16px;
       padding: 16px;
     }
+    @media (max-width: 960px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .stack {
+      display: grid;
+      gap: 14px;
+    }
+
     section {
-      border: 1px solid #243154;
+      border: 1px solid var(--line);
       border-radius: 12px;
-      background: rgba(10, 16, 36, .55);
+      background: color-mix(in srgb, var(--panel-alt) 92%, black);
       padding: 14px;
     }
     h2 {
       margin: 0 0 10px;
-      font-size: 16px;
+      font-size: 15px;
+      color: var(--muted);
+      letter-spacing: .2px;
+    }
+    h3 {
+      margin: 10px 0 8px;
+      font-size: 13px;
+      color: var(--muted);
+      font-weight: 600;
+      letter-spacing: .2px;
+    }
+
+    form {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+    }
+    input, select {
+      width: 100%;
+      box-sizing: border-box;
+      border-radius: 10px;
+      border: 1px solid #2b3a60;
+      background: #0f1524;
+      color: var(--text);
+      padding: 9px 10px;
+      font-size: 13px;
+      outline: none;
+    }
+    input:focus, select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(46,143,255,.18);
+    }
+
+    .btn {
+      border: 1px solid rgba(46,143,255,.45);
+      border-radius: 10px;
+      background: linear-gradient(180deg, rgba(46,143,255,.35), rgba(46,143,255,.22));
+      color: #d7e9ff;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn.secondary {
+      border-color: #3a496f;
+      background: #1a2236;
       color: var(--muted);
     }
+    .btn.warn {
+      border-color: rgba(255,196,93,.45);
+      background: rgba(255,196,93,.15);
+      color: #ffe4ae;
+    }
+    .btn.danger {
+      border-color: rgba(255,93,116,.45);
+      background: rgba(255,93,116,.16);
+      color: #ffc2cb;
+    }
+    .btn.good {
+      border-color: rgba(48,216,158,.42);
+      background: rgba(48,216,158,.17);
+      color: #b7f7df;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .table th, .table td {
+      border-bottom: 1px solid #253356;
+      padding: 10px 8px;
+      vertical-align: top;
+      text-align: left;
+    }
+    .table th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
     ul {
       list-style: none;
       margin: 0;
@@ -76,67 +205,156 @@
       display: grid;
       gap: 8px;
     }
-    li {
-      border: 1px solid #223056;
-      border-radius: 10px;
-      padding: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      font-size: 14px;
-      background: rgba(17, 26, 49, .55);
-    }
+
     .state {
       font-size: 12px;
       border-radius: 999px;
-      padding: 3px 8px;
-      border: 1px solid #2c3a5d;
+      padding: 3px 9px;
+      border: 1px solid #314266;
       color: var(--muted);
+      display: inline-block;
+      white-space: nowrap;
     }
     .state.Enabled { color: var(--good); border-color: rgba(41,211,145,.4); }
     .state.PendingDeletion { color: var(--warn); border-color: rgba(248,184,78,.4); }
     .state.Disabled { color: #ff7b87; border-color: rgba(255,123,135,.4); }
+
+    .mono {
+      font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+      font-size: 12px;
+      word-break: break-all;
+    }
+
     .empty { color: var(--muted); font-size: 14px; }
   </style>
 </head>
 <body>
   <main class="wrap">
     <header>
-      <h1>go-kms admin</h1>
-      <span class="badge">mvp</span>
+      <div>
+        <h1>go-kms control plane</h1>
+        <p class="sub">KMS key, alias, and lifecycle management console</p>
+      </div>
+      <span class="tag">aws-kms-like</span>
     </header>
-    <div class="grid">
-      <section>
-        <h2>Keys</h2>
-        {{if .Keys}}
-        <ul>
-          {{range .Keys}}
-          <li>
-            <span>{{.ID}}</span>
-            <span class="state {{.State}}">{{.State}}</span>
-          </li>
+
+    {{if .Flash}}
+    <div class="flash ok">{{.Flash}}</div>
+    {{end}}
+    {{if .Error}}
+    <div class="flash err">{{.Error}}</div>
+    {{end}}
+
+    <div class="layout">
+      <aside class="stack">
+        <section>
+          <h2>Create Key</h2>
+          <form method="post" action="/admin?action=create_key">
+            <input type="text" name="description" placeholder="Description (optional)">
+            <button class="btn" type="submit">Create symmetric key</button>
+          </form>
+        </section>
+
+        <section>
+          <h2>Create Alias</h2>
+          <form method="post" action="/admin?action=create_alias">
+            <input type="text" name="alias_name" placeholder="alias/my-key">
+            <select name="target_key_id" required>
+              <option value="">Select target key</option>
+              {{range .AvailableKeyIDs}}
+              <option value="{{.}}">{{.}}</option>
+              {{end}}
+            </select>
+            <button class="btn" type="submit">Create alias</button>
+          </form>
+        </section>
+
+        <section>
+          <h2>Update Alias</h2>
+          <form method="post" action="/admin?action=update_alias">
+            <input type="text" name="alias_name" placeholder="alias/my-key">
+            <select name="target_key_id" required>
+              <option value="">Select new target key</option>
+              {{range .AvailableKeyIDs}}
+              <option value="{{.}}">{{.}}</option>
+              {{end}}
+            </select>
+            <button class="btn secondary" type="submit">Update alias target</button>
+          </form>
+        </section>
+      </aside>
+
+      <div class="stack">
+        <section>
+          <h2>Managed Keys</h2>
+          {{if .Keys}}
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Key Id</th>
+                <th>State</th>
+                <th>Deletion Date</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .Keys}}
+              <tr>
+                <td>
+                  <div class="mono">{{.ID}}</div>
+                  <div class="mono" style="color:#8494bf; margin-top:4px;">{{.ARN}}</div>
+                </td>
+                <td><span class="state {{.State}}">{{.State}}</span></td>
+                <td>
+                  {{if .DeletionDate}}
+                  <span class="mono">{{.DeletionDate}}</span>
+                  {{else}}
+                  <span class="empty">-</span>
+                  {{end}}
+                </td>
+                <td>
+                  <div class="actions">
+                    <form method="post" action="/admin?action=enable_key">
+                      <input type="hidden" name="key_id" value="{{.ID}}">
+                      <button class="btn good" type="submit">Enable</button>
+                    </form>
+                    <form method="post" action="/admin?action=disable_key">
+                      <input type="hidden" name="key_id" value="{{.ID}}">
+                      <button class="btn danger" type="submit">Disable</button>
+                    </form>
+                    <form method="post" action="/admin?action=schedule_deletion">
+                      <input type="hidden" name="key_id" value="{{.ID}}">
+                      <input type="number" min="7" max="30" name="window_days" value="30" required>
+                      <button class="btn warn" type="submit">Schedule deletion</button>
+                    </form>
+                    <form method="post" action="/admin?action=cancel_deletion">
+                      <input type="hidden" name="key_id" value="{{.ID}}">
+                      <button class="btn secondary" type="submit">Cancel deletion</button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{else}}
+          <p class="empty">No keys found.</p>
           {{end}}
-        </ul>
-        {{else}}
-        <p class="empty">No keys found.</p>
-        {{end}}
-      </section>
-      <section>
-        <h2>Aliases</h2>
-        {{if .Aliases}}
-        <ul>
-          {{range .Aliases}}
-          <li>
-            <span>{{.Name}}</span>
-            <span>{{.TargetKey}}</span>
-          </li>
+        </section>
+
+        <section>
+          <h2>Aliases</h2>
+          {{if .Aliases}}
+          <ul>
+            {{range .Aliases}}
+            <li class="mono">{{.Name}} -> {{.TargetKey}}</li>
+            {{end}}
+          </ul>
+          {{else}}
+          <p class="empty">No aliases found.</p>
           {{end}}
-        </ul>
-        {{else}}
-        <p class="empty">No aliases found.</p>
-        {{end}}
-      </section>
+        </section>
+      </div>
     </div>
   </main>
 </body>
