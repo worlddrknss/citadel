@@ -3,517 +3,428 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>go-kms | Customer managed keys</title>
+  <title>go-kms — Key Management Service</title>
   <style>
     :root {
-      --bg: #f3f5f8;
-      --panel: #ffffff;
-      --text: #1f2937;
-      --muted: #5f6b7a;
-      --line: #d5dbe3;
-      --brand: #0073bb;
-      --brand-2: #005d99;
-      --warn: #d13212;
-      --ok: #037f0c;
+      --c-bg:#f0f2f5;--c-surface:#ffffff;--c-border:#dde1e9;--c-border-lo:#eaecf0;
+      --c-text:#111827;--c-muted:#6b7280;--c-blue:#0070c4;--c-blue-lo:#e8f2fb;
+      --c-blue-h:#0059a0;--c-green:#16a34a;--c-green-lo:#dcfce7;
+      --c-red:#dc2626;--c-red-lo:#fee2e2;--c-warn:#d97706;--c-warn-lo:#fef3c7;
+      --c-side:#1e2433;--c-side-hi:#2c3347;--c-side-txt:#c9d1e0;
+      --c-side-mut:#7a839a;--c-side-act:#38bdf8;
+      --r-sm:6px;--r:10px;--r-lg:16px;
+      --sh-sm:0 1px 3px rgba(0,0,0,.08);--sh:0 4px 16px rgba(0,0,0,.08);
+      --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+      --mono:"SF Mono","Fira Code",Consolas,monospace;
+      --sw:232px;--th:56px;
     }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: radial-gradient(circle at top right, #e2e8f2 0%, transparent 35%), var(--bg);
-      color: var(--text);
-      font-family: "Public Sans", "Segoe UI", sans-serif;
-      padding: 18px;
-    }
-    .wrap {
-      max-width: 1440px;
-      margin: 0 auto;
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      box-shadow: 0 8px 20px rgba(26, 39, 60, .06);
-      overflow: hidden;
-    }
-    .topbar {
-      padding: 14px 18px;
-      border-bottom: 1px solid var(--line);
-      background: linear-gradient(180deg, #fff 0%, #f8fbff 100%);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-    .title {
-      margin: 0;
-      font-size: 28px;
-      font-weight: 700;
-    }
-    .service-nav {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-      margin-bottom: 6px;
-    }
-    .service-link {
-      display: inline-block;
-      text-decoration: none;
-      font-size: 12px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      border: 1px solid #d4dbe5;
-      color: #334155;
-      background: #fff;
-      font-weight: 600;
-    }
-    .service-link.active {
-      color: #0f4d73;
-      border-color: #bfd5e6;
-      background: #edf7ff;
-    }
-    .sub {
-      margin: 2px 0 0;
-      color: var(--muted);
-      font-size: 13px;
-    }
-    .flash {
-      margin: 14px 16px 0;
-      border-radius: 10px;
-      padding: 10px 12px;
-      font-size: 13px;
-      border: 1px solid;
-    }
-    .flash.ok { color: #0f6b18; background: #edf8ee; border-color: #9ed2a4; }
-    .flash.err { color: #8f1d1d; background: #fef2f2; border-color: #efb3b3; }
-    .section { padding: 16px; }
-    .btn {
-      border: 1px solid var(--brand-2);
-      background: var(--brand);
-      color: #fff;
-      border-radius: 20px;
-      padding: 8px 13px;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      text-decoration: none;
-      display: inline-block;
-    }
-    .btn.secondary {
-      border-color: #9babbe;
-      background: #fff;
-      color: #1f2937;
-    }
-    .btn.warn {
-      border-color: #c2410c;
-      background: #d13212;
-      color: #fff;
-    }
-    .mono {
-      font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
-      font-size: 12px;
-      word-break: break-all;
-    }
-    .state {
-      display: inline-block;
-      font-size: 11px;
-      border-radius: 999px;
-      padding: 2px 8px;
-      border: 1px solid #bfd5e6;
-      color: #1f587a;
-      background: #edf7ff;
-    }
-    .state.Enabled { color: var(--ok); border-color: #9ed2a4; background: #ecfbef; }
-    .state.Disabled { color: #9f1f1f; border-color: #efb3b3; background: #fff0f0; }
-    .state.PendingDeletion { color: #8f4b00; border-color: #efcd95; background: #fff7e8; }
-    input, select, textarea {
-      width: 100%;
-      border: 1px solid #b9c6d8;
-      border-radius: 8px;
-      padding: 8px 10px;
-      background: #fff;
-      font: inherit;
-      color: inherit;
-    }
-    textarea {
-      min-height: 290px;
-      resize: vertical;
-      font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
-      font-size: 12px;
-      line-height: 1.5;
-    }
-    .table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 10px;
-      font-size: 13px;
-    }
-    .table th, .table td {
-      border-bottom: 1px solid var(--line);
-      padding: 10px 8px;
-      text-align: left;
-      vertical-align: top;
-    }
-    .table th {
-      color: var(--muted);
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: .3px;
-    }
-    .details {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      margin: 16px;
-      overflow: hidden;
-    }
-    .details-head {
-      padding: 12px 14px;
-      border-bottom: 1px solid var(--line);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      flex-wrap: wrap;
-      background: #fbfdff;
-    }
-    .details-body { padding: 14px; }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 16px;
-      margin-bottom: 14px;
-    }
-    @media (max-width: 860px) {
-      .grid { grid-template-columns: 1fr; }
-    }
-    .kv {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 12px;
-      background: #fff;
-    }
-    .kv h3 {
-      margin: 0 0 8px;
-      font-size: 12px;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: .4px;
-    }
-    .tabs {
-      display: flex;
-      gap: 2px;
-      border-bottom: 1px solid var(--line);
-      margin: 0 16px;
-      overflow: auto;
-    }
-    .tab {
-      display: inline-block;
-      text-decoration: none;
-      color: #324055;
-      font-size: 13px;
-      padding: 10px 12px;
-      border-bottom: 2px solid transparent;
-      white-space: nowrap;
-    }
-    .tab.active {
-      color: var(--brand);
-      border-bottom-color: var(--brand);
-      font-weight: 700;
-    }
-    .empty { color: var(--muted); font-size: 14px; }
-    .toolbar-row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-      margin-bottom: 12px;
-    }
-    .inline-form {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-    .inline-form input[type="text"] { min-width: 260px; }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:var(--font);font-size:14px;color:var(--c-text);background:var(--c-bg)}
+    a{color:var(--c-blue);text-decoration:none}a:hover{text-decoration:underline}
+    .shell{display:flex;min-height:100vh}
+    /* sidebar */
+    .sidebar{width:var(--sw);min-width:var(--sw);background:var(--c-side);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:100;overflow-y:auto}
+    .sb-brand{padding:18px 16px 14px;border-bottom:1px solid rgba(255,255,255,.07)}
+    .sb-logo{display:flex;align-items:center;gap:10px}
+    .sb-icon{width:32px;height:32px;background:linear-gradient(135deg,var(--c-blue),#38bdf8);border-radius:var(--r-sm);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:#fff;flex-shrink:0}
+    .sb-name{font-size:15px;font-weight:700;color:#fff;line-height:1.1}
+    .sb-ver{font-size:11px;color:var(--c-side-mut);margin-top:2px}
+    .sb-section{padding:12px 8px 4px}
+    .sb-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--c-side-mut);padding:0 8px;margin-bottom:4px}
+    .sb-nav{list-style:none}
+    .sb-nav li{margin-bottom:1px}
+    .sb-link{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:var(--r-sm);color:var(--c-side-txt);font-size:13px;font-weight:500;transition:background .12s,color .12s;cursor:pointer;text-decoration:none}
+    .sb-link:hover{background:var(--c-side-hi);color:#fff;text-decoration:none}
+    .sb-link.active{background:rgba(56,189,248,.18);color:var(--c-side-act);font-weight:700}
+    .sb-link .ico{font-size:15px;width:18px;text-align:center;flex-shrink:0}
+    .sb-link.logout{color:#f87171}
+    .sb-link.logout:hover{background:rgba(248,113,113,.12)}
+    .sb-footer{margin-top:auto;padding:12px 8px;border-top:1px solid rgba(255,255,255,.07)}
+    .u-chip{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:var(--r-sm)}
+    .u-av{width:28px;height:28px;background:var(--c-blue);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff;flex-shrink:0}
+    .u-name{font-size:12px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .u-role{font-size:11px;color:var(--c-side-mut)}
+    /* main */
+    .main{margin-left:var(--sw);flex:1;display:flex;flex-direction:column;min-height:100vh}
+    /* topbar */
+    .topbar{height:var(--th);background:var(--c-surface);border-bottom:1px solid var(--c-border);display:flex;align-items:center;padding:0 24px;gap:12px;position:sticky;top:0;z-index:50}
+    .bc{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--c-muted);flex:1;min-width:0}
+    .bc a{color:var(--c-muted)}.bc a:hover{color:var(--c-blue);text-decoration:none}
+    .bc-sep{color:var(--c-border);user-select:none}
+    .bc-cur{color:var(--c-text);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .tb-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+    .scope-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;background:var(--c-blue-lo);color:var(--c-blue);font-size:11px;font-weight:700}
+    /* alerts */
+    .alerts{padding:16px 24px 0;display:flex;flex-direction:column;gap:8px}
+    .flash{display:flex;align-items:flex-start;gap:10px;padding:11px 14px;border-radius:var(--r);font-size:13px;border:1px solid}
+    .flash.ok{background:var(--c-green-lo);border-color:#86efac;color:#15803d}
+    .flash.err{background:var(--c-red-lo);border-color:#fca5a5;color:#b91c1c}
+    /* page header */
+    .ph{padding:24px 24px 0;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+    .ph-title{font-size:22px;font-weight:700;letter-spacing:-.02em;line-height:1.2}
+    .ph-sub{margin-top:4px;font-size:13px;color:var(--c-muted)}
+    .ph-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+    /* content */
+    .content{padding:20px 24px 48px;flex:1}
+    /* buttons */
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 16px;border-radius:var(--r-sm);font:inherit;font-size:13px;font-weight:600;cursor:pointer;border:1px solid transparent;white-space:nowrap;transition:background .12s,border-color .12s;text-decoration:none}
+    .btn-p{background:var(--c-blue);color:#fff;border-color:var(--c-blue-h)}.btn-p:hover{background:var(--c-blue-h);text-decoration:none}
+    .btn-s{background:var(--c-surface);color:var(--c-text);border-color:var(--c-border)}.btn-s:hover{background:#f5f6fa;text-decoration:none}
+    .btn-d{background:var(--c-red);color:#fff;border-color:#b91c1c}.btn-d:hover{background:#b91c1c;text-decoration:none}
+    .btn-sm{padding:5px 10px;font-size:12px}
+    /* toolbar */
+    .toolbar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+    .tb-l{flex:1;min-width:0;display:flex;gap:8px;align-items:center}
+    .tb-r{display:flex;gap:8px;align-items:center}
+    /* form controls */
+    input,select,textarea{font:inherit;font-size:13px;color:var(--c-text);background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-sm);padding:8px 10px;width:100%;transition:border-color .15s,box-shadow .15s}
+    input:focus,select:focus,textarea:focus{outline:none;border-color:var(--c-blue);box-shadow:0 0 0 3px rgba(0,112,196,.12)}
+    textarea{min-height:260px;resize:vertical;font-family:var(--mono);font-size:12px;line-height:1.6}
+    .f-field{display:flex;flex-direction:column;gap:5px}
+    .f-field label{font-size:12px;font-weight:700}
+    .f-row{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
+    .f-row:last-child{margin-bottom:0}
+    .f-actions{display:flex;gap:8px;align-items:center;margin-top:14px}
+    .input-sm{max-width:300px}
+    select.sel-inline{width:auto}
+    /* table */
+    .t-card{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh-sm)}
+    .t-head{padding:14px 16px;border-bottom:1px solid var(--c-border-lo);display:flex;align-items:center;justify-content:space-between;gap:10px;background:#fafbfc}
+    .t-head h2{font-size:14px;font-weight:700}
+    .t-head .cnt{font-size:12px;color:var(--c-muted)}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    thead th{text-align:left;padding:10px 14px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-muted);background:#fafbfc;border-bottom:1px solid var(--c-border-lo);white-space:nowrap}
+    tbody td{padding:12px 14px;border-bottom:1px solid var(--c-border-lo);vertical-align:middle}
+    tbody tr:last-child td{border-bottom:none}
+    tbody tr:hover td{background:#f8f9fb}
+    .empty-row td{text-align:center;padding:32px;color:var(--c-muted)}
+    input[type="checkbox"]{width:16px;height:16px;cursor:pointer;accent-color:var(--c-blue)}
+    /* badges */
+    .badge{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.03em;border:1px solid transparent}
+    .badge::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor}
+    .badge-en{background:var(--c-green-lo);color:var(--c-green);border-color:#86efac}
+    .badge-dis{background:#f1f2f4;color:var(--c-muted);border-color:var(--c-border)}
+    .badge-del{background:var(--c-warn-lo);color:var(--c-warn);border-color:#fde68a}
+    /* detail cards */
+    .kv-card{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);padding:14px 16px}
+    .kv-title{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-muted);margin-bottom:10px}
+    .kv-row{display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px solid var(--c-border-lo);font-size:13px}
+    .kv-row:last-child{border-bottom:none}
+    .kv-lbl{color:var(--c-muted);min-width:110px;flex-shrink:0;font-size:12px}
+    .kv-val{color:var(--c-text);word-break:break-all}
+    /* grid */
+    .g2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+    .g3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+    @media(max-width:860px){.g2,.g3{grid-template-columns:1fr}}
+    /* form card */
+    .fc{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);padding:20px;box-shadow:var(--sh-sm)}
+    .fc h3{font-size:14px;font-weight:700;margin-bottom:14px}
+    /* tabs */
+    .tabs-bar{display:flex;border-bottom:2px solid var(--c-border-lo);margin-bottom:20px;overflow-x:auto}
+    .tab-lnk{display:inline-flex;align-items:center;gap:6px;padding:10px 16px;font-size:13px;font-weight:600;color:var(--c-muted);border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;text-decoration:none;transition:color .12s,border-color .12s}
+    .tab-lnk:hover{color:var(--c-blue);text-decoration:none}
+    .tab-lnk.active{color:var(--c-blue);border-bottom-color:var(--c-blue)}
+    /* mono */
+    .mono{font-family:var(--mono);font-size:12px;word-break:break-all}
+    .code-block{background:#0f172a;color:#e2e8f0;border-radius:var(--r);padding:14px 16px;font-family:var(--mono);font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-word;min-height:80px}
+    /* util */
+    .muted{color:var(--c-muted)}.sm{font-size:12px}
+    .mt-2{margin-top:8px}.mt-3{margin-top:12px}.mt-4{margin-top:16px}
+    .flex{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   </style>
 </head>
 <body>
-  <main class="wrap">
-    {{if .Flash}}<div class="flash ok">{{.Flash}}</div>{{end}}
-    {{if .Error}}<div class="flash err">{{.Error}}</div>{{end}}
+<div class="shell">
+  <nav class="sidebar">
+    <div class="sb-brand">
+      <div class="sb-logo">
+        <div class="sb-icon">K</div>
+        <div><div class="sb-name">go-kms</div><div class="sb-ver">Control Plane</div></div>
+      </div>
+    </div>
+    <div class="sb-section">
+      <div class="sb-label">Services</div>
+      <ul class="sb-nav">
+        <li><a class="sb-link active" href="/admin"><span class="ico">🔑</span> Key Management</a></li>
+        <li><a class="sb-link" href="/admin/secrets"><span class="ico">🔒</span> Secrets Manager</a></li>
+      </ul>
+    </div>
+    <div class="sb-section">
+      <div class="sb-label">Operations</div>
+      <ul class="sb-nav">
+        <li><a class="sb-link" href="/admin/audit"><span class="ico">📋</span> Audit Explorer</a></li>
+      </ul>
+    </div>
+    <div class="sb-footer">
+      <div class="u-chip">
+        <div class="u-av">{{if .CurrentUserName}}{{slice .CurrentUserName 0 1}}{{else}}A{{end}}</div>
+        <div><div class="u-name">{{if .CurrentUserName}}{{.CurrentUserName}}{{else}}Local Admin{{end}}</div><div class="u-role">{{if .CurrentUserRole}}{{.CurrentUserRole}}{{else}}admin{{end}}</div></div>
+      </div>
+      <ul class="sb-nav"><li><a class="sb-link logout" href="/admin/logout"><span class="ico">↩</span> Sign out</a></li></ul>
+    </div>
+  </nav>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="bc">
+        <a href="/admin">KMS</a>
+        {{if .SelectedKey}}
+          <span class="bc-sep">/</span><a href="/admin">Customer managed keys</a>
+          <span class="bc-sep">/</span><span class="bc-cur">{{.SelectedKey.ID}}</span>
+        {{else}}
+          <span class="bc-sep">/</span><span class="bc-cur">Customer managed keys</span>
+        {{end}}
+      </div>
+      <div class="tb-actions">
+        {{if .TenantScope}}<span class="scope-badge">🏷 {{range $i,$t := .TenantScope}}{{if $i}}, {{end}}{{$t}}{{end}}</span>{{end}}
+      </div>
+    </header>
+
+    {{if .Flash}}<div class="alerts"><div class="flash ok">✓ {{.Flash}}</div></div>{{end}}
+    {{if .Error}}<div class="alerts"><div class="flash err">⚠ {{.Error}}</div></div>{{end}}
 
     {{if not .SelectedKey}}
-    <header class="topbar">
+    {{/* ── LIST PAGE ── */}}
+    <div class="ph">
       <div>
-        <div class="service-nav">
-          <a class="service-link active" href="/admin">Key Management Service</a>
-          <a class="service-link" href="/admin/secrets">Secrets Manager</a>
-          <a class="service-link" href="/admin/audit">Audit Explorer</a>
-        </div>
-        <h1 class="title">Customer managed keys ({{.VisibleKeyCount}})</h1>
-        <div class="sub">{{if .TenantScope}}Scoped to {{range $index, $tenant := .TenantScope}}{{if $index}}, {{end}}{{$tenant}}{{end}}{{else}}All tenants{{end}} · Signed in as {{.CurrentUserName}} ({{.CurrentUserRole}})</div>
+        <h1 class="ph-title">Customer managed keys</h1>
+        <p class="ph-sub">{{.VisibleKeyCount}} key{{if ne .VisibleKeyCount 1}}s{{end}} · Encryption keys for Vault auto-unseal and application workloads.</p>
       </div>
-      <div class="inline-form">
-        <a class="btn secondary" href="/admin/logout">Sign out</a>
-      </div>
-      {{if .CanAdmin}}<form class="inline-form" method="post" action="/admin?action=create_key">
-        <input type="text" name="description" placeholder="Description (optional)">
-        <button class="btn" type="submit">Create key</button>
-      </form>{{end}}
-    </header>
-
-    <section class="section">
-      <form method="post" action="/admin?action=bulk_keys">
-      <div class="toolbar-row">
-        <input type="text" placeholder="Filter keys by properties or tags" disabled>
-        {{if .CanEdit}}<select name="bulk_action">
-          <option value="enable">Bulk enable</option>
-          <option value="disable">Bulk disable</option>
-          {{if .CanAdmin}}<option value="schedule_deletion">Bulk schedule deletion</option>{{end}}
-        </select>
-        <button class="btn secondary" type="submit">Apply to selected</button>{{end}}
-      </div>
-      {{if .Keys}}
-      <table class="table">
-        <thead>
-          <tr>
-            {{if .CanEdit}}<th>Select</th>{{end}}
-            <th>Aliases</th>
-            <th>Key ID</th>
-            <th>Status</th>
-            <th>Key type</th>
-            <th>Key spec</th>
-            <th>Key usage</th>
-            <th>Trace</th>
-          </tr>
-        </thead>
-        <tbody>
-          {{range .Keys}}
-          <tr>
-            {{if $.CanEdit}}<td><input type="checkbox" name="key_id" value="{{.ID}}"></td>{{end}}
-            <td>{{if .Alias}}<a href="/admin?key_id={{.ID}}&tab=aliases">{{.Alias}}</a>{{else}}-{{end}}</td>
-            <td><a class="mono" href="/admin?key_id={{.ID}}&tab=key-policy">{{.ID}}</a></td>
-            <td><span class="state {{.State}}">{{.State}}</span></td>
-            <td>Symmetric</td>
-            <td>SYMMETRIC_DEFAULT</td>
-            <td>Encrypt and decrypt</td>
-            <td><a href="/admin/audit?q={{.ID}}">Trace</a></td>
-          </tr>
-          {{end}}
-        </tbody>
-      </table>
-      {{else}}
-      <p class="empty">No keys found.</p>
-      {{end}}
-      </form>
-    </section>
-    {{else}}
-    <header class="topbar">
-      <div>
-        <div class="service-nav">
-          <a class="service-link active" href="/admin">Key Management Service</a>
-          <a class="service-link" href="/admin/secrets">Secrets Manager</a>
-          <a class="service-link" href="/admin/audit">Audit Explorer</a>
-        </div>
-        <h1 class="title">{{.SelectedKey.ID}}</h1>
-        <div class="sub">Key details page · Signed in as {{.CurrentUserName}} ({{.CurrentUserRole}})</div>
-      </div>
-      <div class="inline-form">
-        <a class="btn secondary" href="/admin">Back to customer managed keys</a>
-        <a class="btn secondary" href="/admin/audit?q={{.SelectedKey.ID}}">Trace activity</a>
-        <a class="btn secondary" href="/admin/logout">Sign out</a>
-      </div>
-    </header>
-
-    <div class="details">
-      <div class="details-head">
-        <div>
-          <strong>General configuration</strong>
-        </div>
-        <div class="inline-form">
-          <form method="post" action="/admin?action=enable_key">
-            <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
-            <button class="btn secondary" type="submit">Enable</button>
-          </form>
-          <form method="post" action="/admin?action=disable_key">
-            <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
-            <button class="btn secondary" type="submit">Disable</button>
-          </form>
-          <form method="post" action="/admin?action=schedule_deletion">
-            <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
-            <input type="hidden" name="window_days" value="30">
-            <button class="btn warn" type="submit">Schedule key deletion</button>
-          </form>
-        </div>
-      </div>
-      <div class="details-body">
-        <div class="grid">
-          <div class="kv">
-            <h3>General configuration</h3>
-            <div><strong>Alias:</strong> {{if .SelectedKey.Alias}}{{.SelectedKey.Alias}}{{else}}-{{end}}</div>
-            <div><strong>Status:</strong> <span class="state {{.SelectedKey.State}}">{{.SelectedKey.State}}</span></div>
-            <div><strong>Description:</strong> {{if .SelectedKey.Description}}{{.SelectedKey.Description}}{{else}}-{{end}}</div>
-          </div>
-          <div class="kv">
-            <h3>Key details</h3>
-            <div><strong>ARN:</strong><div class="mono">{{.SelectedKey.ARN}}</div></div>
-            <div><strong>Creation date:</strong> {{.SelectedKey.CreatedAt}}</div>
-            <div><strong>Key state:</strong> {{.SelectedKey.State}}</div>
-            {{if .SelectedKey.DeletionDate}}<div><strong>Deletion date:</strong> {{.SelectedKey.DeletionDate}}</div>{{end}}
-          </div>
-        </div>
+      <div class="ph-actions">
+        {{if .CanAdmin}}
+        <form method="post" action="/admin?action=create_key" class="flex">
+          <input type="text" name="description" placeholder="Key description (optional)" class="input-sm">
+          <button class="btn btn-p" type="submit">+ Create key</button>
+        </form>
+        {{end}}
       </div>
     </div>
 
-    <nav class="tabs">
-      <a class="tab {{if eq .SelectedTab "key-policy"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-policy">Key policy</a>
-      <a class="tab {{if eq .SelectedTab "cryptographic-configuration"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=cryptographic-configuration">Cryptographic configuration</a>
-      <a class="tab {{if eq .SelectedTab "grants"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=grants">Grants</a>
-      <a class="tab {{if eq .SelectedTab "tags"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=tags">Tags</a>
-      <a class="tab {{if eq .SelectedTab "key-rotation"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-rotation">Key rotation</a>
-      <a class="tab {{if eq .SelectedTab "aliases"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=aliases">Aliases</a>
-    </nav>
-
-    <section class="section">
-      {{if eq .SelectedTab "key-policy"}}
-      <form method="post" action="/admin?action=put_key_policy">
-        <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
-        <input type="hidden" name="policy_name" value="{{.PolicyName}}">
-        <label><strong>Key policy</strong></label>
-        <textarea name="policy_document" spellcheck="false">{{.PolicyDocument}}</textarea>
-        <div class="inline-form" style="margin-top:10px;">
-          <button class="btn" type="submit">Save changes</button>
-          <a class="btn secondary" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-policy">Discard</a>
+    <div class="content">
+      <form method="post" action="/admin?action=bulk_keys">
+      <div class="toolbar">
+        <div class="tb-l"><input type="text" placeholder="Filter keys…" class="input-sm" disabled></div>
+        {{if .CanEdit}}
+        <div class="tb-r">
+          <select name="bulk_action" class="sel-inline">
+            <option value="enable">Enable selected</option>
+            <option value="disable">Disable selected</option>
+            {{if .CanAdmin}}<option value="schedule_deletion">Schedule deletion</option>{{end}}
+          </select>
+          <button class="btn btn-s btn-sm" type="submit">Apply</button>
         </div>
+        {{end}}
+      </div>
+      <div class="t-card">
+        <div class="t-head"><h2>Keys</h2><span class="cnt">{{.VisibleKeyCount}} total</span></div>
+        <table>
+          <thead>
+            <tr>
+              {{if .CanEdit}}<th style="width:36px"></th>{{end}}
+              <th>Alias</th><th>Key ID</th><th>Status</th><th>Spec</th><th>Usage</th><th>Created</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{if .Keys}}{{range .Keys}}
+            <tr>
+              {{if $.CanEdit}}<td><input type="checkbox" name="key_id" value="{{.ID}}"></td>{{end}}
+              <td>{{if .Alias}}<a href="/admin?key_id={{.ID}}&tab=aliases">{{.Alias}}</a>{{else}}<span class="muted">—</span>{{end}}</td>
+              <td><a class="mono" href="/admin?key_id={{.ID}}&tab=key-policy">{{.ID}}</a></td>
+              <td>
+                {{if eq .State "Enabled"}}<span class="badge badge-en">Enabled</span>
+                {{else if eq .State "Disabled"}}<span class="badge badge-dis">Disabled</span>
+                {{else}}<span class="badge badge-del">Pending deletion</span>{{end}}
+              </td>
+              <td class="muted sm">SYMMETRIC_DEFAULT</td>
+              <td class="muted sm">Encrypt &amp; decrypt</td>
+              <td class="muted sm">{{.CreatedAt}}</td>
+              <td><a href="/admin/audit?q={{.ID}}" class="muted sm">Trace →</a></td>
+            </tr>
+            {{end}}{{else}}
+            <tr class="empty-row"><td colspan="8">No keys found. Create a key to get started.</td></tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
       </form>
-      {{else if eq .SelectedTab "aliases"}}
-      <div class="grid">
-        <div class="kv">
-          <h3>Create alias</h3>
-          <form method="post" action="/admin?action=create_alias">
-            <input type="text" name="alias_name" placeholder="alias/my-key" required>
-            <input type="hidden" name="target_key_id" value="{{.SelectedKey.ID}}">
-            <button class="btn" type="submit" style="margin-top:8px;">Create alias for this key</button>
-          </form>
-        </div>
-        <div class="kv">
-          <h3>Update alias target</h3>
-          <form method="post" action="/admin?action=update_alias">
-            <input type="text" name="alias_name" placeholder="alias/my-key" required>
-            <select name="target_key_id" required>
-              <option value="">Select new target key</option>
-              {{range .AvailableKeyIDs}}
-              <option value="{{.}}">{{.}}</option>
-              {{end}}
-            </select>
-            <button class="btn secondary" type="submit" style="margin-top:8px;">Update alias</button>
-          </form>
-        </div>
+    </div>
+
+    {{else}}
+    {{/* ── DETAIL PAGE ── */}}
+    <div class="ph">
+      <div>
+        <h1 class="ph-title mono" style="font-size:18px;">{{.SelectedKey.ID}}</h1>
+        <p class="ph-sub" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;">
+          {{if .SelectedKey.Alias}}<span>Alias: <strong>{{.SelectedKey.Alias}}</strong></span>{{end}}
+          {{if eq .SelectedKey.State "Enabled"}}<span class="badge badge-en">Enabled</span>
+          {{else if eq .SelectedKey.State "Disabled"}}<span class="badge badge-dis">Disabled</span>
+          {{else}}<span class="badge badge-del">Pending deletion</span>{{end}}
+        </p>
       </div>
-      {{if .Aliases}}
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Alias name</th>
-            <th>Target key</th>
-          </tr>
-        </thead>
-        <tbody>
-          {{range .Aliases}}
-          <tr>
-            <td>{{.Name}}</td>
-            <td class="mono">{{.TargetKey}}</td>
-          </tr>
+      <div class="ph-actions">
+        {{if .CanEdit}}
+        <form method="post" action="/admin?action=enable_key"><input type="hidden" name="key_id" value="{{.SelectedKey.ID}}"><button class="btn btn-s btn-sm">Enable</button></form>
+        <form method="post" action="/admin?action=disable_key"><input type="hidden" name="key_id" value="{{.SelectedKey.ID}}"><button class="btn btn-s btn-sm">Disable</button></form>
+        {{end}}
+        {{if .CanAdmin}}
+          {{if .SelectedKey.DeletionDate}}
+          <form method="post" action="/admin?action=cancel_deletion"><input type="hidden" name="key_id" value="{{.SelectedKey.ID}}"><button class="btn btn-s btn-sm">Cancel deletion</button></form>
+          {{else}}
+          <form method="post" action="/admin?action=schedule_deletion"><input type="hidden" name="key_id" value="{{.SelectedKey.ID}}"><input type="hidden" name="window_days" value="30"><button class="btn btn-d btn-sm">Schedule deletion</button></form>
           {{end}}
-        </tbody>
-      </table>
-      {{else}}
-      <p class="empty">No aliases found.</p>
-      {{end}}
-      {{else if eq .SelectedTab "cryptographic-configuration"}}
-      <div class="grid">
-        <div class="kv">
-          <h3>Cryptographic configuration</h3>
-          <div><strong>Key type:</strong> Symmetric</div>
-          <div><strong>Key spec:</strong> SYMMETRIC_DEFAULT</div>
-          <div><strong>Key usage:</strong> Encrypt and decrypt</div>
-          <div><strong>Origin:</strong> AWS_KMS-compatible local provider</div>
+        {{end}}
+        <a class="btn btn-s btn-sm" href="/admin/audit?q={{.SelectedKey.ID}}">Trace activity</a>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="g2" style="margin-bottom:20px;">
+        <div class="kv-card">
+          <div class="kv-title">General configuration</div>
+          <div class="kv-row"><span class="kv-lbl">Alias</span><span class="kv-val">{{if .SelectedKey.Alias}}{{.SelectedKey.Alias}}{{else}}—{{end}}</span></div>
+          <div class="kv-row"><span class="kv-lbl">Status</span><span class="kv-val">{{.SelectedKey.State}}</span></div>
+          <div class="kv-row"><span class="kv-lbl">Description</span><span class="kv-val">{{if .SelectedKey.Description}}{{.SelectedKey.Description}}{{else}}—{{end}}</span></div>
+          <div class="kv-row"><span class="kv-lbl">Created</span><span class="kv-val">{{.SelectedKey.CreatedAt}}</span></div>
+          {{if .SelectedKey.DeletionDate}}<div class="kv-row"><span class="kv-lbl">Deletion date</span><span class="kv-val" style="color:var(--c-warn)">{{.SelectedKey.DeletionDate}}</span></div>{{end}}
         </div>
-        <div class="kv">
-          <h3>Algorithms</h3>
-          <div><strong>Encryption algorithms:</strong> SYMMETRIC_DEFAULT</div>
-          <div><strong>Multi-Region:</strong> No</div>
-          <div><strong>Rotation model:</strong> Manual lifecycle in current MVP</div>
+        <div class="kv-card">
+          <div class="kv-title">ARN &amp; identifiers</div>
+          <div class="kv-row"><span class="kv-lbl">Key ID</span><span class="kv-val mono">{{.SelectedKey.ID}}</span></div>
+          <div class="kv-row"><span class="kv-lbl">ARN</span><span class="kv-val mono sm">{{.SelectedKey.ARN}}</span></div>
+          <div class="kv-row"><span class="kv-lbl">Key type</span><span class="kv-val">Symmetric · SYMMETRIC_DEFAULT</span></div>
+          <div class="kv-row"><span class="kv-lbl">Usage</span><span class="kv-val">Encrypt and decrypt</span></div>
+          <div class="kv-row"><span class="kv-lbl">Origin</span><span class="kv-val">AWS_KMS-compatible</span></div>
         </div>
       </div>
+
+      <nav class="tabs-bar">
+        <a class="tab-lnk {{if eq .SelectedTab "key-policy"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-policy">Key policy</a>
+        <a class="tab-lnk {{if eq .SelectedTab "cryptographic-configuration"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=cryptographic-configuration">Cryptographic config</a>
+        <a class="tab-lnk {{if eq .SelectedTab "grants"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=grants">Grants</a>
+        <a class="tab-lnk {{if eq .SelectedTab "tags"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=tags">Tags</a>
+        <a class="tab-lnk {{if eq .SelectedTab "key-rotation"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-rotation">Key rotation</a>
+        <a class="tab-lnk {{if eq .SelectedTab "aliases"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=aliases">Aliases</a>
+      </nav>
+
+      {{if eq .SelectedTab "key-policy"}}
+      <div class="fc">
+        <h3>Key policy</h3>
+        <form method="post" action="/admin?action=put_key_policy">
+          <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
+          <input type="hidden" name="policy_name" value="{{.PolicyName}}">
+          <div class="f-row"><textarea name="policy_document" spellcheck="false">{{.PolicyDocument}}</textarea></div>
+          <div class="f-actions">
+            <button class="btn btn-p" type="submit">Save policy</button>
+            <a class="btn btn-s" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-policy">Discard</a>
+          </div>
+        </form>
+      </div>
+
+      {{else if eq .SelectedTab "cryptographic-configuration"}}
+      <div class="g2">
+        <div class="kv-card">
+          <div class="kv-title">Cryptographic configuration</div>
+          <div class="kv-row"><span class="kv-lbl">Key type</span><span class="kv-val">Symmetric</span></div>
+          <div class="kv-row"><span class="kv-lbl">Key spec</span><span class="kv-val">SYMMETRIC_DEFAULT</span></div>
+          <div class="kv-row"><span class="kv-lbl">Key usage</span><span class="kv-val">Encrypt and decrypt</span></div>
+          <div class="kv-row"><span class="kv-lbl">Origin</span><span class="kv-val">AWS_KMS-compatible local</span></div>
+        </div>
+        <div class="kv-card">
+          <div class="kv-title">Algorithms &amp; security</div>
+          <div class="kv-row"><span class="kv-lbl">Encryption</span><span class="kv-val">AES-GCM 256-bit (SYMMETRIC_DEFAULT)</span></div>
+          <div class="kv-row"><span class="kv-lbl">Key material</span><span class="kv-val">Wrapped at rest (AES-GCM)</span></div>
+          <div class="kv-row"><span class="kv-lbl">Multi-Region</span><span class="kv-val">No</span></div>
+        </div>
+      </div>
+
       {{else if eq .SelectedTab "grants"}}
-      <div class="grid">
-        <div class="kv">
+      <div class="g2" style="margin-bottom:20px;">
+        <div class="fc">
           <h3>Create grant</h3>
           <form method="post" action="/admin?action=create_grant">
             <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
-            <label><strong>Grantee principal</strong></label>
-            <input type="text" name="grantee_principal" placeholder="arn:aws:iam::000000000000:user/app" required>
-            <label style="display:block; margin-top:8px;"><strong>Operations</strong></label>
-            <input type="text" name="operations" placeholder="Encrypt,Decrypt" required>
-            <label style="display:block; margin-top:8px;"><strong>Retiring principal</strong></label>
-            <input type="text" name="retiring_principal" placeholder="Optional ARN">
-            <label style="display:block; margin-top:8px;"><strong>Grant name</strong></label>
-            <input type="text" name="grant_name" placeholder="app-grant">
-            <button class="btn" type="submit" style="margin-top:8px;">Create grant</button>
+            <div class="f-row"><label>Grantee principal</label><input type="text" name="grantee_principal" placeholder="arn:aws:iam::000000000000:user/app" required></div>
+            <div class="f-row"><label>Operations <span class="muted">(comma-separated)</span></label><input type="text" name="operations" placeholder="Encrypt,Decrypt" required></div>
+            <div class="f-row"><label>Retiring principal <span class="muted">(optional)</span></label><input type="text" name="retiring_principal" placeholder="arn:aws:iam::…"></div>
+            <div class="f-row"><label>Grant name <span class="muted">(optional)</span></label><input type="text" name="grant_name" placeholder="app-grant"></div>
+            <div class="f-actions"><button class="btn btn-p" type="submit">Create grant</button></div>
           </form>
         </div>
-        <div class="kv">
-          <h3>Delegate usage</h3>
-          <div>Use grants to delegate key usage without editing the base key policy.</div>
-          <div style="margin-top:8px;">Track grant activity from the audit explorer for this key.</div>
+        <div class="kv-card">
+          <div class="kv-title">About grants</div>
+          <p class="muted sm mt-2">Grants delegate key usage to principals without modifying the key policy. Grants can be revoked at any time by an admin.</p>
+          <div class="mt-3"><a class="btn btn-s btn-sm" href="/admin/audit?q={{.SelectedKey.ID}}">View key activity</a></div>
         </div>
       </div>
-      {{if .Grants}}
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Grant ID</th>
-            <th>Grantee</th>
-            <th>Operations</th>
-            <th>Created</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {{range .Grants}}
-          <tr>
-            <td class="mono">{{.GrantID}}</td>
-            <td class="mono">{{.GranteePrincipal}}</td>
-            <td>{{.Operations}}</td>
-            <td>{{.CreatedAt}}</td>
-            <td>
-              <form method="post" action="/admin?action=revoke_grant">
-                <input type="hidden" name="key_id" value="{{$.SelectedKey.ID}}">
-                <input type="hidden" name="grant_id" value="{{.GrantID}}">
-                <button class="btn secondary" type="submit">Revoke</button>
-              </form>
-            </td>
-          </tr>
-          {{end}}
-        </tbody>
-      </table>
-      {{else}}
-      <p class="empty">No grants found.</p>
-      {{end}}
+      <div class="t-card">
+        <div class="t-head"><h2>Active grants</h2><span class="cnt">{{len .Grants}} total</span></div>
+        <table>
+          <thead><tr><th>Grant ID</th><th>Grantee</th><th>Operations</th><th>Name</th><th>Created</th><th></th></tr></thead>
+          <tbody>
+            {{if .Grants}}{{range .Grants}}
+            <tr>
+              <td class="mono sm">{{.GrantID}}</td><td class="mono sm">{{.GranteePrincipal}}</td>
+              <td class="sm">{{.Operations}}</td>
+              <td class="sm muted">{{if .Name}}{{.Name}}{{else}}—{{end}}</td>
+              <td class="sm muted">{{.CreatedAt}}</td>
+              <td><form method="post" action="/admin?action=revoke_grant"><input type="hidden" name="key_id" value="{{$.SelectedKey.ID}}"><input type="hidden" name="grant_id" value="{{.GrantID}}"><button class="btn btn-s btn-sm" type="submit">Revoke</button></form></td>
+            </tr>
+            {{end}}{{else}}<tr class="empty-row"><td colspan="6">No grants found.</td></tr>{{end}}
+          </tbody>
+        </table>
+      </div>
+
+      {{else if eq .SelectedTab "aliases"}}
+      <div class="g2" style="margin-bottom:20px;">
+        <div class="fc">
+          <h3>Create alias</h3>
+          <form method="post" action="/admin?action=create_alias">
+            <input type="hidden" name="target_key_id" value="{{.SelectedKey.ID}}">
+            <div class="f-row"><label>Alias name</label><input type="text" name="alias_name" placeholder="alias/my-key" required></div>
+            <div class="f-actions"><button class="btn btn-p" type="submit">Create alias</button></div>
+          </form>
+        </div>
+        <div class="fc">
+          <h3>Reassign alias</h3>
+          <form method="post" action="/admin?action=update_alias">
+            <div class="f-row"><label>Alias name</label><input type="text" name="alias_name" placeholder="alias/my-key" required></div>
+            <div class="f-row"><label>New target key</label>
+              <select name="target_key_id" required>
+                <option value="">Select target key…</option>
+                {{range .AvailableKeyIDs}}<option value="{{.}}">{{.}}</option>{{end}}
+              </select>
+            </div>
+            <div class="f-actions"><button class="btn btn-s" type="submit">Update alias</button></div>
+          </form>
+        </div>
+      </div>
+      <div class="t-card">
+        <div class="t-head"><h2>Aliases</h2></div>
+        <table>
+          <thead><tr><th>Alias name</th><th>Target key</th></tr></thead>
+          <tbody>
+            {{if .Aliases}}{{range .Aliases}}<tr><td>{{.Name}}</td><td class="mono sm">{{.TargetKey}}</td></tr>{{end}}
+            {{else}}<tr class="empty-row"><td colspan="2">No aliases found.</td></tr>{{end}}
+          </tbody>
+        </table>
+      </div>
+
       {{else if eq .SelectedTab "key-rotation"}}
-      <div class="kv">
-        <h3>Key rotation</h3>
-        <div>Automatic key rotation is not implemented in the current MVP.</div>
-        <div style="margin-top:8px;">Create a new key and move aliases to it when you need controlled rotation behavior.</div>
+      <div class="kv-card">
+        <div class="kv-title">Key rotation</div>
+        <p class="muted sm mt-2">Automatic key rotation is not implemented in the current release. To rotate manually: create a new key, reassign the alias, then schedule the old key for deletion after your application cache has expired.</p>
       </div>
+
       {{else}}
-      <div class="kv">
-        <h3>Tags</h3>
-        <div>No persistent tag model is implemented for KMS keys in the current MVP.</div>
+      <div class="kv-card">
+        <div class="kv-title">Tags</div>
+        <p class="muted sm mt-2">Per-key tag persistence is not yet implemented. Tag-based filtering and authorization hooks are on the roadmap.</p>
       </div>
       {{end}}
-    </section>
+
+    </div>{{/* /content */}}
     {{end}}
-  </main>
+  </div>{{/* /main */}}
+</div>{{/* /shell */}}
 </body>
 </html>

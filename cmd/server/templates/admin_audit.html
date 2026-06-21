@@ -3,265 +3,142 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>go-kms | Audit Explorer</title>
+  <title>go-kms — Audit Explorer</title>
   <style>
-    :root {
-      --bg: #eef2f6;
-      --panel: #ffffff;
-      --panel-soft: #f8fafc;
-      --text: #18212f;
-      --muted: #667085;
-      --line: #d7deea;
-      --brand: #0073bb;
-      --brand-2: #005d99;
-      --accent: #ff9900;
-      --ok: #037f0c;
-      --warn: #b45309;
-      --err: #b91c1c;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      padding: 18px;
-      color: var(--text);
-      background:
-        radial-gradient(circle at top left, rgba(0, 115, 187, 0.08), transparent 32%),
-        radial-gradient(circle at bottom right, rgba(255, 153, 0, 0.10), transparent 28%),
-        linear-gradient(180deg, #f7f9fc 0%, var(--bg) 100%);
-      font-family: "Public Sans", "Segoe UI", sans-serif;
-    }
-    .shell {
-      max-width: 1480px;
-      margin: 0 auto;
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      box-shadow: 0 18px 50px rgba(17, 24, 39, 0.08);
-      overflow: hidden;
-    }
-    .topbar {
-      padding: 18px 22px;
-      border-bottom: 1px solid var(--line);
-      background: linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 16px;
-      flex-wrap: wrap;
-    }
-    .title {
-      margin: 0;
-      font-size: 28px;
-      line-height: 1.1;
-      letter-spacing: -0.03em;
-    }
-    .sub {
-      margin-top: 6px;
-      color: var(--muted);
-      font-size: 13px;
-    }
-    .service-nav {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin-bottom: 10px;
-    }
-    .service-link {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      text-decoration: none;
-      border: 1px solid #d4dbe5;
-      color: #334155;
-      background: #fff;
-      padding: 6px 11px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .service-link.active {
-      color: #0f4d73;
-      border-color: #b9d5ea;
-      background: #edf7ff;
-    }
-    .flash {
-      margin: 14px 16px 0;
-      border-radius: 12px;
-      padding: 10px 12px;
-      font-size: 13px;
-      border: 1px solid;
-    }
-    .flash.ok { color: #0f6b18; background: #edf8ee; border-color: #9ed2a4; }
-    .flash.err { color: #8f1d1d; background: #fef2f2; border-color: #efb3b3; }
-    .section { padding: 18px 22px 22px; }
-    .toolbar {
-      display: flex;
-      gap: 12px;
-      align-items: end;
-      flex-wrap: wrap;
-      margin-bottom: 16px;
-    }
-    .field {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      min-width: 220px;
-      flex: 1 1 220px;
-    }
-    .field label {
-      font-size: 12px;
-      color: var(--muted);
-      font-weight: 700;
-      letter-spacing: .02em;
-    }
-    input, select {
-      width: 100%;
-      border: 1px solid #c9d3e1;
-      border-radius: 12px;
-      padding: 10px 12px;
-      background: #fff;
-      color: inherit;
-      font: inherit;
-    }
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      border: 1px solid var(--brand-2);
-      background: var(--brand);
-      color: #fff;
-      border-radius: 999px;
-      padding: 10px 14px;
-      font-size: 13px;
-      font-weight: 700;
-      cursor: pointer;
-      text-decoration: none;
-    }
-    .btn.secondary {
-      border-color: #b4bfd0;
-      background: #fff;
-      color: #203040;
-    }
-    .stats {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
-      margin-bottom: 16px;
-    }
-    @media (max-width: 980px) {
-      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
-    @media (max-width: 640px) {
-      .stats { grid-template-columns: 1fr; }
-    }
-    .card {
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      background: var(--panel-soft);
-      padding: 14px;
-      min-height: 92px;
-    }
-    .card .label {
-      color: var(--muted);
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: .08em;
-      font-weight: 700;
-    }
-    .card .value {
-      font-size: 28px;
-      font-weight: 800;
-      margin-top: 8px;
-      letter-spacing: -0.04em;
-    }
-    .table-wrap {
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      overflow: hidden;
-      background: #fff;
-    }
-    .table-head {
-      padding: 12px 14px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      border-bottom: 1px solid var(--line);
-      background: #fbfcfe;
-    }
-    .table-head strong { font-size: 14px; }
-    .table-head span { color: var(--muted); font-size: 13px; }
-    .table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-    }
-    .table th, .table td {
-      border-bottom: 1px solid #e7edf5;
-      padding: 12px 10px;
-      text-align: left;
-      vertical-align: top;
-    }
-    .table th {
-      color: var(--muted);
-      text-transform: uppercase;
-      font-size: 11px;
-      letter-spacing: .08em;
-      background: #fff;
-    }
-    .table tr:hover td { background: #fcfdff; }
-    .mono {
-      font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
-      font-size: 12px;
-      word-break: break-word;
-    }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 52px;
-      padding: 4px 9px;
-      border-radius: 999px;
-      font-size: 11px;
-      font-weight: 800;
-      letter-spacing: .04em;
-      border: 1px solid transparent;
-    }
-    .badge.ok { color: var(--ok); background: #edf8ee; border-color: #a7d8b0; }
-    .badge.err { color: var(--err); background: #fef2f2; border-color: #f3b0b0; }
-    .badge.neutral { color: #334155; background: #eef2f7; border-color: #d7deea; }
-    .empty {
-      padding: 18px 14px;
-      color: var(--muted);
-    }
+    :root{--c-bg:#f0f2f5;--c-surface:#fff;--c-border:#dde1e9;--c-border-lo:#eaecf0;--c-text:#111827;--c-muted:#6b7280;--c-blue:#0070c4;--c-blue-lo:#e8f2fb;--c-blue-h:#0059a0;--c-green:#16a34a;--c-green-lo:#dcfce7;--c-red:#dc2626;--c-red-lo:#fee2e2;--c-warn:#d97706;--c-warn-lo:#fef3c7;--c-side:#1e2433;--c-side-hi:#2c3347;--c-side-txt:#c9d1e0;--c-side-mut:#7a839a;--c-side-act:#38bdf8;--r-sm:6px;--r:10px;--sh-sm:0 1px 3px rgba(0,0,0,.08);--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;--mono:"SF Mono","Fira Code",Consolas,monospace;--sw:232px;--th:56px}
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:var(--font);font-size:14px;color:var(--c-text);background:var(--c-bg)}
+    a{color:var(--c-blue);text-decoration:none}a:hover{text-decoration:underline}
+    .shell{display:flex;min-height:100vh}
+    .sidebar{width:var(--sw);min-width:var(--sw);background:var(--c-side);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:100;overflow-y:auto}
+    .sb-brand{padding:18px 16px 14px;border-bottom:1px solid rgba(255,255,255,.07)}
+    .sb-logo{display:flex;align-items:center;gap:10px}
+    .sb-icon{width:32px;height:32px;background:linear-gradient(135deg,var(--c-blue),#38bdf8);border-radius:var(--r-sm);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:#fff;flex-shrink:0}
+    .sb-name{font-size:15px;font-weight:700;color:#fff;line-height:1.1}
+    .sb-ver{font-size:11px;color:var(--c-side-mut);margin-top:2px}
+    .sb-section{padding:12px 8px 4px}
+    .sb-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--c-side-mut);padding:0 8px;margin-bottom:4px}
+    .sb-nav{list-style:none}.sb-nav li{margin-bottom:1px}
+    .sb-link{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:var(--r-sm);color:var(--c-side-txt);font-size:13px;font-weight:500;transition:background .12s,color .12s;text-decoration:none}
+    .sb-link:hover{background:var(--c-side-hi);color:#fff;text-decoration:none}
+    .sb-link.active{background:rgba(56,189,248,.18);color:var(--c-side-act);font-weight:700}
+    .sb-link .ico{font-size:15px;width:18px;text-align:center;flex-shrink:0}
+    .sb-link.logout{color:#f87171}.sb-link.logout:hover{background:rgba(248,113,113,.12)}
+    .sb-footer{margin-top:auto;padding:12px 8px;border-top:1px solid rgba(255,255,255,.07)}
+    .u-chip{display:flex;align-items:center;gap:8px;padding:8px 10px}
+    .u-av{width:28px;height:28px;background:var(--c-blue);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff;flex-shrink:0}
+    .u-name{font-size:12px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .u-role{font-size:11px;color:var(--c-side-mut)}
+    .main{margin-left:var(--sw);flex:1;display:flex;flex-direction:column;min-height:100vh}
+    .topbar{height:var(--th);background:var(--c-surface);border-bottom:1px solid var(--c-border);display:flex;align-items:center;padding:0 24px;gap:12px;position:sticky;top:0;z-index:50}
+    .bc{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--c-muted);flex:1;min-width:0}
+    .bc a{color:var(--c-muted)}.bc a:hover{color:var(--c-blue);text-decoration:none}
+    .bc-sep{color:var(--c-border);user-select:none}
+    .bc-cur{color:var(--c-text);font-weight:600}
+    .alerts{padding:16px 24px 0;display:flex;flex-direction:column;gap:8px}
+    .flash{display:flex;align-items:flex-start;gap:10px;padding:11px 14px;border-radius:var(--r);font-size:13px;border:1px solid}
+    .flash.ok{background:var(--c-green-lo);border-color:#86efac;color:#15803d}
+    .flash.err{background:var(--c-red-lo);border-color:#fca5a5;color:#b91c1c}
+    .ph{padding:24px 24px 0;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+    .ph-title{font-size:22px;font-weight:700;letter-spacing:-.02em}
+    .ph-sub{margin-top:4px;font-size:13px;color:var(--c-muted)}
+    .content{padding:20px 24px 48px;flex:1}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 16px;border-radius:var(--r-sm);font:inherit;font-size:13px;font-weight:600;cursor:pointer;border:1px solid transparent;white-space:nowrap;transition:background .12s;text-decoration:none}
+    .btn-p{background:var(--c-blue);color:#fff;border-color:var(--c-blue-h)}.btn-p:hover{background:var(--c-blue-h);text-decoration:none}
+    .btn-s{background:var(--c-surface);color:var(--c-text);border-color:var(--c-border)}.btn-s:hover{background:#f5f6fa;text-decoration:none}
+    .btn-sm{padding:5px 10px;font-size:12px}
+    input,select{font:inherit;font-size:13px;color:var(--c-text);background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-sm);padding:8px 10px;width:100%;transition:border-color .15s,box-shadow .15s}
+    input:focus,select:focus{outline:none;border-color:var(--c-blue);box-shadow:0 0 0 3px rgba(0,112,196,.12)}
+    .f-row{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
+    .f-row label{font-size:12px;font-weight:700}
+    .filter-bar{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:20px}
+    .filter-field{display:flex;flex-direction:column;gap:5px;flex:1 1 200px}
+    .filter-field label{font-size:12px;font-weight:700;color:var(--c-muted)}
+    .filter-field select,.filter-field input{min-width:0}
+    .stats-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:20px}
+    @media(max-width:900px){.stats-row{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    .stat-card{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);padding:14px 18px}
+    .stat-label{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-muted)}
+    .stat-val{font-size:28px;font-weight:800;letter-spacing:-.04em;margin-top:6px}
+    .t-card{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh-sm)}
+    .t-head{padding:14px 16px;border-bottom:1px solid var(--c-border-lo);display:flex;align-items:center;justify-content:space-between;gap:10px;background:#fafbfc}
+    .t-head h2{font-size:14px;font-weight:700}
+    .t-head .cnt{font-size:12px;color:var(--c-muted)}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    thead th{text-align:left;padding:10px 14px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-muted);background:#fafbfc;border-bottom:1px solid var(--c-border-lo);white-space:nowrap}
+    tbody td{padding:11px 14px;border-bottom:1px solid var(--c-border-lo);vertical-align:middle}
+    tbody tr:last-child td{border-bottom:none}
+    tbody tr:hover td{background:#f8f9fb}
+    .empty-row td{text-align:center;padding:32px;color:var(--c-muted)}
+    .badge{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid transparent}
+    .badge::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor}
+    .b-ok{background:var(--c-green-lo);color:var(--c-green);border-color:#86efac}
+    .b-err{background:var(--c-red-lo);color:var(--c-red);border-color:#fca5a5}
+    .b-neu{background:#f1f2f4;color:var(--c-muted);border-color:var(--c-border)}
+    .detail-panel{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);padding:18px;margin-top:16px;box-shadow:var(--sh-sm)}
+    .detail-panel h3{font-size:14px;font-weight:700;margin-bottom:12px}
+    .kv-row{display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px solid var(--c-border-lo);font-size:13px}
+    .kv-row:last-child{border-bottom:none}
+    .kv-lbl{color:var(--c-muted);min-width:110px;flex-shrink:0;font-size:12px}
+    .kv-val{color:var(--c-text);word-break:break-all}
+    .mono{font-family:var(--mono);font-size:12px;word-break:break-all}
+    .muted{color:var(--c-muted)}.sm{font-size:12px}
+    .flex{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   </style>
 </head>
 <body>
-  <main class="shell">
-    <header class="topbar">
-      <div>
-        <div class="service-nav">
-          <a class="service-link" href="/admin">Key Management Service</a>
-          <a class="service-link" href="/admin/secrets">Secrets Manager</a>
-          <a class="service-link active" href="/admin/audit">Audit Explorer</a>
-        </div>
-        <h1 class="title">Audit Explorer</h1>
-        <div class="sub">Recent tamper-evident control-plane events across KMS and Secrets Manager. Signed in as {{.CurrentUserName}} ({{.CurrentUserRole}}).</div>
+<div class="shell">
+  <nav class="sidebar">
+    <div class="sb-brand">
+      <div class="sb-logo">
+        <div class="sb-icon">K</div>
+        <div><div class="sb-name">go-kms</div><div class="sb-ver">Control Plane</div></div>
       </div>
-      <div class="toolbar">
-        <a class="btn secondary" href="/admin">KMS console</a>
-        <a class="btn secondary" href="/admin/secrets">Secrets console</a>
-        <a class="btn secondary" href="/admin/logout">Sign out</a>
+    </div>
+    <div class="sb-section">
+      <div class="sb-label">Services</div>
+      <ul class="sb-nav">
+        <li><a class="sb-link" href="/admin"><span class="ico">🔑</span> Key Management</a></li>
+        <li><a class="sb-link" href="/admin/secrets"><span class="ico">🔒</span> Secrets Manager</a></li>
+      </ul>
+    </div>
+    <div class="sb-section">
+      <div class="sb-label">Operations</div>
+      <ul class="sb-nav">
+        <li><a class="sb-link active" href="/admin/audit"><span class="ico">📋</span> Audit Explorer</a></li>
+      </ul>
+    </div>
+    <div class="sb-footer">
+      <div class="u-chip">
+        <div class="u-av">{{if .CurrentUserName}}{{slice .CurrentUserName 0 1}}{{else}}A{{end}}</div>
+        <div><div class="u-name">{{if .CurrentUserName}}{{.CurrentUserName}}{{else}}Local Admin{{end}}</div><div class="u-role">{{if .CurrentUserRole}}{{.CurrentUserRole}}{{else}}admin{{end}}</div></div>
+      </div>
+      <ul class="sb-nav"><li><a class="sb-link logout" href="/admin/logout"><span class="ico">↩</span> Sign out</a></li></ul>
+    </div>
+  </nav>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="bc">
+        <a href="/admin/audit">Audit Explorer</a>
+        <span class="bc-sep">/</span>
+        <span class="bc-cur">Control-plane events</span>
       </div>
     </header>
 
-    {{if .Flash}}<div class="flash ok">{{.Flash}}</div>{{end}}
-    {{if .Error}}<div class="flash err">{{.Error}}</div>{{end}}
+    {{if .Flash}}<div class="alerts"><div class="flash ok">✓ {{.Flash}}</div></div>{{end}}
+    {{if .Error}}<div class="alerts"><div class="flash err">⚠ {{.Error}}</div></div>{{end}}
 
-    <section class="section">
-      <form class="toolbar" method="get" action="/admin/audit">
-        <div class="field" style="flex-basis: 160px; max-width: 220px;">
+    <div class="ph">
+      <div>
+        <h1 class="ph-title">Audit Explorer</h1>
+        <p class="ph-sub">Tamper-evident control-plane events across KMS and Secrets Manager — newest first.</p>
+      </div>
+    </div>
+
+    <div class="content">
+      <form class="filter-bar" method="get" action="/admin/audit">
+        <div class="filter-field" style="max-width:200px;">
           <label for="service">Service</label>
           <select id="service" name="service">
             <option value="all" {{if eq .SelectedServer "all"}}selected{{end}}>All services</option>
@@ -270,93 +147,72 @@
             <option value="other" {{if eq .SelectedServer "other"}}selected{{end}}>Other</option>
           </select>
         </div>
-        <div class="field">
+        <div class="filter-field">
           <label for="q">Search</label>
-          <input id="q" type="text" name="q" value="{{.Query}}" placeholder="Action, key id, actor, error type, hash">
+          <input id="q" type="text" name="q" value="{{.Query}}" placeholder="Action, key/secret ID, error type, event hash…">
         </div>
-        <div class="field" style="flex-basis: 180px; max-width: 240px;">
+        <div class="filter-field" style="max-width:240px;">
           <label for="actor">Actor</label>
-          <input id="actor" type="text" name="actor" value="{{.ActorFilter}}" placeholder="127.0.0.1 or user ARN">
+          <input id="actor" type="text" name="actor" value="{{.ActorFilter}}" placeholder="IP address or principal ARN">
         </div>
-        <button class="btn" type="submit">Filter events</button>
-        <a class="btn secondary" href="/admin/audit">Reset</a>
+        <div class="flex" style="align-items:flex-end;gap:8px;">
+          <button class="btn btn-p" type="submit">Apply filters</button>
+          <a class="btn btn-s" href="/admin/audit">Reset</a>
+        </div>
       </form>
 
-      <div class="stats">
-        <div class="card">
-          <div class="label">Events visible</div>
-          <div class="value">{{.VisibleCount}}</div>
-        </div>
-        <div class="card">
-          <div class="label">Total loaded</div>
-          <div class="value">{{.TotalCount}}</div>
-        </div>
-        <div class="card">
-          <div class="label">KMS / Secrets</div>
-          <div class="value">{{.KMSCount}} / {{.SecretsCount}}</div>
-        </div>
-        <div class="card">
-          <div class="label">Ok / Errors</div>
-          <div class="value">{{.OkCount}} / {{.ErrorCount}}</div>
-        </div>
+      <div class="stats-row">
+        <div class="stat-card"><div class="stat-label">Visible</div><div class="stat-val">{{.VisibleCount}}</div></div>
+        <div class="stat-card"><div class="stat-label">Total loaded</div><div class="stat-val">{{.TotalCount}}</div></div>
+        <div class="stat-card"><div class="stat-label">KMS / Secrets</div><div class="stat-val">{{.KMSCount}} / {{.SecretsCount}}</div></div>
+        <div class="stat-card"><div class="stat-label">Ok / Errors</div><div class="stat-val" style="{{if gt .ErrorCount 0}}color:var(--c-red){{end}}">{{.OkCount}} / {{.ErrorCount}}</div></div>
       </div>
 
-      <div class="table-wrap">
-        <div class="table-head">
-          <strong>Control-plane activity</strong>
-          <span>Newest entries first</span>
-        </div>
-        {{if .Rows}}
-        <table class="table">
+      <div class="t-card">
+        <div class="t-head"><h2>Events</h2><span class="cnt">Showing {{.VisibleCount}} of {{.TotalCount}}</span></div>
+        <table>
           <thead>
-            <tr>
-              <th>Time</th>
-              <th>Service</th>
-              <th>Action</th>
-              <th>Key / Secret</th>
-              <th>Result</th>
-              <th>Error</th>
-              <th>Actor</th>
-              <th>Event hash</th>
-              <th>Trace</th>
-            </tr>
+            <tr><th>Time</th><th>Service</th><th>Action</th><th>Resource</th><th>Result</th><th>Error type</th><th>Actor</th><th>Hash</th><th></th></tr>
           </thead>
           <tbody>
-            {{range .Rows}}
+            {{if .Rows}}{{range .Rows}}
             <tr>
-              <td>{{.Time}}</td>
-              <td>{{.Service}}</td>
+              <td class="sm muted">{{.Time}}</td>
+              <td class="sm">{{.Service}}</td>
               <td class="mono">{{.Action}}</td>
-              <td class="mono">{{if .KeyID}}{{.KeyID}}{{else}}-{{end}}</td>
-              <td><span class="badge {{if eq .Result "ok"}}ok{{else if eq .Result "error"}}err{{else}}neutral{{end}}">{{.Result}}</span></td>
-              <td>{{if .ErrorType}}{{.ErrorType}}{{else}}-{{end}}</td>
-              <td class="mono">{{if .Actor}}{{.Actor}}{{else}}-{{end}}</td>
-              <td class="mono">{{.EventHash}}</td>
-              <td><a href="/admin/audit?service={{$.SelectedServer}}&q={{$.Query}}&actor={{$.ActorFilter}}&event={{.ID}}">Open</a></td>
+              <td class="mono sm">{{if .KeyID}}{{.KeyID}}{{else}}<span class="muted">—</span>{{end}}</td>
+              <td>
+                {{if eq .Result "ok"}}<span class="badge b-ok">ok</span>
+                {{else if eq .Result "error"}}<span class="badge b-err">error</span>
+                {{else}}<span class="badge b-neu">{{.Result}}</span>{{end}}
+              </td>
+              <td class="sm">{{if .ErrorType}}{{.ErrorType}}{{else}}<span class="muted">—</span>{{end}}</td>
+              <td class="mono sm muted">{{if .Actor}}{{.Actor}}{{else}}—{{end}}</td>
+              <td class="mono sm muted" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;">{{if .EventHash}}{{slice .EventHash 0 12}}…{{end}}</td>
+              <td><a href="/admin/audit?service={{$.SelectedServer}}&q={{$.Query}}&actor={{$.ActorFilter}}&event={{.ID}}" class="sm">Open</a></td>
             </tr>
+            {{end}}{{else}}
+            <tr class="empty-row"><td colspan="9">No events matched the current filters.</td></tr>
             {{end}}
           </tbody>
         </table>
-        {{else}}
-        <div class="empty">No audit events matched the current filters.</div>
-        {{end}}
       </div>
+
       {{if .SelectedEvent}}
-      <div class="table-wrap" style="margin-top:16px;">
-        <div class="table-head">
-          <strong>Selected event</strong>
-          <span>Trace anchor {{.SelectedEvent.ID}}</span>
-        </div>
-        <div class="empty">
-          <div><strong>Action:</strong> <span class="mono">{{.SelectedEvent.Action}}</span></div>
-          <div><strong>Resource:</strong> <span class="mono">{{if .SelectedEvent.KeyID}}{{.SelectedEvent.KeyID}}{{else}}-{{end}}</span></div>
-          <div><strong>Actor:</strong> <span class="mono">{{if .SelectedEvent.Actor}}{{.SelectedEvent.Actor}}{{else}}-{{end}}</span></div>
-          <div><strong>Previous hash:</strong> <span class="mono">{{if .SelectedEvent.PrevHash}}{{.SelectedEvent.PrevHash}}{{else}}-{{end}}</span></div>
-          <div><strong>Event hash:</strong> <span class="mono">{{.SelectedEvent.EventHash}}</span></div>
-        </div>
+      <div class="detail-panel">
+        <h3>Event detail — trace anchor #{{.SelectedEvent.ID}}</h3>
+        <div class="kv-row"><span class="kv-lbl">Action</span><span class="kv-val mono">{{.SelectedEvent.Action}}</span></div>
+        <div class="kv-row"><span class="kv-lbl">Resource</span><span class="kv-val mono">{{if .SelectedEvent.KeyID}}{{.SelectedEvent.KeyID}}{{else}}—{{end}}</span></div>
+        <div class="kv-row"><span class="kv-lbl">Result</span><span class="kv-val">{{.SelectedEvent.Result}}</span></div>
+        <div class="kv-row"><span class="kv-lbl">Error type</span><span class="kv-val">{{if .SelectedEvent.ErrorType}}{{.SelectedEvent.ErrorType}}{{else}}—{{end}}</span></div>
+        <div class="kv-row"><span class="kv-lbl">Actor</span><span class="kv-val mono">{{if .SelectedEvent.Actor}}{{.SelectedEvent.Actor}}{{else}}—{{end}}</span></div>
+        <div class="kv-row"><span class="kv-lbl">Time</span><span class="kv-val">{{.SelectedEvent.Time}}</span></div>
+        <div class="kv-row"><span class="kv-lbl">Previous hash</span><span class="kv-val mono sm">{{if .SelectedEvent.PrevHash}}{{.SelectedEvent.PrevHash}}{{else}}—{{end}}</span></div>
+        <div class="kv-row"><span class="kv-lbl">Event hash</span><span class="kv-val mono sm">{{.SelectedEvent.EventHash}}</span></div>
       </div>
       {{end}}
-    </section>
-  </main>
+    </div>
+  </div>
+</div>
 </body>
 </html>

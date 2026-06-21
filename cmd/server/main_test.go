@@ -767,7 +767,7 @@ func TestSecretsAdminPageRenders(t *testing.T) {
 		t.Fatalf("unexpected list page body: %s", listBody)
 	}
 	if !strings.Contains(listBody, "Audit Explorer") {
-		t.Fatalf("expected audit explorer nav link in secrets list body: %s", listBody)
+		t.Fatalf("expected audit explorer sidebar link in secrets list body: %s", listBody)
 	}
 
 	detailReq := httptest.NewRequest(http.MethodGet, "/admin/secrets?secret_id=prod/ui/secret&tab=retrieve", nil)
@@ -777,7 +777,7 @@ func TestSecretsAdminPageRenders(t *testing.T) {
 		t.Fatalf("unexpected detail page status: %d", detailRec.Code)
 	}
 	detailBody := detailRec.Body.String()
-	if !strings.Contains(detailBody, "Retrieve secret value") || !strings.Contains(detailBody, "token") || !strings.Contains(detailBody, "abc") {
+	if !strings.Contains(detailBody, "Retrieve") || !strings.Contains(detailBody, "token") || !strings.Contains(detailBody, "abc") {
 		t.Fatalf("unexpected detail page body: %s", detailBody)
 	}
 
