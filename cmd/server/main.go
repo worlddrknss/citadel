@@ -51,6 +51,8 @@ type keyStore interface {
 	EnsureBootstrap(ctx context.Context, k kmsKey) error
 	CreateKey(ctx context.Context, description string) (kmsKey, error)
 	ListKeys(ctx context.Context) ([]kmsKey, error)
+	GetKeyPolicy(ctx context.Context, keyID, policyName string) (string, error)
+	PutKeyPolicy(ctx context.Context, keyID, policyName, policyDocument string) error
 	CreateAlias(ctx context.Context, aliasName, keyID string) error
 	UpdateAlias(ctx context.Context, aliasName, keyID string) error
 	ListAliases(ctx context.Context) ([]kmsAlias, error)
@@ -65,7 +67,8 @@ type dbStore struct {
 }
 
 type inMemoryStore struct {
-	k kmsKey
+	k        kmsKey
+	policies map[string]string
 }
 
 type kmsKey struct {
@@ -79,7 +82,7 @@ type kmsKey struct {
 }
 
 type kmsAlias struct {
-	AliasName string
+	AliasName   string
 	TargetKeyID string
 }
 
@@ -168,13 +171,28 @@ type keyIDRequest struct {
 }
 
 type scheduleKeyDeletionRequest struct {
-	KeyID                 string `json:"KeyId"`
-	PendingWindowInDays   int    `json:"PendingWindowInDays"`
+	KeyID               string `json:"KeyId"`
+	PendingWindowInDays int    `json:"PendingWindowInDays"`
 }
 
 type scheduleKeyDeletionResponse struct {
 	KeyID        string    `json:"KeyId"`
 	DeletionDate time.Time `json:"DeletionDate"`
+}
+
+type getKeyPolicyRequest struct {
+	KeyID      string `json:"KeyId"`
+	PolicyName string `json:"PolicyName"`
+}
+
+type getKeyPolicyResponse struct {
+	Policy string `json:"Policy"`
+}
+
+type putKeyPolicyRequest struct {
+	KeyID      string `json:"KeyId"`
+	PolicyName string `json:"PolicyName"`
+	Policy     string `json:"Policy"`
 }
 
 type keyMetadata struct {
@@ -327,6 +345,15 @@ CREATE TABLE IF NOT EXISTS kms_settings (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS kms_key_policies (
+	key_id TEXT NOT NULL REFERENCES kms_keys(id),
+	policy_name TEXT NOT NULL,
+	policy_document TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	PRIMARY KEY (key_id, policy_name)
+);
+
 CREATE TABLE IF NOT EXISTS kms_audit_events (
 	id BIGSERIAL PRIMARY KEY,
 	action TEXT NOT NULL,
@@ -421,9 +448,75 @@ func (s *server) handleKMS(w http.ResponseWriter, r *http.Request) {
 		s.handleScheduleKeyDeletion(w, r)
 	case "TrentService.CancelKeyDeletion":
 		s.handleCancelKeyDeletion(w, r)
+	case "TrentService.GetKeyPolicy":
+		s.handleGetKeyPolicy(w, r)
+	case "TrentService.PutKeyPolicy":
+		s.handlePutKeyPolicy(w, r)
 	default:
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidAction", "unsupported X-Amz-Target")
 	}
+}
+
+func (s *server) handleGetKeyPolicy(w http.ResponseWriter, r *http.Request) {
+	const action = "TrentService.GetKeyPolicy"
+	var req getKeyPolicyRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		return
+	}
+	if req.KeyID == "" {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "KeyId is required")
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		return
+	}
+	if req.PolicyName == "" {
+		req.PolicyName = "default"
+	}
+	doc, err := s.store.GetKeyPolicy(r.Context(), req.KeyID, req.PolicyName)
+	if err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key or policy not found")
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		return
+	}
+	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
+	writeJSON(w, http.StatusOK, getKeyPolicyResponse{Policy: doc})
+}
+
+func (s *server) handlePutKeyPolicy(w http.ResponseWriter, r *http.Request) {
+	const action = "TrentService.PutKeyPolicy"
+	var req putKeyPolicyRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		return
+	}
+	if req.KeyID == "" {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "KeyId is required")
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		return
+	}
+	if req.PolicyName == "" {
+		req.PolicyName = "default"
+	}
+	if strings.TrimSpace(req.Policy) == "" {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "Policy is required")
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		return
+	}
+	normalizedPolicy, err := normalizePolicyDocument(req.Policy)
+	if err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "MalformedPolicyDocumentException", "Policy must be valid JSON")
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "MalformedPolicyDocumentException", Actor: r.RemoteAddr})
+		return
+	}
+	if err := s.store.PutKeyPolicy(r.Context(), req.KeyID, req.PolicyName, normalizedPolicy); err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		return
+	}
+	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
+	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
 func (s *server) handleEncrypt(w http.ResponseWriter, r *http.Request) {
@@ -768,20 +861,20 @@ func keyState(key kmsKey) string {
 
 func toKeyMetadata(key kmsKey) keyMetadata {
 	return keyMetadata{
-		AWSAccountID:          "000000000000",
-		KeyID:                 key.ID,
-		Arn:                   key.ARN,
-		CreationDate:          key.CreatedAt,
-		Enabled:               key.Enabled,
-		Description:           key.Description,
-		KeyUsage:              "ENCRYPT_DECRYPT",
-		KeyState:              keyState(key),
-		Origin:                "AWS_KMS",
-		KeyManager:            "CUSTOMER",
-		CustomerMasterKeySpec: "SYMMETRIC_DEFAULT",
-		KeySpec:               "SYMMETRIC_DEFAULT",
-		EncryptionAlgorithms:  []string{"SYMMETRIC_DEFAULT"},
-		MultiRegion:           false,
+		AWSAccountID:                "000000000000",
+		KeyID:                       key.ID,
+		Arn:                         key.ARN,
+		CreationDate:                key.CreatedAt,
+		Enabled:                     key.Enabled,
+		Description:                 key.Description,
+		KeyUsage:                    "ENCRYPT_DECRYPT",
+		KeyState:                    keyState(key),
+		Origin:                      "AWS_KMS",
+		KeyManager:                  "CUSTOMER",
+		CustomerMasterKeySpec:       "SYMMETRIC_DEFAULT",
+		KeySpec:                     "SYMMETRIC_DEFAULT",
+		EncryptionAlgorithms:        []string{"SYMMETRIC_DEFAULT"},
+		MultiRegion:                 false,
 		PendingDeletionWindowInDays: pendingDeletionDays(key.DeletionDate),
 	}
 }
@@ -970,6 +1063,48 @@ ORDER BY created_at ASC
 	return out, nil
 }
 
+func (s *dbStore) GetKeyPolicy(ctx context.Context, keyID, policyName string) (string, error) {
+	if policyName == "" {
+		policyName = "default"
+	}
+	key, err := s.ResolveByID(ctx, keyID)
+	if err != nil {
+		return "", err
+	}
+	const q = `
+SELECT policy_document
+FROM kms_key_policies
+WHERE key_id = $1 AND policy_name = $2
+`
+	var doc string
+	err = s.db.QueryRowContext(ctx, q, key.ID, policyName).Scan(&doc)
+	if errors.Is(err, sql.ErrNoRows) {
+		return defaultKeyPolicy(key), nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return doc, nil
+}
+
+func (s *dbStore) PutKeyPolicy(ctx context.Context, keyID, policyName, policyDocument string) error {
+	if policyName == "" {
+		policyName = "default"
+	}
+	key, err := s.ResolveByID(ctx, keyID)
+	if err != nil {
+		return err
+	}
+	const q = `
+INSERT INTO kms_key_policies (key_id, policy_name, policy_document)
+VALUES ($1, $2, $3)
+ON CONFLICT (key_id, policy_name)
+DO UPDATE SET policy_document = EXCLUDED.policy_document, updated_at = NOW()
+`
+	_, err = s.db.ExecContext(ctx, q, key.ID, policyName, policyDocument)
+	return err
+}
+
 func (s *dbStore) CreateAlias(ctx context.Context, aliasName, keyID string) error {
 	const q = `
 INSERT INTO kms_aliases (alias_name, target_key_id)
@@ -1110,6 +1245,36 @@ func (s *inMemoryStore) CreateKey(_ context.Context, _ string) (kmsKey, error) {
 
 func (s *inMemoryStore) ListKeys(_ context.Context) ([]kmsKey, error) {
 	return []kmsKey{s.k}, nil
+}
+
+func (s *inMemoryStore) GetKeyPolicy(_ context.Context, keyID, policyName string) (string, error) {
+	if keyID != "" && keyID != s.k.ID {
+		return "", sql.ErrNoRows
+	}
+	if policyName == "" {
+		policyName = "default"
+	}
+	if s.policies == nil {
+		s.policies = map[string]string{}
+	}
+	if doc, ok := s.policies[policyName]; ok {
+		return doc, nil
+	}
+	return defaultKeyPolicy(s.k), nil
+}
+
+func (s *inMemoryStore) PutKeyPolicy(_ context.Context, keyID, policyName, policyDocument string) error {
+	if keyID != "" && keyID != s.k.ID {
+		return sql.ErrNoRows
+	}
+	if policyName == "" {
+		policyName = "default"
+	}
+	if s.policies == nil {
+		s.policies = map[string]string{}
+	}
+	s.policies[policyName] = policyDocument
+	return nil
 }
 
 func (s *inMemoryStore) CreateAlias(_ context.Context, _, _ string) error {
@@ -1299,4 +1464,39 @@ func randomHex(n int) string {
 func hashAuditRecord(prevHash string, event auditEvent, ts string) string {
 	h := sha256.Sum256([]byte(strings.Join([]string{prevHash, event.Action, event.KeyID, event.Result, event.ErrorType, event.Actor, ts}, "|")))
 	return hex.EncodeToString(h[:])
+}
+
+func normalizePolicyDocument(raw string) (string, error) {
+	var doc any
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return "", err
+	}
+	b, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func defaultKeyPolicy(key kmsKey) string {
+	policy := map[string]any{
+		"Version": "2012-10-17",
+		"Id":      "go-kms-default-policy-" + key.ID,
+		"Statement": []map[string]any{
+			{
+				"Sid":    "EnableRootPermissions",
+				"Effect": "Allow",
+				"Principal": map[string]string{
+					"AWS": "arn:aws:iam::000000000000:root",
+				},
+				"Action":   "kms:*",
+				"Resource": "*",
+			},
+		},
+	}
+	b, err := json.MarshalIndent(policy, "", "  ")
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }

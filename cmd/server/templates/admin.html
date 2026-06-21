@@ -3,359 +3,346 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>go-kms control plane</title>
+  <title>go-kms | Customer managed keys</title>
   <style>
     :root {
-      --bg: #0b0f18;
-      --panel: #141b2b;
-      --panel-alt: #111726;
-      --text: #ebf0ff;
-      --muted: #95a3c6;
-      --accent: #2e8fff;
-      --danger: #ff5d74;
-      --good: #30d89e;
-      --warn: #ffc45d;
-      --line: #263455;
+      --bg: #f3f5f8;
+      --panel: #ffffff;
+      --text: #1f2937;
+      --muted: #5f6b7a;
+      --line: #d5dbe3;
+      --brand: #0073bb;
+      --brand-2: #005d99;
+      --warn: #d13212;
+      --ok: #037f0c;
     }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-      background:
-        radial-gradient(circle at 20% -10%, #16335d 0%, transparent 45%),
-        radial-gradient(circle at 100% 0%, #1c2640 0%, transparent 40%),
-        var(--bg);
+      background: radial-gradient(circle at top right, #e2e8f2 0%, transparent 35%), var(--bg);
       color: var(--text);
-      min-height: 100vh;
-      padding: 20px;
+      font-family: "Public Sans", "Segoe UI", sans-serif;
+      padding: 18px;
     }
-    .wrap {
-      width: min(1280px, 100%);
+    .shell {
+      max-width: 1440px;
       margin: 0 auto;
-      background: color-mix(in srgb, var(--panel) 95%, black);
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      box-shadow: 0 20px 60px rgba(0,0,0,.45);
-      overflow: hidden;
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      gap: 16px;
     }
-    header {
-      padding: 18px 24px;
-      border-bottom: 1px solid var(--line);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 14px;
-      flex-wrap: wrap;
+    @media (max-width: 1080px) {
+      .shell { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 8px 20px rgba(26, 39, 60, .06);
+    }
+    .left {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+      align-content: start;
     }
     h1 {
       margin: 0;
-      font-size: 25px;
-      letter-spacing: .4px;
+      font-size: 18px;
+      font-weight: 700;
+      color: #101828;
     }
     .sub {
-      margin: 3px 0 0;
+      margin: 4px 0 0;
       color: var(--muted);
       font-size: 13px;
     }
-    .tag {
-      background: rgba(46,143,255,.18);
-      border: 1px solid rgba(46,143,255,.42);
-      color: #9fcbff;
-      border-radius: 999px;
-      font-size: 12px;
-      padding: 4px 11px;
-    }
-
-    .flash {
-      margin: 14px 16px 0;
-      border-radius: 10px;
-      padding: 10px 12px;
-      font-size: 13px;
-      border: 1px solid;
-    }
-    .flash.ok {
-      background: rgba(48,216,158,.11);
-      border-color: rgba(48,216,158,.35);
-      color: #8af0cb;
-    }
-    .flash.err {
-      background: rgba(255,93,116,.11);
-      border-color: rgba(255,93,116,.35);
-      color: #ff9fb0;
-    }
-
-    .layout {
-      display: grid;
-      grid-template-columns: 340px minmax(0, 1fr);
-      gap: 16px;
-      padding: 16px;
-    }
-    @media (max-width: 960px) {
-      .layout {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    .stack {
-      display: grid;
-      gap: 14px;
-    }
-
-    section {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: color-mix(in srgb, var(--panel-alt) 92%, black);
-      padding: 14px;
-    }
-    h2 {
-      margin: 0 0 10px;
-      font-size: 15px;
-      color: var(--muted);
-      letter-spacing: .2px;
-    }
-    h3 {
-      margin: 10px 0 8px;
-      font-size: 13px;
-      color: var(--muted);
-      font-weight: 600;
-      letter-spacing: .2px;
-    }
-
-    form {
-      display: grid;
-      gap: 8px;
-      margin: 0;
-    }
-    input, select {
-      width: 100%;
-      box-sizing: border-box;
-      border-radius: 10px;
-      border: 1px solid #2b3a60;
-      background: #0f1524;
-      color: var(--text);
-      padding: 9px 10px;
-      font-size: 13px;
-      outline: none;
-    }
-    input:focus, select:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 2px rgba(46,143,255,.18);
-    }
-
-    .btn {
-      border: 1px solid rgba(46,143,255,.45);
-      border-radius: 10px;
-      background: linear-gradient(180deg, rgba(46,143,255,.35), rgba(46,143,255,.22));
-      color: #d7e9ff;
-      padding: 8px 10px;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .btn.secondary {
-      border-color: #3a496f;
-      background: #1a2236;
-      color: var(--muted);
-    }
-    .btn.warn {
-      border-color: rgba(255,196,93,.45);
-      background: rgba(255,196,93,.15);
-      color: #ffe4ae;
-    }
-    .btn.danger {
-      border-color: rgba(255,93,116,.45);
-      background: rgba(255,93,116,.16);
-      color: #ffc2cb;
-    }
-    .btn.good {
-      border-color: rgba(48,216,158,.42);
-      background: rgba(48,216,158,.17);
-      color: #b7f7df;
-    }
-
-    .actions {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
-      margin-top: 10px;
-    }
-
-    .table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-    }
-    .table th, .table td {
-      border-bottom: 1px solid #253356;
-      padding: 10px 8px;
-      vertical-align: top;
-      text-align: left;
-    }
-    .table th {
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: .5px;
-    }
-
-    ul {
+    .key-list {
       list-style: none;
       margin: 0;
       padding: 0;
       display: grid;
       gap: 8px;
+      max-height: 380px;
+      overflow: auto;
     }
-
-    .state {
-      font-size: 12px;
-      border-radius: 999px;
-      padding: 3px 9px;
-      border: 1px solid #314266;
-      color: var(--muted);
-      display: inline-block;
-      white-space: nowrap;
+    .key-list a {
+      text-decoration: none;
+      color: inherit;
+      display: block;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px;
+      background: #fff;
     }
-    .state.Enabled { color: var(--good); border-color: rgba(41,211,145,.4); }
-    .state.PendingDeletion { color: var(--warn); border-color: rgba(248,184,78,.4); }
-    .state.Disabled { color: #ff7b87; border-color: rgba(255,123,135,.4); }
-
+    .key-list a.active {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 2px rgba(0, 115, 187, .12);
+      background: #f0f8ff;
+    }
     .mono {
       font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
       font-size: 12px;
       word-break: break-all;
     }
-
+    .state {
+      display: inline-block;
+      margin-top: 5px;
+      font-size: 11px;
+      border-radius: 999px;
+      padding: 2px 8px;
+      border: 1px solid #bfd5e6;
+      color: #1f587a;
+      background: #edf7ff;
+    }
+    .state.Enabled { color: var(--ok); border-color: #9ed2a4; background: #ecfbef; }
+    .state.Disabled { color: #9f1f1f; border-color: #efb3b3; background: #fff0f0; }
+    .state.PendingDeletion { color: #8f4b00; border-color: #efcd95; background: #fff7e8; }
+    .form-stack { display: grid; gap: 8px; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid #b9c6d8;
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: #fff;
+      font: inherit;
+      color: inherit;
+    }
+    textarea {
+      min-height: 290px;
+      resize: vertical;
+      font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .btn {
+      border: 1px solid var(--brand-2);
+      background: var(--brand);
+      color: #fff;
+      border-radius: 20px;
+      padding: 7px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn.secondary {
+      border-color: #9babbe;
+      background: #fff;
+      color: #1f2937;
+    }
+    .btn.warn {
+      border-color: #c2410c;
+      background: #d13212;
+      color: #fff;
+    }
+    .main { padding: 0; overflow: hidden; }
+    .toolbar {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      background: linear-gradient(180deg, #fff 0%, #f8fbff 100%);
+    }
+    .toolbar .title {
+      font-size: 22px;
+      margin: 0;
+      font-weight: 700;
+    }
+    .toolbar .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .section { padding: 16px 18px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    @media (max-width: 860px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    .kv {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+      background: #fff;
+    }
+    .kv h3 {
+      margin: 0 0 8px;
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .4px;
+    }
+    .tabs {
+      display: flex;
+      gap: 2px;
+      border-bottom: 1px solid var(--line);
+      padding: 0 18px;
+      background: #fff;
+      overflow: auto;
+    }
+    .tab {
+      display: inline-block;
+      text-decoration: none;
+      color: #324055;
+      font-size: 13px;
+      padding: 10px 12px;
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+    }
+    .tab.active {
+      color: var(--brand);
+      border-bottom-color: var(--brand);
+      font-weight: 700;
+    }
+    .flash {
+      margin: 12px 18px 0;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+      border: 1px solid;
+    }
+    .flash.ok { color: #0f6b18; background: #edf8ee; border-color: #9ed2a4; }
+    .flash.err { color: #8f1d1d; background: #fef2f2; border-color: #efb3b3; }
     .empty { color: var(--muted); font-size: 14px; }
+    details { border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+    summary { cursor: pointer; font-weight: 600; }
   </style>
 </head>
 <body>
-  <main class="wrap">
-    <header>
+  <div class="shell">
+    <aside class="card left">
       <div>
-        <h1>go-kms control plane</h1>
-        <p class="sub">KMS key, alias, and lifecycle management console</p>
+        <h1>Customer managed keys</h1>
+        <p class="sub">AWS-style key selection and detail workflows</p>
       </div>
-      <span class="tag">aws-kms-like</span>
-    </header>
 
-    {{if .Flash}}
-    <div class="flash ok">{{.Flash}}</div>
-    {{end}}
-    {{if .Error}}
-    <div class="flash err">{{.Error}}</div>
-    {{end}}
+      <ul class="key-list">
+        {{range .Keys}}
+        <li>
+          <a href="/admin?key_id={{.ID}}&tab=key-policy" class="{{if .IsSelected}}active{{end}}">
+            <div class="mono">{{.ID}}</div>
+            <span class="state {{.State}}">{{.State}}</span>
+          </a>
+        </li>
+        {{end}}
+      </ul>
 
-    <div class="layout">
-      <aside class="stack">
-        <section>
-          <h2>Create Key</h2>
-          <form method="post" action="/admin?action=create_key">
-            <input type="text" name="description" placeholder="Description (optional)">
-            <button class="btn" type="submit">Create symmetric key</button>
-          </form>
-        </section>
+      <details>
+        <summary>Create key</summary>
+        <form class="form-stack" method="post" action="/admin?action=create_key" style="margin-top:10px;">
+          <input type="text" name="description" placeholder="Description (optional)">
+          <button class="btn" type="submit">Create symmetric key</button>
+        </form>
+      </details>
 
-        <section>
-          <h2>Create Alias</h2>
-          <form method="post" action="/admin?action=create_alias">
-            <input type="text" name="alias_name" placeholder="alias/my-key">
-            <select name="target_key_id" required>
-              <option value="">Select target key</option>
-              {{range .AvailableKeyIDs}}
-              <option value="{{.}}">{{.}}</option>
-              {{end}}
-            </select>
-            <button class="btn" type="submit">Create alias</button>
-          </form>
-        </section>
-
-        <section>
-          <h2>Update Alias</h2>
-          <form method="post" action="/admin?action=update_alias">
-            <input type="text" name="alias_name" placeholder="alias/my-key">
-            <select name="target_key_id" required>
-              <option value="">Select new target key</option>
-              {{range .AvailableKeyIDs}}
-              <option value="{{.}}">{{.}}</option>
-              {{end}}
-            </select>
-            <button class="btn secondary" type="submit">Update alias target</button>
-          </form>
-        </section>
-      </aside>
-
-      <div class="stack">
-        <section>
-          <h2>Managed Keys</h2>
-          {{if .Keys}}
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Key Id</th>
-                <th>State</th>
-                <th>Deletion Date</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {{range .Keys}}
-              <tr>
-                <td>
-                  <div class="mono">{{.ID}}</div>
-                  <div class="mono" style="color:#8494bf; margin-top:4px;">{{.ARN}}</div>
-                </td>
-                <td><span class="state {{.State}}">{{.State}}</span></td>
-                <td>
-                  {{if .DeletionDate}}
-                  <span class="mono">{{.DeletionDate}}</span>
-                  {{else}}
-                  <span class="empty">-</span>
-                  {{end}}
-                </td>
-                <td>
-                  <div class="actions">
-                    <form method="post" action="/admin?action=enable_key">
-                      <input type="hidden" name="key_id" value="{{.ID}}">
-                      <button class="btn good" type="submit">Enable</button>
-                    </form>
-                    <form method="post" action="/admin?action=disable_key">
-                      <input type="hidden" name="key_id" value="{{.ID}}">
-                      <button class="btn danger" type="submit">Disable</button>
-                    </form>
-                    <form method="post" action="/admin?action=schedule_deletion">
-                      <input type="hidden" name="key_id" value="{{.ID}}">
-                      <input type="number" min="7" max="30" name="window_days" value="30" required>
-                      <button class="btn warn" type="submit">Schedule deletion</button>
-                    </form>
-                    <form method="post" action="/admin?action=cancel_deletion">
-                      <input type="hidden" name="key_id" value="{{.ID}}">
-                      <button class="btn secondary" type="submit">Cancel deletion</button>
-                    </form>
-                  </div>
-                </td>
-              </tr>
-              {{end}}
-            </tbody>
-          </table>
-          {{else}}
-          <p class="empty">No keys found.</p>
-          {{end}}
-        </section>
-
-        <section>
-          <h2>Aliases</h2>
-          {{if .Aliases}}
-          <ul>
-            {{range .Aliases}}
-            <li class="mono">{{.Name}} -> {{.TargetKey}}</li>
+      <details>
+        <summary>Create alias</summary>
+        <form class="form-stack" method="post" action="/admin?action=create_alias" style="margin-top:10px;">
+          <input type="text" name="alias_name" placeholder="alias/my-key">
+          <select name="target_key_id" required>
+            <option value="">Select target key</option>
+            {{range .AvailableKeyIDs}}
+            <option value="{{.}}">{{.}}</option>
             {{end}}
-          </ul>
-          {{else}}
-          <p class="empty">No aliases found.</p>
-          {{end}}
-        </section>
+          </select>
+          <button class="btn secondary" type="submit">Create alias</button>
+        </form>
+      </details>
+    </aside>
+
+    <main class="card main">
+      {{if .Flash}}<div class="flash ok">{{.Flash}}</div>{{end}}
+      {{if .Error}}<div class="flash err">{{.Error}}</div>{{end}}
+
+      {{if .SelectedKey}}
+      <div class="toolbar">
+        <div>
+          <h2 class="title">{{.SelectedKey.ID}}</h2>
+          <div class="sub">Key ID: {{.SelectedKey.ID}}</div>
+        </div>
+        <div class="row">
+          <form method="post" action="/admin?action=enable_key">
+            <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
+            <button class="btn secondary" type="submit">Enable</button>
+          </form>
+          <form method="post" action="/admin?action=disable_key">
+            <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
+            <button class="btn secondary" type="submit">Disable</button>
+          </form>
+          <form method="post" action="/admin?action=schedule_deletion">
+            <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
+            <input type="hidden" name="window_days" value="30">
+            <button class="btn warn" type="submit">Schedule key deletion</button>
+          </form>
+        </div>
       </div>
-    </div>
-  </main>
+
+      <section class="section">
+        <div class="grid">
+          <div class="kv">
+            <h3>General configuration</h3>
+            <div><strong>Alias:</strong> {{if .SelectedKey.Alias}}{{.SelectedKey.Alias}}{{else}}-{{end}}</div>
+            <div><strong>Status:</strong> <span class="state {{.SelectedKey.State}}">{{.SelectedKey.State}}</span></div>
+            <div><strong>Description:</strong> {{if .SelectedKey.Description}}{{.SelectedKey.Description}}{{else}}-{{end}}</div>
+          </div>
+          <div class="kv">
+            <h3>Key details</h3>
+            <div><strong>ARN:</strong><div class="mono">{{.SelectedKey.ARN}}</div></div>
+            <div><strong>Creation date:</strong> {{.SelectedKey.CreatedAt}}</div>
+            <div><strong>Key state:</strong> {{.SelectedKey.State}}</div>
+            {{if .SelectedKey.DeletionDate}}<div><strong>Deletion date:</strong> {{.SelectedKey.DeletionDate}}</div>{{end}}
+          </div>
+        </div>
+      </section>
+
+      <nav class="tabs">
+        <a class="tab {{if eq .SelectedTab "key-policy"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-policy">Key policy</a>
+        <a class="tab {{if eq .SelectedTab "cryptographic-configuration"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=cryptographic-configuration">Cryptographic configuration</a>
+        <a class="tab {{if eq .SelectedTab "tags"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=tags">Tags</a>
+        <a class="tab {{if eq .SelectedTab "key-rotation"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-rotation">Key rotation</a>
+        <a class="tab {{if eq .SelectedTab "aliases"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=aliases">Aliases</a>
+      </nav>
+
+      <section class="section">
+        {{if eq .SelectedTab "key-policy"}}
+        <form class="form-stack" method="post" action="/admin?action=put_key_policy">
+          <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
+          <input type="hidden" name="policy_name" value="{{.PolicyName}}">
+          <label><strong>Key policy</strong></label>
+          <textarea name="policy_document" spellcheck="false">{{.PolicyDocument}}</textarea>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn" type="submit">Save changes</button>
+            <a class="btn secondary" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-policy">Discard</a>
+          </div>
+        </form>
+        {{else if eq .SelectedTab "aliases"}}
+        <form class="form-stack" method="post" action="/admin?action=update_alias" style="max-width:420px;">
+          <label><strong>Update alias target</strong></label>
+          <input type="text" name="alias_name" placeholder="alias/my-key" required>
+          <select name="target_key_id" required>
+            <option value="">Select new target key</option>
+            {{range .AvailableKeyIDs}}
+            <option value="{{.}}">{{.}}</option>
+            {{end}}
+          </select>
+          <button class="btn secondary" type="submit">Update alias</button>
+        </form>
+        {{else}}
+        <p class="empty">This tab is scaffolded for AWS parity and will be wired to API behavior in the next increment.</p>
+        {{end}}
+      </section>
+      {{else}}
+      <section class="section">
+        <p class="empty">No keys found. Create your first key from the left panel.</p>
+      </section>
+      {{end}}
+    </main>
+  </div>
 </body>
 </html>

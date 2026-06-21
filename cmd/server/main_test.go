@@ -117,6 +117,67 @@ func TestDecryptLegacyBlobCompatibility(t *testing.T) {
 	}
 }
 
+func TestGetKeyPolicyReturnsDefaultPolicy(t *testing.T) {
+	k := kmsKey{
+		ID:           "go-kms-default-key",
+		ARN:          "arn:aws:kms:local:000000000000:key/go-kms-default-key",
+		MasterKeyRaw: bytes.Repeat([]byte{4}, 32),
+		Description:  "test key",
+		CreatedAt:    time.Unix(1, 0).UTC(),
+		Enabled:      true,
+	}
+	s := &server{cfg: config{}, store: &inMemoryStore{k: k}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleKMS)
+
+	resp := callKMS(t, mux, "TrentService.GetKeyPolicy", map[string]any{
+		"KeyId":      k.ID,
+		"PolicyName": "default",
+	})
+
+	policy, ok := resp["Policy"].(string)
+	if !ok {
+		t.Fatalf("missing Policy in response: %#v", resp)
+	}
+	if policy == "" {
+		t.Fatalf("expected non-empty policy")
+	}
+}
+
+func TestPutAndGetKeyPolicy(t *testing.T) {
+	k := kmsKey{
+		ID:           "go-kms-default-key",
+		ARN:          "arn:aws:kms:local:000000000000:key/go-kms-default-key",
+		MasterKeyRaw: bytes.Repeat([]byte{5}, 32),
+		Description:  "test key",
+		CreatedAt:    time.Unix(1, 0).UTC(),
+		Enabled:      true,
+	}
+	s := &server{cfg: config{}, store: &inMemoryStore{k: k}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleKMS)
+
+	wantPolicy := `{"Version":"2012-10-17","Statement":[{"Sid":"AllowAll","Effect":"Allow","Principal":{"AWS":"*"},"Action":"kms:*","Resource":"*"}]}`
+	callKMS(t, mux, "TrentService.PutKeyPolicy", map[string]any{
+		"KeyId":      k.ID,
+		"PolicyName": "default",
+		"Policy":     wantPolicy,
+	})
+
+	resp := callKMS(t, mux, "TrentService.GetKeyPolicy", map[string]any{
+		"KeyId":      k.ID,
+		"PolicyName": "default",
+	})
+
+	gotPolicy, ok := resp["Policy"].(string)
+	if !ok {
+		t.Fatalf("missing Policy in response: %#v", resp)
+	}
+	if !bytes.Contains([]byte(gotPolicy), []byte("AllowAll")) {
+		t.Fatalf("policy not persisted: %s", gotPolicy)
+	}
+}
+
 func callKMS(t *testing.T, h http.Handler, target string, body map[string]any) map[string]any {
 	t.Helper()
 	rec := post(t, h, target, body)
