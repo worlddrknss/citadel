@@ -24,21 +24,21 @@ type auditExplorerRow struct {
 }
 
 type auditExplorerView struct {
-	Rows           []auditExplorerRow
-	SelectedServer string
-	Query          string
-	ActorFilter    string
-	SelectedEvent  *auditExplorerRow
-	TotalCount     int
-	VisibleCount   int
-	KMSCount       int
-	SecretsCount   int
-	ErrorCount     int
-	OkCount        int
+	Rows            []auditExplorerRow
+	SelectedServer  string
+	Query           string
+	ActorFilter     string
+	SelectedEvent   *auditExplorerRow
+	TotalCount      int
+	VisibleCount    int
+	KMSCount        int
+	SecretsCount    int
+	ErrorCount      int
+	OkCount         int
 	CurrentUserName string
 	CurrentUserRole string
-	Flash          string
-	Error          string
+	Flash           string
+	Error           string
 }
 
 func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
@@ -62,14 +62,14 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	actorFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("actor")))
 	selectedEventID := strings.TrimSpace(r.URL.Query().Get("event"))
 	view := auditExplorerView{
-		SelectedServer: serviceFilter,
-		Query:          strings.TrimSpace(r.URL.Query().Get("q")),
-		ActorFilter:    strings.TrimSpace(r.URL.Query().Get("actor")),
-		TotalCount:     len(records),
+		SelectedServer:  serviceFilter,
+		Query:           strings.TrimSpace(r.URL.Query().Get("q")),
+		ActorFilter:     strings.TrimSpace(r.URL.Query().Get("actor")),
+		TotalCount:      len(records),
 		CurrentUserName: session.DisplayName,
 		CurrentUserRole: session.Role,
-		Flash:          r.URL.Query().Get("ok"),
-		Error:          r.URL.Query().Get("err"),
+		Flash:           r.URL.Query().Get("ok"),
+		Error:           r.URL.Query().Get("err"),
 	}
 	if view.SelectedServer == "" {
 		view.SelectedServer = "all"

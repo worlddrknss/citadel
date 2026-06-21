@@ -5,8 +5,8 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"crypto/subtle"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
@@ -29,7 +29,7 @@ const (
 )
 
 var (
-	errUnsupported = errors.New("unsupported operation")
+	errUnsupported  = errors.New("unsupported operation")
 	errAccessDenied = errors.New("access denied")
 )
 
@@ -2560,11 +2560,11 @@ func defaultKeyPolicy(key kmsKey) string {
 		"Id":      "go-kms-default-policy-" + key.ID,
 		"Statement": []map[string]any{
 			{
-				"Sid":    "EnableRootPermissions",
-				"Effect": "Allow",
+				"Sid":       "EnableRootPermissions",
+				"Effect":    "Allow",
 				"Principal": "*",
-				"Action":   "kms:*",
-				"Resource": "*",
+				"Action":    "kms:*",
+				"Resource":  "*",
 			},
 		},
 	}

@@ -187,65 +187,65 @@ func (s *server) handleSecretsAdmin(w http.ResponseWriter, r *http.Request) {
 		if !secretVisibleToSession(session, view.SelectedSecretID) {
 			view.Error = "requested secret is outside your tenant scope"
 		} else {
-		meta, err := s.store.DescribeSecret(r.Context(), view.SelectedSecretID)
-		if err != nil {
-			view.Error = err.Error()
-		} else {
-			selected := adminSecretView{
-				Name:              meta.Name,
-				ARN:               meta.ARN,
-				Description:       meta.Description,
-				KMSKeyID:          meta.KMSKeyID,
-				CreatedAt:         meta.CreatedAt.UTC().Format("2006-01-02 15:04:05 MST"),
-				LastChangedAt:     meta.LastChangedDate.UTC().Format("2006-01-02 15:04:05 MST"),
-				CurrentVersionID:  meta.CurrentVersionID,
-				PreviousVersionID: meta.PreviousVersionID,
-				Tags:              append([]secretTag(nil), meta.Tags...),
-				PolicyDocument:    meta.PolicyDocument,
-				RotationEnabled:   meta.RotationEnabled,
-				RotationLambdaARN: meta.RotationLambdaARN,
-				RotationDays:      meta.RotationDays,
-				State:             adminSecretState(meta),
-				IsSelected:        true,
-			}
-			if meta.DeletedDate != nil {
-				selected.DeletionDate = meta.DeletedDate.UTC().Format(time.RFC3339)
-			}
-			if meta.NextRotationDate != nil {
-				selected.NextRotationDate = meta.NextRotationDate.UTC().Format(time.RFC3339)
-			}
-			versions, err := s.store.ListSecretVersionIDs(r.Context(), meta.Name)
-			if err == nil {
-				for _, version := range versions {
-					selected.VersionRows = append(selected.VersionRows, adminSecretVersionView{VersionID: version.VersionID, Stages: strings.Join(version.VersionStages, ", "), CreatedAt: version.CreatedDate.UTC().Format("2006-01-02 15:04:05 MST")})
-				}
+			meta, err := s.store.DescribeSecret(r.Context(), view.SelectedSecretID)
+			if err != nil {
+				view.Error = err.Error()
 			} else {
-				stageMap := secretVersionStagesMap(meta)
-				versionIDs := make([]string, 0, len(stageMap))
-				for versionID := range stageMap {
-					versionIDs = append(versionIDs, versionID)
+				selected := adminSecretView{
+					Name:              meta.Name,
+					ARN:               meta.ARN,
+					Description:       meta.Description,
+					KMSKeyID:          meta.KMSKeyID,
+					CreatedAt:         meta.CreatedAt.UTC().Format("2006-01-02 15:04:05 MST"),
+					LastChangedAt:     meta.LastChangedDate.UTC().Format("2006-01-02 15:04:05 MST"),
+					CurrentVersionID:  meta.CurrentVersionID,
+					PreviousVersionID: meta.PreviousVersionID,
+					Tags:              append([]secretTag(nil), meta.Tags...),
+					PolicyDocument:    meta.PolicyDocument,
+					RotationEnabled:   meta.RotationEnabled,
+					RotationLambdaARN: meta.RotationLambdaARN,
+					RotationDays:      meta.RotationDays,
+					State:             adminSecretState(meta),
+					IsSelected:        true,
 				}
-				sort.Strings(versionIDs)
-				for _, versionID := range versionIDs {
-					selected.VersionRows = append(selected.VersionRows, adminSecretVersionView{VersionID: versionID, Stages: strings.Join(stageMap[versionID], ", ")})
+				if meta.DeletedDate != nil {
+					selected.DeletionDate = meta.DeletedDate.UTC().Format(time.RFC3339)
 				}
-			}
-			if strings.TrimSpace(selected.PolicyDocument) == "" {
-				if policy, err := s.store.GetSecretResourcePolicy(r.Context(), meta.Name); err == nil {
-					selected.PolicyDocument = policy
+				if meta.NextRotationDate != nil {
+					selected.NextRotationDate = meta.NextRotationDate.UTC().Format(time.RFC3339)
 				}
-			}
-			if value, err := s.store.GetSecretValue(r.Context(), meta.Name, "", currentVersionStage); err == nil {
-				selected.CurrentStages = value.VersionStages
-				if value.SecretString != nil {
-					selected.CurrentSecretString = *value.SecretString
+				versions, err := s.store.ListSecretVersionIDs(r.Context(), meta.Name)
+				if err == nil {
+					for _, version := range versions {
+						selected.VersionRows = append(selected.VersionRows, adminSecretVersionView{VersionID: version.VersionID, Stages: strings.Join(version.VersionStages, ", "), CreatedAt: version.CreatedDate.UTC().Format("2006-01-02 15:04:05 MST")})
+					}
 				} else {
-					selected.CurrentSecretBinary = value.SecretBinary
-					selected.HasBinaryValue = true
+					stageMap := secretVersionStagesMap(meta)
+					versionIDs := make([]string, 0, len(stageMap))
+					for versionID := range stageMap {
+						versionIDs = append(versionIDs, versionID)
+					}
+					sort.Strings(versionIDs)
+					for _, versionID := range versionIDs {
+						selected.VersionRows = append(selected.VersionRows, adminSecretVersionView{VersionID: versionID, Stages: strings.Join(stageMap[versionID], ", ")})
+					}
 				}
+				if strings.TrimSpace(selected.PolicyDocument) == "" {
+					if policy, err := s.store.GetSecretResourcePolicy(r.Context(), meta.Name); err == nil {
+						selected.PolicyDocument = policy
+					}
+				}
+				if value, err := s.store.GetSecretValue(r.Context(), meta.Name, "", currentVersionStage); err == nil {
+					selected.CurrentStages = value.VersionStages
+					if value.SecretString != nil {
+						selected.CurrentSecretString = *value.SecretString
+					} else {
+						selected.CurrentSecretBinary = value.SecretBinary
+						selected.HasBinaryValue = true
+					}
+				}
+				view.SelectedSecret = &selected
 			}
-			view.SelectedSecret = &selected
-		}
 		}
 	}
 
