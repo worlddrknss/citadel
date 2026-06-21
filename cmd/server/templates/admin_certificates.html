@@ -95,6 +95,27 @@
     .muted{color:var(--c-muted)}
     .sm{font-size:12px}
     .mono{font-family:var(--mono);font-size:12px;word-break:break-all}
+    .ph-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .ph-badges{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+    .badge-type{background:var(--c-blue-lo);color:var(--c-blue);border-color:#bcdcf5}
+    .badge-type::before{display:none}
+    .kv-card{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);box-shadow:var(--sh-sm);overflow:hidden}
+    .kv-card h3{font-size:13px;font-weight:700;padding:13px 16px;border-bottom:1px solid var(--c-border-lo);background:#fafbfc;margin:0}
+    .kv-row{display:flex;gap:12px;padding:10px 16px;border-bottom:1px solid var(--c-border-lo);font-size:13px}
+    .kv-row:last-child{border-bottom:none}
+    .kv-lbl{width:128px;flex-shrink:0;color:var(--c-muted);font-weight:600}
+    .kv-val{flex:1;min-width:0;word-break:break-word}
+    .tabs-bar{display:flex;gap:2px;border-bottom:1px solid var(--c-border);margin:22px 0 0;overflow-x:auto}
+    .tab-lnk{padding:10px 16px;font-size:13px;font-weight:600;color:var(--c-muted);border-bottom:2px solid transparent;white-space:nowrap}
+    .tab-lnk:hover{color:var(--c-text);text-decoration:none}
+    .tab-lnk.active{color:var(--c-blue);border-bottom-color:var(--c-blue)}
+    .tab-body{padding:20px 0 0}
+    .code-block{background:#0f1626;color:#d6e2f5;border-radius:var(--r);padding:16px;font-family:var(--mono);font-size:12px;line-height:1.55;white-space:pre;overflow-x:auto;border:1px solid #1e2940}
+    .kpi{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+    .kpi-card{flex:1;min-width:150px;background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);padding:14px 16px;box-shadow:var(--sh-sm)}
+    .kpi-num{font-size:24px;font-weight:700;letter-spacing:-.02em}
+    .kpi-lbl{font-size:12px;color:var(--c-muted);margin-top:2px}
+    .link-row{display:inline-flex;align-items:center;gap:6px}
   </style>
 </head>
 <body>
@@ -141,125 +162,192 @@
         {{end}}
       </div>
       <div class="tb-actions">
-        {{if .TenantScope}}<span class="scope-badge">🏷 {{range $i,$t := .TenantScope}}{{if $i}}, {{end}}{{$t}}{{end}}</span>{{end}}
+        {{if .AccountScope}}<span class="scope-badge">🏷 {{range $i,$t := .AccountScope}}{{if $i}}, {{end}}{{$t}}{{end}}</span>{{end}}
       </div>
     </header>
 
     {{if .Flash}}<div class="alerts"><div class="flash ok">✓ {{.Flash}}</div></div>{{end}}
     {{if .Error}}<div class="alerts"><div class="flash err">⚠ {{.Error}}</div></div>{{end}}
 
+    {{if .SelectedCA}}
+    {{/* ============================= CA DETAIL VIEW ============================= */}}
     <div class="ph">
       <div>
-        <h1 class="ph-title">Certificate Management</h1>
-        <p class="ph-sub">Private CA lifecycle and certificate issuance managed with KMS-backed keys.</p>
+        <h1 class="ph-title">{{if .SelectedCA.CommonName}}{{.SelectedCA.CommonName}}{{else}}{{.SelectedCA.CAID}}{{end}}</h1>
+        <p class="ph-sub mono">{{.SelectedCA.CAID}}</p>
+        <div class="ph-badges">
+          <span class="badge badge-type">{{.SelectedCA.Type}}</span>
+          {{if eq .SelectedCA.State "ACTIVE"}}<span class="badge badge-active">{{.SelectedCA.State}}</span>
+          {{else if eq .SelectedCA.State "REVOKED"}}<span class="badge badge-rev">{{.SelectedCA.State}}</span>
+          {{else}}<span class="badge badge-other">{{.SelectedCA.State}}</span>{{end}}
+          <span class="muted sm">Expires {{.SelectedCA.NotAfter}}</span>
+        </div>
+      </div>
+      <div class="ph-actions">
+        <a class="btn btn-s" href="/certificates">← All authorities</a>
+        <a class="btn btn-s" href="/certificates?download=ca_cert&amp;ca_id={{.SelectedCA.CAID}}">⬇ Download CA cert</a>
+        <a class="btn btn-s" href="/audit">📋 Audit</a>
       </div>
     </div>
 
     <div class="content">
+      <div class="kpi">
+        <div class="kpi-card"><div class="kpi-num">{{.SelectedCA.CertCount}}</div><div class="kpi-lbl">Certificates issued</div></div>
+        <div class="kpi-card"><div class="kpi-num">{{.ActiveCertCount}}</div><div class="kpi-lbl">Currently active</div></div>
+        <div class="kpi-card"><div class="kpi-num">{{.SelectedCA.PathLength}}</div><div class="kpi-lbl">Path length</div></div>
+      </div>
+
       <div class="g2">
-        <section class="fc">
-          <h3>Create Certificate Authority</h3>
-          {{if .CanAdmin}}
-          <form method="post" action="/certificates?action=create_ca">
-            <div class="row">
-              <div><label>Type</label><select name="ca_type"><option value="ROOT">ROOT</option><option value="SUBORDINATE">SUBORDINATE</option></select></div>
-              <div><label>Key Algorithm</label><select name="key_algorithm"><option value="RSA_2048">RSA_2048</option><option value="RSA_3072">RSA_3072</option><option value="RSA_4096">RSA_4096</option><option value="EC_prime256v1">EC_prime256v1</option><option value="EC_secp384r1">EC_secp384r1</option></select></div>
-            </div>
-            <div class="row" style="margin-top:10px;">
-              <div><label>Signing Algorithm</label><select name="signing_algorithm"><option value="">Auto</option><option value="RSASSA_PKCS1_V1_5_SHA_256">RSASSA_PKCS1_V1_5_SHA_256</option><option value="ECDSA_SHA_256">ECDSA_SHA_256</option><option value="ECDSA_SHA_384">ECDSA_SHA_384</option></select></div>
-              <div><label>Country</label><input name="country" placeholder="US"></div>
-            </div>
-            <div class="row" style="margin-top:10px;">
-              <div><label>Organization</label><input name="organization" placeholder="Citadel"></div>
-              <div><label>Common Name</label><input name="common_name" placeholder="Citadel Root CA" required></div>
-            </div>
-            <div class="f-actions"><button class="btn btn-p" type="submit">+ Create CA</button></div>
-          </form>
-          {{else}}
-          <p class="muted">Admin role required to create certificate authorities.</p>
-          {{end}}
+        <div class="kv-card">
+          <h3>Certificate authority</h3>
+          <div class="kv-row"><div class="kv-lbl">Common name</div><div class="kv-val">{{if .SelectedCA.CommonName}}{{.SelectedCA.CommonName}}{{else}}<span class="muted">—</span>{{end}}</div></div>
+          <div class="kv-row"><div class="kv-lbl">Subject DN</div><div class="kv-val mono">{{.SelectedCA.SubjectDN}}</div></div>
+          <div class="kv-row"><div class="kv-lbl">Type</div><div class="kv-val">{{.SelectedCA.Type}}</div></div>
+          <div class="kv-row"><div class="kv-lbl">Status</div><div class="kv-val">{{.SelectedCA.State}}</div></div>
+          <div class="kv-row"><div class="kv-lbl">Description</div><div class="kv-val">{{if .SelectedCA.Description}}{{.SelectedCA.Description}}{{else}}<span class="muted">—</span>{{end}}</div></div>
+        </div>
+        <div class="kv-card">
+          <h3>Validity &amp; identifiers</h3>
+          <div class="kv-row"><div class="kv-lbl">CA ID</div><div class="kv-val mono">{{.SelectedCA.CAID}}</div></div>
+          <div class="kv-row"><div class="kv-lbl">Signing key</div><div class="kv-val mono"><a href="/?key_id={{.SelectedCA.KMSKeyID}}">{{.SelectedCA.KMSKeyID}}</a></div></div>
+          <div class="kv-row"><div class="kv-lbl">Valid from</div><div class="kv-val">{{.SelectedCA.NotBefore}}</div></div>
+          <div class="kv-row"><div class="kv-lbl">Expires</div><div class="kv-val">{{.SelectedCA.NotAfter}}</div></div>
+          <div class="kv-row"><div class="kv-lbl">ARN</div><div class="kv-val mono">{{.SelectedCA.ARN}}</div></div>
+        </div>
+      </div>
 
-          <div class="t-card" style="margin-top:16px;">
-            <div class="t-head"><h2>Certificate Authorities</h2><span class="cnt">{{len .CAs}} total</span></div>
-            <table>
-              <thead><tr><th>CA ID</th><th>Type</th><th>Status</th></tr></thead>
-              <tbody>
-                {{if .CAs}}{{range .CAs}}
-                <tr>
-                  <td><a class="mono" href="/certificates?ca_arn={{.ARN}}">{{.CAID}}</a></td>
-                  <td>{{.Type}}</td>
-                  <td>
-                    {{if eq .State "ACTIVE"}}<span class="badge badge-active">{{.State}}</span>
-                    {{else if eq .State "REVOKED"}}<span class="badge badge-rev">{{.State}}</span>
-                    {{else}}<span class="badge badge-other">{{.State}}</span>{{end}}
-                  </td>
-                </tr>
-                {{end}}{{else}}
-                <tr class="empty-row"><td colspan="3">No certificate authorities created yet.</td></tr>
-                {{end}}
-              </tbody>
-            </table>
+      <div class="tabs-bar">
+        <a class="tab-lnk {{if eq .SelectedTab "certificates"}}active{{end}}" href="/certificates?ca_id={{.SelectedCA.CAID}}&amp;tab=certificates">Certificates</a>
+        <a class="tab-lnk {{if eq .SelectedTab "ca-certificate"}}active{{end}}" href="/certificates?ca_id={{.SelectedCA.CAID}}&amp;tab=ca-certificate">CA certificate</a>
+      </div>
+
+      <div class="tab-body">
+        {{if eq .SelectedTab "ca-certificate"}}
+        <section class="fc">
+          <div class="row" style="align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <div><h3 style="margin:0;">CA certificate (PEM)</h3><p class="muted sm" style="margin-top:4px;">Distribute this certificate to clients that must trust certificates issued by this authority.</p></div>
+            <a class="btn btn-s btn-sm" href="/certificates?download=ca_cert&amp;ca_id={{.SelectedCA.CAID}}">⬇ Download</a>
           </div>
+          {{if .SelectedCA.CACertPEM}}<div class="code-block">{{.SelectedCA.CACertPEM}}</div>{{else}}<p class="muted">No certificate material available for this authority.</p>{{end}}
         </section>
-
-        <section class="fc">
-          <h3>Issue Certificate{{if .SelectedCA}} - {{.SelectedCA.CAID}}{{end}}</h3>
-          {{if .SelectedCA}}
+        {{else}}
+        <div class="g2">
+          <section class="fc">
+            <h3>Issue certificate</h3>
             {{if .CanEdit}}
             <form method="post" action="/certificates?action=issue_cert">
               <input type="hidden" name="ca_arn" value="{{.SelectedCA.ARN}}">
+              <input type="hidden" name="ca_id" value="{{.SelectedCA.CAID}}">
+              <input type="hidden" name="return_tab" value="certificates">
               <div class="row">
-                <div><label>Validity Days</label><input name="validity_days" type="number" value="365" min="1" max="3650"></div>
-                <div><label>Signing Algorithm</label><select name="signing_algorithm"><option value="">Auto</option><option value="RSASSA_PKCS1_V1_5_SHA_256">RSASSA_PKCS1_V1_5_SHA_256</option><option value="ECDSA_SHA_256">ECDSA_SHA_256</option><option value="ECDSA_SHA_384">ECDSA_SHA_384</option></select></div>
+                <div><label>Validity days</label><input name="validity_days" type="number" value="365" min="1" max="3650"></div>
+                <div><label>Signing algorithm</label><select name="signing_algorithm"><option value="">Auto</option><option value="RSASSA_PKCS1_V1_5_SHA_256">RSASSA_PKCS1_V1_5_SHA_256</option><option value="ECDSA_SHA_256">ECDSA_SHA_256</option><option value="ECDSA_SHA_384">ECDSA_SHA_384</option></select></div>
               </div>
-              <div class="f-row" style="margin-top:10px;"><label>CSR (PEM)</label><textarea name="csr_pem" placeholder="-----BEGIN CERTIFICATE REQUEST-----" required></textarea></div>
-              <div class="f-actions"><button class="btn btn-p" type="submit">Issue Certificate</button></div>
+              <div class="f-row" style="margin-top:10px;"><label>Certificate signing request (PEM)</label><textarea name="csr_pem" placeholder="-----BEGIN CERTIFICATE REQUEST-----" required></textarea></div>
+              <div class="f-actions"><button class="btn btn-p" type="submit">Issue certificate</button></div>
             </form>
             {{else}}
             <p class="muted">Editor role required to issue certificates.</p>
             {{end}}
-          {{else}}
-          <p class="muted">Select or create a CA first.</p>
-          {{end}}
+          </section>
 
-          <div class="t-card" style="margin-top:16px;">
-            <div class="t-head"><h2>Issued Certificates</h2><span class="cnt">{{len .Certificates}} total</span></div>
+          <section class="t-card" style="align-self:start;">
+            <div class="t-head"><h2>Issued certificates</h2><span class="cnt">{{.SelectedCA.CertCount}} total</span></div>
             <table>
-              <thead><tr><th>Cert ID</th><th>Status</th><th>Not After</th><th>Actions</th></tr></thead>
+              <thead><tr><th>Certificate</th><th>Status</th><th>Expires</th><th style="text-align:right;">Actions</th></tr></thead>
               <tbody>
                 {{if .Certificates}}{{range .Certificates}}
                 <tr>
-                  <td class="mono">{{.CertID}}</td>
+                  <td><div class="mono">{{.CertID}}</div>{{if .Serial}}<div class="muted sm">Serial {{.Serial}}</div>{{end}}</td>
                   <td>
                     {{if eq .Status "ISSUED"}}<span class="badge badge-active">{{.Status}}</span>
                     {{else if eq .Status "REVOKED"}}<span class="badge badge-rev">{{.Status}}</span>
                     {{else}}<span class="badge badge-other">{{.Status}}</span>{{end}}
+                    {{if and (eq .Status "REVOKED") .RevocationReason}}<div class="muted sm">{{.RevocationReason}}</div>{{end}}
                   </td>
                   <td>{{.NotAfter}}</td>
-                  <td>
-                    {{if and $.CanAdmin (ne .Status "REVOKED")}}
-                    <form method="post" action="/certificates?action=revoke_cert" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-                      {{if $.SelectedCA}}<input type="hidden" name="ca_arn" value="{{$.SelectedCA.ARN}}">{{end}}
-                      <input type="hidden" name="cert_id" value="{{.CertID}}">
-                      <input name="reason" placeholder="Reason" style="width:140px">
-                      <button class="btn btn-d btn-sm" type="submit">Revoke</button>
-                    </form>
-                    {{else if eq .Status "REVOKED"}}
-                    <span class="muted sm">{{.RevocationReason}}</span>
-                    {{else}}
-                    <span class="muted sm">Admin role required</span>
-                    {{end}}
+                  <td style="text-align:right;">
+                    <div class="row" style="justify-content:flex-end;gap:6px;">
+                      <a class="btn btn-s btn-sm" href="/certificates?download=cert&amp;cert_id={{.CertID}}">⬇ PEM</a>
+                      {{if and $.CanAdmin (ne .Status "REVOKED")}}
+                      <form method="post" action="/certificates?action=revoke_cert" style="display:flex;gap:6px;align-items:center;" onsubmit="return confirm('Revoke certificate {{.CertID}}? This cannot be undone.');">
+                        <input type="hidden" name="ca_id" value="{{$.SelectedCA.CAID}}">
+                        <input type="hidden" name="cert_id" value="{{.CertID}}">
+                        <input type="hidden" name="return_tab" value="certificates">
+                        <input name="reason" placeholder="Reason" style="width:120px">
+                        <button class="btn btn-d btn-sm" type="submit">Revoke</button>
+                      </form>
+                      {{end}}
+                    </div>
                   </td>
                 </tr>
                 {{end}}{{else}}
-                <tr class="empty-row"><td colspan="4">No certificates issued for the selected CA.</td></tr>
+                <tr class="empty-row"><td colspan="4">No certificates issued by this authority yet.</td></tr>
                 {{end}}
               </tbody>
             </table>
-          </div>
-        </section>
+          </section>
+        </div>
+        {{end}}
       </div>
     </div>
+
+    {{else}}
+    {{/* ============================= CA LIST VIEW ============================= */}}
+    <div class="ph">
+      <div>
+        <h1 class="ph-title">Certificate authorities</h1>
+        <p class="ph-sub">Private CA lifecycle and certificate issuance backed by KMS-managed signing keys.</p>
+      </div>
+    </div>
+
+    <div class="content">
+      {{if .CanAdmin}}
+      <details class="fc" style="margin-bottom:16px;"{{if not .CAs}} open{{end}}>
+        <summary style="cursor:pointer;font-size:14px;font-weight:700;list-style:none;">+ Create certificate authority</summary>
+        <form method="post" action="/certificates?action=create_ca" style="margin-top:16px;">
+          <div class="row">
+            <div><label>Type</label><select name="ca_type"><option value="ROOT">ROOT</option><option value="SUBORDINATE">SUBORDINATE</option></select></div>
+            <div><label>Key algorithm</label><select name="key_algorithm"><option value="RSA_2048">RSA_2048</option><option value="RSA_3072">RSA_3072</option><option value="RSA_4096">RSA_4096</option><option value="EC_prime256v1">EC_prime256v1</option><option value="EC_secp384r1">EC_secp384r1</option></select></div>
+          </div>
+          <div class="row" style="margin-top:10px;">
+            <div><label>Signing algorithm</label><select name="signing_algorithm"><option value="">Auto</option><option value="RSASSA_PKCS1_V1_5_SHA_256">RSASSA_PKCS1_V1_5_SHA_256</option><option value="ECDSA_SHA_256">ECDSA_SHA_256</option><option value="ECDSA_SHA_384">ECDSA_SHA_384</option></select></div>
+            <div><label>Country</label><input name="country" placeholder="US"></div>
+          </div>
+          <div class="row" style="margin-top:10px;">
+            <div><label>Organization</label><input name="organization" placeholder="Citadel"></div>
+            <div><label>Common name</label><input name="common_name" placeholder="Citadel Root CA" required></div>
+          </div>
+          <div class="f-actions"><button class="btn btn-p" type="submit">+ Create CA</button></div>
+        </form>
+      </details>
+      {{end}}
+
+      <div class="t-card">
+        <div class="t-head"><h2>Certificate authorities</h2><span class="cnt">{{len .CAs}} total</span></div>
+        <table>
+          <thead><tr><th>Common name</th><th>CA ID</th><th>Type</th><th>Status</th><th>Expires</th></tr></thead>
+          <tbody>
+            {{if .CAs}}{{range .CAs}}
+            <tr>
+              <td><a href="/certificates?ca_id={{.CAID}}">{{if .CommonName}}{{.CommonName}}{{else}}{{.CAID}}{{end}}</a></td>
+              <td><a class="mono" href="/certificates?ca_id={{.CAID}}">{{.CAID}}</a></td>
+              <td>{{.Type}}</td>
+              <td>
+                {{if eq .State "ACTIVE"}}<span class="badge badge-active">{{.State}}</span>
+                {{else if eq .State "REVOKED"}}<span class="badge badge-rev">{{.State}}</span>
+                {{else}}<span class="badge badge-other">{{.State}}</span>{{end}}
+              </td>
+              <td class="muted sm">{{.NotAfter}}</td>
+            </tr>
+            {{end}}{{else}}
+            <tr class="empty-row"><td colspan="5">No certificate authorities created yet.{{if .CanAdmin}} Use the form above to create your first CA.{{end}}</td></tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {{end}}
   </div>
 </div>
 </body>

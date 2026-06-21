@@ -52,7 +52,7 @@ func (s *server) handleCreateCertificateAuthority(w http.ResponseWriter, r *http
 
 	// For now, record the CA as CREATING and will need root cert to transition to ACTIVE
 	caID := randomHex(12)
-	caARN := fmt.Sprintf("arn:aws:acm-pca:local:000000000000:certificate-authority/%s", caID)
+	caARN := s.serverARN("acm-pca", "certificate-authority/"+caID)
 
 	// TODO: Build and self-sign root cert or accept cert for subordinate
 	// For Phase A: Create CA and generate self-signed root cert
@@ -109,6 +109,9 @@ func (s *server) handleCreateCertificateAuthority(w http.ResponseWriter, r *http
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "failed to store CA")
 		return
 	}
+
+	// Attach a descriptive alias to the CA signing key so it is identifiable in KMS.
+	s.assignCAKeyAlias(r.Context(), signingKey.ID, req.CertificateAuthorityConfiguration.Subject.CommonName, caID)
 
 	// Record audit event with CA reference
 	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: signingKey.ID, Result: "ok", Actor: r.RemoteAddr})
@@ -232,7 +235,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 
 	// Store the certificate in the database
 	certID := randomHex(12)
-	certARN := fmt.Sprintf("arn:aws:acm-pca:local:000000000000:certificate/%s", certID)
+	certARN := s.serverARN("acm-pca", "certificate/"+certID)
 
 	// Parse certificate to get serial number and validity
 	parsedCert, err := x509.ParseCertificate(certDER)

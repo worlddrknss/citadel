@@ -11,7 +11,7 @@ func (s *dbStore) CreateCertificateAuthority(ctx context.Context, ca pcaCertific
 	query := `
 		INSERT INTO pca_certificate_authorities (
 			ca_id, urn, type, kms_key_id, subject_dn, state, ca_cert_b64,
-			path_length, not_before, not_after, description, tenant, created_at, updated_at
+			path_length, not_before, not_after, description, account, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11, $12, $13, $14
@@ -19,7 +19,7 @@ func (s *dbStore) CreateCertificateAuthority(ctx context.Context, ca pcaCertific
 	`
 	_, err := s.db.ExecContext(ctx, query,
 		ca.CAID, ca.ARN, ca.Type, ca.KMSKeyID, ca.SubjectDN, ca.State, ca.CACertB64,
-		ca.PathLength, ca.NotBefore, ca.NotAfter, ca.Description, ca.Tenant, ca.CreatedAt, ca.UpdatedAt,
+		ca.PathLength, ca.NotBefore, ca.NotAfter, ca.Description, ca.Account, ca.CreatedAt, ca.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert CA: %w", err)
@@ -31,7 +31,7 @@ func (s *dbStore) CreateCertificateAuthority(ctx context.Context, ca pcaCertific
 func (s *dbStore) DescribeCertificateAuthority(ctx context.Context, arn string) (pcaCertificateAuthority, error) {
 	query := `
 		SELECT ca_id, urn, type, kms_key_id, subject_dn, state, ca_cert_b64,
-		       path_length, not_before, not_after, description, tenant, created_at, updated_at
+		       path_length, not_before, not_after, description, account, created_at, updated_at
 		FROM pca_certificate_authorities
 		WHERE urn = $1
 	`
@@ -40,7 +40,7 @@ func (s *dbStore) DescribeCertificateAuthority(ctx context.Context, arn string) 
 	var pathLength sql.NullInt32
 	err := row.Scan(
 		&ca.CAID, &ca.ARN, &ca.Type, &ca.KMSKeyID, &ca.SubjectDN, &ca.State, &ca.CACertB64,
-		&pathLength, &ca.NotBefore, &ca.NotAfter, &ca.Description, &ca.Tenant, &ca.CreatedAt, &ca.UpdatedAt,
+		&pathLength, &ca.NotBefore, &ca.NotAfter, &ca.Description, &ca.Account, &ca.CreatedAt, &ca.UpdatedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -55,11 +55,11 @@ func (s *dbStore) DescribeCertificateAuthority(ctx context.Context, arn string) 
 	return ca, nil
 }
 
-// ListCertificateAuthorities returns all CAs for the current tenant
+// ListCertificateAuthorities returns all CAs for the current account
 func (s *dbStore) ListCertificateAuthorities(ctx context.Context) ([]pcaCertificateAuthority, error) {
 	query := `
 		SELECT ca_id, urn, type, kms_key_id, subject_dn, state, ca_cert_b64,
-		       path_length, not_before, not_after, description, tenant, created_at, updated_at
+		       path_length, not_before, not_after, description, account, created_at, updated_at
 		FROM pca_certificate_authorities
 		ORDER BY created_at DESC
 	`
@@ -75,7 +75,7 @@ func (s *dbStore) ListCertificateAuthorities(ctx context.Context) ([]pcaCertific
 		var pathLength sql.NullInt32
 		err := rows.Scan(
 			&ca.CAID, &ca.ARN, &ca.Type, &ca.KMSKeyID, &ca.SubjectDN, &ca.State, &ca.CACertB64,
-			&pathLength, &ca.NotBefore, &ca.NotAfter, &ca.Description, &ca.Tenant, &ca.CreatedAt, &ca.UpdatedAt,
+			&pathLength, &ca.NotBefore, &ca.NotAfter, &ca.Description, &ca.Account, &ca.CreatedAt, &ca.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan CA: %w", err)

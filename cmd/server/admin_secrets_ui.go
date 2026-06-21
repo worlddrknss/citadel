@@ -54,7 +54,7 @@ type adminSecretsPageView struct {
 	SelectedTab      string
 	CurrentUserName  string
 	CurrentUserRole  string
-	TenantScope      []string
+	AccountScope     []string
 	CanEdit          bool
 	CanAdmin         bool
 	Flash            string
@@ -80,7 +80,7 @@ func (s *server) handleSecretsAdmin(w http.ResponseWriter, r *http.Request) {
 			secretID = strings.TrimSpace(r.FormValue("name"))
 		}
 		if secretID != "" && !secretVisibleToSession(session, secretID) {
-			s.redirectAdminSecretsError(w, r, "requested secret is outside your tenant scope")
+			s.redirectAdminSecretsError(w, r, "requested secret is outside your account scope")
 			return
 		}
 	}
@@ -145,7 +145,7 @@ func (s *server) handleSecretsAdmin(w http.ResponseWriter, r *http.Request) {
 		SecretCount:      len(secrets),
 		CurrentUserName:  session.DisplayName,
 		CurrentUserRole:  session.Role,
-		TenantScope:      append([]string(nil), session.Tenants...),
+		AccountScope:     append([]string(nil), session.Accounts...),
 		CanEdit:          uiCanEdit(session),
 		CanAdmin:         uiCanAdmin(session),
 		SelectedSecretID: strings.TrimSpace(r.URL.Query().Get("secret_id")),
@@ -185,7 +185,7 @@ func (s *server) handleSecretsAdmin(w http.ResponseWriter, r *http.Request) {
 
 	if view.SelectedSecretID != "" {
 		if !secretVisibleToSession(session, view.SelectedSecretID) {
-			view.Error = "requested secret is outside your tenant scope"
+			view.Error = "requested secret is outside your account scope"
 		} else {
 			meta, err := s.store.DescribeSecret(r.Context(), view.SelectedSecretID)
 			if err != nil {

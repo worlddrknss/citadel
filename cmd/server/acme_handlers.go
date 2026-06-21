@@ -275,7 +275,7 @@ func (s *server) handleACMEFinalize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Use default CA (Citadel root) to issue certificate
-	caARN := "arn:aws:acm-pca:local:000000000000:certificate-authority/citadel-root"
+	caARN := s.serverARN("acm-pca", "certificate-authority/citadel-root")
 	ca, err := s.store.DescribeCertificateAuthority(r.Context(), caARN)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusInternalServerError, "InternalServerError", "failed to load CA")

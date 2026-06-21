@@ -22,7 +22,25 @@ type uiUserConfig struct {
 	PasswordHash string   `json:"passwordHash"`
 	Role         string   `json:"role"`
 	DisplayName  string   `json:"displayName"`
-	Tenants      []string `json:"tenants"`
+	Accounts     []string `json:"accounts"`
+}
+
+// UnmarshalJSON accepts both the current "accounts" key and the legacy "tenants"
+// key so previously persisted user configuration (including SOPS-encrypted env
+// JSON) keeps working after the tenant->account rename.
+func (u *uiUserConfig) UnmarshalJSON(data []byte) error {
+	type alias uiUserConfig
+	aux := struct {
+		*alias
+		LegacyTenants []string `json:"tenants"`
+	}{alias: (*alias)(u)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if len(u.Accounts) == 0 && len(aux.LegacyTenants) > 0 {
+		u.Accounts = aux.LegacyTenants
+	}
+	return nil
 }
 
 // storedCredential returns the secret used to verify a login attempt. An
@@ -40,7 +58,7 @@ type uiSession struct {
 	Username    string
 	Role        string
 	DisplayName string
-	Tenants     []string
+	Accounts    []string
 	CreatedAt   time.Time
 	LastSeenAt  time.Time
 }
@@ -83,7 +101,7 @@ func loadUIUsersFromEnv() (map[string]uiUserConfig, error) {
 		Password:    password,
 		Role:        envOrDefault("KMS_UI_ROLE", "admin"),
 		DisplayName: envOrDefault("KMS_UI_DISPLAY_NAME", "Admin"),
-		Tenants:     splitCommaList(os.Getenv("KMS_UI_TENANTS")),
+		Accounts:    splitCommaList(envOrDefault("KMS_UI_ACCOUNTS", os.Getenv("KMS_UI_TENANTS"))),
 	}})
 }
 
@@ -97,7 +115,7 @@ func normalizeUIUsers(users []uiUserConfig) (map[string]uiUserConfig, error) {
 		if user.DisplayName == "" {
 			user.DisplayName = user.Username
 		}
-		user.Tenants = normalizeTenants(user.Tenants)
+		user.Accounts = normalizeAccounts(user.Accounts)
 		if user.Username == "" || (user.Password == "" && user.PasswordHash == "") {
 			return nil, errors.New("ui users require username and password (or passwordHash)")
 		}
@@ -160,7 +178,7 @@ func (s *server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	sessionID := randomHex(24)
 	now := time.Now().UTC()
-	session := uiSession{SessionID: sessionID, Username: user.Username, Role: user.Role, DisplayName: user.DisplayName, Tenants: append([]string(nil), user.Tenants...), CreatedAt: now, LastSeenAt: now}
+	session := uiSession{SessionID: sessionID, Username: user.Username, Role: user.Role, DisplayName: user.DisplayName, Accounts: append([]string(nil), user.Accounts...), CreatedAt: now, LastSeenAt: now}
 	runtime.mu.Lock()
 	runtime.sessions[sessionID] = session
 	runtime.mu.Unlock()
@@ -263,7 +281,7 @@ func sanitizeAdminNextPath(raw string) string {
 	return "/"
 }
 
-func normalizeTenants(values []string) []string {
+func normalizeAccounts(values []string) []string {
 	out := make([]string, 0, len(values))
 	seen := map[string]struct{}{}
 	for _, value := range values {

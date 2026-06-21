@@ -58,6 +58,9 @@ type config struct {
 	tlsCertFile       string
 	tlsKeyFile        string
 
+	awsRegion    string
+	awsAccountID string
+
 	legacyKeyID     string
 	legacyMasterKey []byte
 }
@@ -72,6 +75,7 @@ type keyStore interface {
 	ResolveByID(ctx context.Context, keyID string) (kmsKey, error)
 	ResolveDefault(ctx context.Context) (kmsKey, error)
 	EnsureBootstrap(ctx context.Context, k kmsKey) error
+	DeploymentIdentity() (region, accountID string)
 	CreateKey(ctx context.Context, description, keyUsage, keySpec string) (kmsKey, error)
 	ListKeys(ctx context.Context) ([]kmsKey, error)
 	GetKeyPolicy(ctx context.Context, keyID, policyName string) (string, error)
@@ -108,9 +112,9 @@ type keyStore interface {
 	ListUIUsers(ctx context.Context) ([]uiUserConfig, error)
 	UpsertUIUser(ctx context.Context, user uiUserConfig) error
 	DeleteUIUser(ctx context.Context, username string) error
-	ListUITenants(ctx context.Context) ([]string, error)
-	UpsertUITenant(ctx context.Context, tenant string) error
-	DeleteUITenant(ctx context.Context, tenant string) error
+	ListUIAccounts(ctx context.Context) ([]string, error)
+	UpsertUIAccount(ctx context.Context, account string) error
+	DeleteUIAccount(ctx context.Context, account string) error
 
 	// Private CA (acm-pca) methods
 	CreateCertificateAuthority(ctx context.Context, ca pcaCertificateAuthority) error
@@ -127,6 +131,8 @@ type dbStore struct {
 	wrappingKey       []byte
 	legacyWrappingKey []byte
 	auditHMACKey      []byte
+	region            string
+	accountID         string
 }
 
 type inMemoryStore struct {
@@ -141,7 +147,9 @@ type inMemoryStore struct {
 	auditSeq     int64
 	auditHMACKey []byte
 	uiUsers      map[string]uiUserConfig
-	uiTenants    map[string]struct{}
+	uiAccounts   map[string]struct{}
+	region       string
+	accountID    string
 }
 
 type kmsKey struct {
@@ -174,7 +182,7 @@ type pcaCertificateAuthority struct {
 	NotBefore   time.Time
 	NotAfter    time.Time
 	Description string
-	Tenant      string
+	Account     string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
@@ -612,7 +620,9 @@ func main() {
 	mux.HandleFunc("/admin", s.handleMasterAdminOverview)
 	mux.HandleFunc("/admin/users", s.handleMasterAdminUsers)
 	mux.HandleFunc("/admin/rbac", s.handleMasterAdminRBAC)
-	mux.HandleFunc("/admin/tenants", s.handleMasterAdminTenants)
+	mux.HandleFunc("/admin/accounts", s.handleMasterAdminAccounts)
+	mux.HandleFunc("/admin/settings", s.handleMasterAdminSettings)
+	mux.HandleFunc("/admin/tenants", s.handleLegacyTenantsRedirect)
 
 	// Compatibility aliases for old UI paths
 	mux.Handle("/admin/login", http.RedirectHandler("/login", http.StatusMovedPermanently))
@@ -699,6 +709,9 @@ func loadConfig() (config, error) {
 	cfg.tlsCertFile = os.Getenv("KMS_TLS_CERT_FILE")
 	cfg.tlsKeyFile = os.Getenv("KMS_TLS_KEY_FILE")
 
+	cfg.awsRegion = strings.TrimSpace(envOrDefault("KMS_AWS_REGION", defaultAWSRegion))
+	cfg.awsAccountID = strings.TrimSpace(os.Getenv("KMS_AWS_ACCOUNT_ID"))
+
 	if hmacKeyB64 := os.Getenv("KMS_AUDIT_HMAC_KEY_B64"); hmacKeyB64 != "" {
 		hmacKey, err := base64.StdEncoding.DecodeString(hmacKeyB64)
 		if err != nil {
@@ -763,15 +776,20 @@ func buildStore(cfg config) (keyStore, func(), error) {
 		if legacyKeyID == "" {
 			legacyKeyID = deriveDeterministicLegacyKeyID(cfg.legacyMasterKey)
 		}
+		region := effectiveRegion(cfg.awsRegion)
+		accountID := cfg.awsAccountID
+		if !isValidAccountID(accountID) {
+			accountID = generateAccountID()
+		}
 		k := kmsKey{
 			ID:           legacyKeyID,
-			ARN:          envOrDefault("KMS_KEY_ARN", fmt.Sprintf("arn:aws:kms:local:000000000000:key/%s", legacyKeyID)),
+			ARN:          envOrDefault("KMS_KEY_ARN", arnFor("kms", region, accountID, "key/"+legacyKeyID)),
 			MasterKeyRaw: cfg.legacyMasterKey,
 			Description:  "go-kms key",
 			CreatedAt:    time.Now().UTC(),
 			Enabled:      true,
 		}
-		return &inMemoryStore{k: k, auditHMACKey: cfg.auditHMACKey}, func() {}, nil
+		return &inMemoryStore{k: k, auditHMACKey: cfg.auditHMACKey, region: region, accountID: accountID}, func() {}, nil
 	}
 
 	db, err := sql.Open("postgres", cfg.dbConnString)
@@ -790,15 +808,55 @@ func buildStore(cfg config) (keyStore, func(), error) {
 		return nil, nil, err
 	}
 	store := &dbStore{db: db, wrappingKey: cfg.wrappingKey, legacyWrappingKey: cfg.legacyWrappingKey, auditHMACKey: cfg.auditHMACKey}
+	region, accountID, err := resolveDeploymentIdentity(context.Background(), db, cfg)
+	if err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("resolve deployment identity: %w", err)
+	}
+	store.region = region
+	store.accountID = accountID
 	if err := store.migrateLegacyKeyMaterial(context.Background()); err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("migrate legacy key material: %w", err)
+	}
+	if err := store.migrateResourceARNs(context.Background()); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("migrate resource ARNs: %w", err)
 	}
 	return store, cleanup, nil
 }
 
 func ensureSchema(ctx context.Context, db *sql.DB) error {
 	const ddl = `
+-- Migrate legacy tenant objects to the account naming (idempotent).
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ui_tenants')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ui_accounts') THEN
+    ALTER TABLE ui_tenants RENAME TO ui_accounts;
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'ui_accounts' AND column_name = 'tenant')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'ui_accounts' AND column_name = 'account') THEN
+    ALTER TABLE ui_accounts RENAME COLUMN tenant TO account;
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'ui_users' AND column_name = 'tenants_json')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'ui_users' AND column_name = 'accounts_json') THEN
+    ALTER TABLE ui_users RENAME COLUMN tenants_json TO accounts_json;
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'pca_certificate_authorities' AND column_name = 'tenant')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'pca_certificate_authorities' AND column_name = 'account') THEN
+    ALTER TABLE pca_certificate_authorities RENAME COLUMN tenant TO account;
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS kms_keys (
   id TEXT PRIMARY KEY,
   arn TEXT NOT NULL UNIQUE,
@@ -911,13 +969,13 @@ CREATE TABLE IF NOT EXISTS ui_users (
 	password_hash TEXT NOT NULL,
 	role TEXT NOT NULL DEFAULT 'viewer',
 	display_name TEXT NOT NULL DEFAULT '',
-	tenants_json TEXT NOT NULL DEFAULT '[]',
+	accounts_json TEXT NOT NULL DEFAULT '[]',
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS ui_tenants (
-	tenant TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS ui_accounts (
+	account TEXT PRIMARY KEY,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -948,7 +1006,7 @@ CREATE TABLE IF NOT EXISTS pca_certificate_authorities (
 	not_before TIMESTAMPTZ NOT NULL,
 	not_after TIMESTAMPTZ NOT NULL,
 	description TEXT NOT NULL DEFAULT '',
-	tenant TEXT NOT NULL DEFAULT '',
+	account TEXT NOT NULL DEFAULT '',
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -1011,7 +1069,7 @@ func maybeBootstrapFromLegacy(ctx context.Context, cfg config, store keyStore) e
 	}
 	k := kmsKey{
 		ID:           legacyKeyID,
-		ARN:          envOrDefault("KMS_KEY_ARN", fmt.Sprintf("arn:aws:kms:local:000000000000:key/%s", legacyKeyID)),
+		ARN:          envOrDefault("KMS_KEY_ARN", bootstrapKeyARN(store, legacyKeyID)),
 		MasterKeyRaw: cfg.legacyMasterKey,
 		Description:  "go-kms key",
 		CreatedAt:    time.Now().UTC(),
@@ -1023,6 +1081,13 @@ func maybeBootstrapFromLegacy(ctx context.Context, cfg config, store keyStore) e
 		return err
 	}
 	return nil
+}
+
+// bootstrapKeyARN builds the ARN for the bootstrap key using the store's
+// deployment identity.
+func bootstrapKeyARN(store keyStore, keyID string) string {
+	region, accountID := store.DeploymentIdentity()
+	return arnFor("kms", region, accountID, "key/"+keyID)
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -2014,7 +2079,7 @@ func (s *dbStore) CreateKey(ctx context.Context, description, keyUsage, keySpec 
 	id := randomHex(12)
 	k := kmsKey{
 		ID:           id,
-		ARN:          fmt.Sprintf("arn:aws:kms:local:000000000000:key/%s", id),
+		ARN:          s.keyARN(id),
 		MasterKeyRaw: raw,
 		PublicKeyRaw: publicRaw,
 		Description:  description,

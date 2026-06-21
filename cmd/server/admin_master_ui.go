@@ -15,18 +15,21 @@ type masterAdminUserView struct {
 	Username    string
 	DisplayName string
 	Role        string
-	Tenants     string
+	Accounts    string
 }
 
 type masterAdminPageView struct {
 	Section         string
 	CurrentUserName string
 	CurrentUserRole string
-	TenantScope     []string
+	AccountScope    []string
 	CanAdmin        bool
 	Users           []masterAdminUserView
 	Roles           []string
-	Tenants         []string
+	Accounts        []string
+	AWSRegion       string
+	AWSAccountID    string
+	AWSRegions      []string
 	Flash           string
 	Error           string
 }
@@ -43,8 +46,18 @@ func (s *server) handleMasterAdminRBAC(w http.ResponseWriter, r *http.Request) {
 	s.renderMasterAdminSection(w, r, "rbac")
 }
 
-func (s *server) handleMasterAdminTenants(w http.ResponseWriter, r *http.Request) {
-	s.renderMasterAdminSection(w, r, "tenants")
+func (s *server) handleMasterAdminAccounts(w http.ResponseWriter, r *http.Request) {
+	s.renderMasterAdminSection(w, r, "accounts")
+}
+
+func (s *server) handleMasterAdminSettings(w http.ResponseWriter, r *http.Request) {
+	s.renderMasterAdminSection(w, r, "settings")
+}
+
+// handleLegacyTenantsRedirect preserves old bookmarks/links to the former
+// /admin/tenants section after the tenant->account rename.
+func (s *server) handleLegacyTenantsRedirect(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/admin/accounts", http.StatusMovedPermanently)
 }
 
 func (s *server) renderMasterAdminSection(w http.ResponseWriter, r *http.Request, section string) {
@@ -63,17 +76,21 @@ func (s *server) renderMasterAdminSection(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	users, roleList, tenantList := s.loadMasterAdminData(r)
+	users, roleList, accountList := s.loadMasterAdminData(r)
+	region, accountID := s.store.DeploymentIdentity()
 
 	view := masterAdminPageView{
 		Section:         section,
 		CurrentUserName: session.DisplayName,
 		CurrentUserRole: session.Role,
-		TenantScope:     append([]string(nil), session.Tenants...),
+		AccountScope:    append([]string(nil), session.Accounts...),
 		CanAdmin:        uiCanAdmin(session),
 		Users:           users,
 		Roles:           roleList,
-		Tenants:         tenantList,
+		Accounts:        accountList,
+		AWSRegion:       region,
+		AWSAccountID:    accountID,
+		AWSRegions:      append([]string(nil), awsRegions...),
 		Flash:           r.URL.Query().Get("ok"),
 		Error:           r.URL.Query().Get("err"),
 	}
@@ -88,32 +105,32 @@ func (s *server) renderMasterAdminSection(w http.ResponseWriter, r *http.Request
 func (s *server) loadMasterAdminData(r *http.Request) ([]masterAdminUserView, []string, []string) {
 	users := make([]masterAdminUserView, 0)
 	roles := map[string]struct{}{}
-	tenants := map[string]struct{}{}
+	accounts := map[string]struct{}{}
 
 	runtime := s.uiRuntime()
 	runtime.mu.Lock()
 	for _, user := range runtime.users {
 		roles[user.Role] = struct{}{}
-		for _, tenant := range user.Tenants {
-			tenant = normalizeTenantName(tenant)
-			if tenant != "" {
-				tenants[tenant] = struct{}{}
+		for _, account := range user.Accounts {
+			account = normalizeAccountName(account)
+			if account != "" {
+				accounts[account] = struct{}{}
 			}
 		}
 		users = append(users, masterAdminUserView{
 			Username:    user.Username,
 			DisplayName: user.DisplayName,
 			Role:        user.Role,
-			Tenants:     strings.Join(user.Tenants, ", "),
+			Accounts:    strings.Join(user.Accounts, ", "),
 		})
 	}
 	runtime.mu.Unlock()
 
-	if storedTenants, err := s.store.ListUITenants(r.Context()); err == nil {
-		for _, tenant := range storedTenants {
-			tenant = normalizeTenantName(tenant)
-			if tenant != "" {
-				tenants[tenant] = struct{}{}
+	if storedAccounts, err := s.store.ListUIAccounts(r.Context()); err == nil {
+		for _, account := range storedAccounts {
+			account = normalizeAccountName(account)
+			if account != "" {
+				accounts[account] = struct{}{}
 			}
 		}
 	}
@@ -124,12 +141,12 @@ func (s *server) loadMasterAdminData(r *http.Request) ([]masterAdminUserView, []
 		roleList = append(roleList, role)
 	}
 	sort.Strings(roleList)
-	tenantList := make([]string, 0, len(tenants))
-	for tenant := range tenants {
-		tenantList = append(tenantList, tenant)
+	accountList := make([]string, 0, len(accounts))
+	for account := range accounts {
+		accountList = append(accountList, account)
 	}
-	sort.Strings(tenantList)
-	return users, roleList, tenantList
+	sort.Strings(accountList)
+	return users, roleList, accountList
 }
 
 func (s *server) handleMasterAdminAction(w http.ResponseWriter, r *http.Request, section string, session *uiSession, action string) {
@@ -154,14 +171,16 @@ func (s *server) handleMasterAdminAction(w http.ResponseWriter, r *http.Request,
 		err, okMsg = s.masterAdminDeleteUser(r, session)
 	case "set_role":
 		err, okMsg = s.masterAdminSetRole(r)
-	case "create_tenant":
-		err, okMsg = s.masterAdminCreateTenant(r)
-	case "delete_tenant":
-		err, okMsg = s.masterAdminDeleteTenant(r)
-	case "assign_tenant":
-		err, okMsg = s.masterAdminAssignTenant(r)
-	case "remove_tenant":
-		err, okMsg = s.masterAdminRemoveTenant(r)
+	case "create_account":
+		err, okMsg = s.masterAdminCreateAccount(r)
+	case "delete_account":
+		err, okMsg = s.masterAdminDeleteAccount(r)
+	case "assign_account":
+		err, okMsg = s.masterAdminAssignAccount(r)
+	case "remove_account":
+		err, okMsg = s.masterAdminRemoveAccount(r)
+	case "update_aws_settings":
+		err, okMsg = s.masterAdminUpdateAWSSettings(r)
 	default:
 		err = fmt.Errorf("unsupported action: %s", action)
 	}
@@ -209,13 +228,13 @@ func (s *server) masterAdminCreateUser(r *http.Request) (error, string) {
 	if err != nil {
 		return err, ""
 	}
-	tenants := normalizeTenants(splitCommaList(r.FormValue("tenants")))
-	for _, tenant := range tenants {
-		if err := s.store.UpsertUITenant(r.Context(), tenant); err != nil {
+	accounts := normalizeAccounts(splitCommaList(accountsFormValue(r)))
+	for _, account := range accounts {
+		if err := s.store.UpsertUIAccount(r.Context(), account); err != nil {
 			return err, ""
 		}
 	}
-	if err := s.store.UpsertUIUser(r.Context(), uiUserConfig{Username: username, PasswordHash: hash, Role: role, DisplayName: displayName, Tenants: tenants}); err != nil {
+	if err := s.store.UpsertUIUser(r.Context(), uiUserConfig{Username: username, PasswordHash: hash, Role: role, DisplayName: displayName, Accounts: accounts}); err != nil {
 		return err, ""
 	}
 	return nil, "user created"
@@ -242,9 +261,9 @@ func (s *server) masterAdminUpdateUser(r *http.Request) (error, string) {
 	if role == "" {
 		role = current.Role
 	}
-	tenants := normalizeTenants(splitCommaList(r.FormValue("tenants")))
-	for _, tenant := range tenants {
-		if err := s.store.UpsertUITenant(r.Context(), tenant); err != nil {
+	accounts := normalizeAccounts(splitCommaList(accountsFormValue(r)))
+	for _, account := range accounts {
+		if err := s.store.UpsertUIAccount(r.Context(), account); err != nil {
 			return err, ""
 		}
 	}
@@ -256,7 +275,7 @@ func (s *server) masterAdminUpdateUser(r *http.Request) (error, string) {
 		}
 		hash = h
 	}
-	if err := s.store.UpsertUIUser(r.Context(), uiUserConfig{Username: username, PasswordHash: hash, Role: role, DisplayName: displayName, Tenants: tenants}); err != nil {
+	if err := s.store.UpsertUIUser(r.Context(), uiUserConfig{Username: username, PasswordHash: hash, Role: role, DisplayName: displayName, Accounts: accounts}); err != nil {
 		return err, ""
 	}
 	return nil, "user updated"
@@ -290,29 +309,29 @@ func (s *server) masterAdminSetRole(r *http.Request) (error, string) {
 	if !ok {
 		return fmt.Errorf("user not found"), ""
 	}
-	if err := s.store.UpsertUIUser(r.Context(), uiUserConfig{Username: username, PasswordHash: current.PasswordHash, Role: role, DisplayName: current.DisplayName, Tenants: current.Tenants}); err != nil {
+	if err := s.store.UpsertUIUser(r.Context(), uiUserConfig{Username: username, PasswordHash: current.PasswordHash, Role: role, DisplayName: current.DisplayName, Accounts: current.Accounts}); err != nil {
 		return err, ""
 	}
 	return nil, "role updated"
 }
 
-func (s *server) masterAdminCreateTenant(r *http.Request) (error, string) {
-	tenant := normalizeTenantName(r.FormValue("tenant"))
-	if tenant == "" {
-		return fmt.Errorf("tenant is required"), ""
+func (s *server) masterAdminCreateAccount(r *http.Request) (error, string) {
+	account := normalizeAccountName(accountFormValue(r))
+	if account == "" {
+		return fmt.Errorf("account is required"), ""
 	}
-	if err := s.store.UpsertUITenant(r.Context(), tenant); err != nil {
+	if err := s.store.UpsertUIAccount(r.Context(), account); err != nil {
 		return err, ""
 	}
-	return nil, "tenant created"
+	return nil, "account created"
 }
 
-func (s *server) masterAdminDeleteTenant(r *http.Request) (error, string) {
-	tenant := normalizeTenantName(r.FormValue("tenant"))
-	if tenant == "" {
-		return fmt.Errorf("tenant is required"), ""
+func (s *server) masterAdminDeleteAccount(r *http.Request) (error, string) {
+	account := normalizeAccountName(accountFormValue(r))
+	if account == "" {
+		return fmt.Errorf("account is required"), ""
 	}
-	if err := s.store.DeleteUITenant(r.Context(), tenant); err != nil {
+	if err := s.store.DeleteUIAccount(r.Context(), account); err != nil {
 		return err, ""
 	}
 	users, err := s.store.ListUIUsers(r.Context())
@@ -320,26 +339,26 @@ func (s *server) masterAdminDeleteTenant(r *http.Request) (error, string) {
 		return err, ""
 	}
 	for _, user := range users {
-		filtered := make([]string, 0, len(user.Tenants))
-		for _, t := range user.Tenants {
-			if normalizeTenantName(t) != tenant {
-				filtered = append(filtered, t)
+		filtered := make([]string, 0, len(user.Accounts))
+		for _, a := range user.Accounts {
+			if normalizeAccountName(a) != account {
+				filtered = append(filtered, a)
 			}
 		}
-		if len(filtered) != len(user.Tenants) {
-			if err := s.store.UpsertUIUser(r.Context(), uiUserConfig{Username: user.Username, PasswordHash: user.PasswordHash, Role: user.Role, DisplayName: user.DisplayName, Tenants: filtered}); err != nil {
+		if len(filtered) != len(user.Accounts) {
+			if err := s.store.UpsertUIUser(r.Context(), uiUserConfig{Username: user.Username, PasswordHash: user.PasswordHash, Role: user.Role, DisplayName: user.DisplayName, Accounts: filtered}); err != nil {
 				return err, ""
 			}
 		}
 	}
-	return nil, "tenant deleted"
+	return nil, "account deleted"
 }
 
-func (s *server) masterAdminAssignTenant(r *http.Request) (error, string) {
+func (s *server) masterAdminAssignAccount(r *http.Request) (error, string) {
 	username := strings.TrimSpace(r.FormValue("username"))
-	tenant := normalizeTenantName(r.FormValue("tenant"))
-	if username == "" || tenant == "" {
-		return fmt.Errorf("username and tenant are required"), ""
+	account := normalizeAccountName(accountFormValue(r))
+	if username == "" || account == "" {
+		return fmt.Errorf("username and account are required"), ""
 	}
 	users, err := s.store.ListUIUsers(r.Context())
 	if err != nil {
@@ -349,23 +368,23 @@ func (s *server) masterAdminAssignTenant(r *http.Request) (error, string) {
 	if !ok {
 		return fmt.Errorf("user not found"), ""
 	}
-	if err := s.store.UpsertUITenant(r.Context(), tenant); err != nil {
+	if err := s.store.UpsertUIAccount(r.Context(), account); err != nil {
 		return err, ""
 	}
-	tenants := append([]string{}, current.Tenants...)
-	tenants = append(tenants, tenant)
-	tenants = normalizeTenants(tenants)
-	if err := s.store.UpsertUIUser(r.Context(), uiUserConfig{Username: current.Username, PasswordHash: current.PasswordHash, Role: current.Role, DisplayName: current.DisplayName, Tenants: tenants}); err != nil {
+	accounts := append([]string{}, current.Accounts...)
+	accounts = append(accounts, account)
+	accounts = normalizeAccounts(accounts)
+	if err := s.store.UpsertUIUser(r.Context(), uiUserConfig{Username: current.Username, PasswordHash: current.PasswordHash, Role: current.Role, DisplayName: current.DisplayName, Accounts: accounts}); err != nil {
 		return err, ""
 	}
-	return nil, "tenant assigned"
+	return nil, "account assigned"
 }
 
-func (s *server) masterAdminRemoveTenant(r *http.Request) (error, string) {
+func (s *server) masterAdminRemoveAccount(r *http.Request) (error, string) {
 	username := strings.TrimSpace(r.FormValue("username"))
-	tenant := normalizeTenantName(r.FormValue("tenant"))
-	if username == "" || tenant == "" {
-		return fmt.Errorf("username and tenant are required"), ""
+	account := normalizeAccountName(accountFormValue(r))
+	if username == "" || account == "" {
+		return fmt.Errorf("username and account are required"), ""
 	}
 	users, err := s.store.ListUIUsers(r.Context())
 	if err != nil {
@@ -375,16 +394,61 @@ func (s *server) masterAdminRemoveTenant(r *http.Request) (error, string) {
 	if !ok {
 		return fmt.Errorf("user not found"), ""
 	}
-	filtered := make([]string, 0, len(current.Tenants))
-	for _, t := range current.Tenants {
-		if normalizeTenantName(t) != tenant {
-			filtered = append(filtered, t)
+	filtered := make([]string, 0, len(current.Accounts))
+	for _, a := range current.Accounts {
+		if normalizeAccountName(a) != account {
+			filtered = append(filtered, a)
 		}
 	}
-	if err := s.store.UpsertUIUser(r.Context(), uiUserConfig{Username: current.Username, PasswordHash: current.PasswordHash, Role: current.Role, DisplayName: current.DisplayName, Tenants: filtered}); err != nil {
+	if err := s.store.UpsertUIUser(r.Context(), uiUserConfig{Username: current.Username, PasswordHash: current.PasswordHash, Role: current.Role, DisplayName: current.DisplayName, Accounts: filtered}); err != nil {
 		return err, ""
 	}
-	return nil, "tenant removed from user"
+	return nil, "account removed from user"
+}
+
+// masterAdminUpdateAWSSettings persists the deployment region and account ID
+// used when building resource ARNs, then rewrites existing ARNs to match.
+func (s *server) masterAdminUpdateAWSSettings(r *http.Request) (error, string) {
+	dbStoreImpl, ok := s.store.(*dbStore)
+	if !ok {
+		return fmt.Errorf("AWS settings require a database-backed deployment"), ""
+	}
+	region := strings.TrimSpace(r.FormValue("aws_region"))
+	accountID := strings.TrimSpace(r.FormValue("aws_account_id"))
+	if !isValidRegion(region) {
+		return fmt.Errorf("invalid region"), ""
+	}
+	if !isValidAccountID(accountID) {
+		return fmt.Errorf("account ID must be 12 digits"), ""
+	}
+	if err := putSetting(r.Context(), dbStoreImpl.db, settingAWSRegion, region); err != nil {
+		return err, ""
+	}
+	if err := putSetting(r.Context(), dbStoreImpl.db, settingAWSAccountID, accountID); err != nil {
+		return err, ""
+	}
+	dbStoreImpl.region = region
+	dbStoreImpl.accountID = accountID
+	if err := dbStoreImpl.migrateResourceARNs(r.Context()); err != nil {
+		return err, ""
+	}
+	return nil, "AWS settings updated"
+}
+
+// accountFormValue accepts both the new account field and the legacy tenant
+// field name so older bookmarked forms keep working.
+func accountFormValue(r *http.Request) string {
+	if v := strings.TrimSpace(r.FormValue("account")); v != "" {
+		return v
+	}
+	return strings.TrimSpace(r.FormValue("tenant"))
+}
+
+func accountsFormValue(r *http.Request) string {
+	if v := strings.TrimSpace(r.FormValue("accounts")); v != "" {
+		return v
+	}
+	return strings.TrimSpace(r.FormValue("tenants"))
 }
 
 func masterAdminSectionPath(section string) string {
@@ -393,8 +457,10 @@ func masterAdminSectionPath(section string) string {
 		return "/admin/users"
 	case "rbac":
 		return "/admin/rbac"
-	case "tenants":
-		return "/admin/tenants"
+	case "accounts":
+		return "/admin/accounts"
+	case "settings":
+		return "/admin/settings"
 	default:
 		return "/admin"
 	}

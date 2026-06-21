@@ -177,7 +177,7 @@
         {{end}}
       </div>
       <div class="tb-actions">
-        {{if .TenantScope}}<span class="scope-badge">🏷 {{range $i,$t := .TenantScope}}{{if $i}}, {{end}}{{$t}}{{end}}</span>{{end}}
+        {{if .AccountScope}}<span class="scope-badge">🏷 {{range $i,$t := .AccountScope}}{{if $i}}, {{end}}{{$t}}{{end}}</span>{{end}}
       </div>
     </header>
 
@@ -204,7 +204,7 @@
     <div class="content">
       <form method="post" action="/?action=bulk_keys">
       <div class="toolbar">
-        <div class="tb-l"><input type="text" placeholder="Filter keys…" class="input-sm" disabled></div>
+        <div class="tb-l"><input type="text" id="keyFilter" placeholder="Filter keys…" class="input-sm" oninput="filterRows('keyFilter','keyRows')" autocomplete="off"></div>
         {{if .CanEdit}}
         <div class="tb-r">
           <select name="bulk_action" class="sel-inline">
@@ -226,7 +226,7 @@
               <th>Alias</th><th>Key ID</th><th>Status</th><th>Spec</th><th>Usage</th><th>Created</th><th></th>
             </tr>
           </thead>
-          <tbody>
+          <tbody id="keyRows">
             {{if .Keys}}{{range .Keys}}
             <tr>
               {{if $.CanEdit}}<td><input type="checkbox" name="key_id" value="{{.ID}}"></td>{{end}}
@@ -237,8 +237,8 @@
                 {{else if eq .State "Disabled"}}<span class="badge badge-dis">Disabled</span>
                 {{else}}<span class="badge badge-del">Pending deletion</span>{{end}}
               </td>
-              <td class="muted sm">SYMMETRIC_DEFAULT</td>
-              <td class="muted sm">Encrypt &amp; decrypt</td>
+              <td class="muted sm">{{.KeySpec}}</td>
+              <td class="muted sm">{{.KeyUsage}}</td>
               <td class="muted sm">{{.CreatedAt}}</td>
               <td><a href="/audit?q={{.ID}}" class="muted sm">Trace →</a></td>
             </tr>
@@ -294,8 +294,8 @@
           <div class="kv-title">ARN &amp; identifiers</div>
           <div class="kv-row"><span class="kv-lbl">Key ID</span><span class="kv-val mono">{{.SelectedKey.ID}}</span></div>
           <div class="kv-row"><span class="kv-lbl">ARN</span><span class="kv-val mono sm">{{.SelectedKey.ARN}}</span></div>
-          <div class="kv-row"><span class="kv-lbl">Key type</span><span class="kv-val">Symmetric · SYMMETRIC_DEFAULT</span></div>
-          <div class="kv-row"><span class="kv-lbl">Usage</span><span class="kv-val">Encrypt and decrypt</span></div>
+          <div class="kv-row"><span class="kv-lbl">Key type</span><span class="kv-val">{{.SelectedKey.KeyClass}} · {{.SelectedKey.KeySpec}}</span></div>
+          <div class="kv-row"><span class="kv-lbl">Usage</span><span class="kv-val">{{.SelectedKey.KeyUsage}}</span></div>
           <div class="kv-row"><span class="kv-lbl">Origin</span><span class="kv-val">AWS_KMS-compatible</span></div>
         </div>
       </div>
@@ -327,14 +327,14 @@
       <div class="g2">
         <div class="kv-card">
           <div class="kv-title">Cryptographic configuration</div>
-          <div class="kv-row"><span class="kv-lbl">Key type</span><span class="kv-val">Symmetric</span></div>
-          <div class="kv-row"><span class="kv-lbl">Key spec</span><span class="kv-val">SYMMETRIC_DEFAULT</span></div>
-          <div class="kv-row"><span class="kv-lbl">Key usage</span><span class="kv-val">Encrypt and decrypt</span></div>
+          <div class="kv-row"><span class="kv-lbl">Key type</span><span class="kv-val">{{.SelectedKey.KeyClass}}</span></div>
+          <div class="kv-row"><span class="kv-lbl">Key spec</span><span class="kv-val">{{.SelectedKey.KeySpec}}</span></div>
+          <div class="kv-row"><span class="kv-lbl">Key usage</span><span class="kv-val">{{.SelectedKey.KeyUsage}}</span></div>
           <div class="kv-row"><span class="kv-lbl">Origin</span><span class="kv-val">AWS_KMS-compatible local</span></div>
         </div>
         <div class="kv-card">
           <div class="kv-title">Algorithms &amp; security</div>
-          <div class="kv-row"><span class="kv-lbl">Encryption</span><span class="kv-val">AES-GCM 256-bit (SYMMETRIC_DEFAULT)</span></div>
+          <div class="kv-row"><span class="kv-lbl">Algorithm</span><span class="kv-val">{{if eq .SelectedKey.KeyClass "Symmetric"}}AES-GCM 256-bit{{else}}{{.SelectedKey.KeySpec}}{{end}}</span></div>
           <div class="kv-row"><span class="kv-lbl">Key material</span><span class="kv-val">Wrapped at rest (AES-GCM)</span></div>
           <div class="kv-row"><span class="kv-lbl">Multi-Region</span><span class="kv-val">No</span></div>
         </div>
@@ -429,5 +429,15 @@
     {{end}}
   </div>{{/* /main */}}
 </div>{{/* /shell */}}
+<script>
+function filterRows(inputId, bodyId){
+  var q=(document.getElementById(inputId).value||'').toLowerCase();
+  var rows=document.querySelectorAll('#'+bodyId+' tr');
+  for(var i=0;i<rows.length;i++){
+    if(rows[i].classList.contains('empty-row')){continue;}
+    rows[i].style.display=rows[i].textContent.toLowerCase().indexOf(q)>-1?'':'none';
+  }
+}
+</script>
 </body>
 </html>

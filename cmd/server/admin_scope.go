@@ -11,29 +11,29 @@ func uiCanAdmin(session *uiSession) bool {
 }
 
 func secretVisibleToSession(session *uiSession, secretName string) bool {
-	if session == nil || uiCanAdmin(session) || len(session.Tenants) == 0 {
+	if session == nil || uiCanAdmin(session) || len(session.Accounts) == 0 {
 		return true
 	}
-	tenant := tenantFromSecretName(secretName)
-	return containsFold(session.Tenants, tenant)
+	account := accountFromSecretName(secretName)
+	return containsFold(session.Accounts, account)
 }
 
 func keyVisibleToSession(session *uiSession, keyID string, aliases []kmsAlias) bool {
-	if session == nil || uiCanAdmin(session) || len(session.Tenants) == 0 {
+	if session == nil || uiCanAdmin(session) || len(session.Accounts) == 0 {
 		return true
 	}
 	for _, alias := range aliases {
 		if alias.TargetKeyID != keyID {
 			continue
 		}
-		if containsFold(session.Tenants, tenantFromAlias(alias.AliasName)) {
+		if containsFold(session.Accounts, accountFromAlias(alias.AliasName)) {
 			return true
 		}
 	}
 	return false
 }
 
-func tenantFromSecretName(name string) string {
+func accountFromSecretName(name string) string {
 	trimmed := strings.Trim(strings.TrimSpace(name), "/")
 	if trimmed == "" {
 		return ""
@@ -42,7 +42,7 @@ func tenantFromSecretName(name string) string {
 	return strings.ToLower(strings.TrimSpace(parts[0]))
 }
 
-func tenantFromAlias(alias string) string {
+func accountFromAlias(alias string) string {
 	alias = strings.TrimPrefix(strings.TrimSpace(alias), "alias/")
 	if alias == "" {
 		return ""

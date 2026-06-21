@@ -207,7 +207,7 @@ func (s *server) handleCRLDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build CA ARN
-	caARN := fmt.Sprintf("arn:aws:acm-pca:local:000000000000:certificate-authority/%s", caID)
+	caARN := s.serverARN("acm-pca", "certificate-authority/"+caID)
 
 	// Load CA
 	ca, err := s.store.DescribeCertificateAuthority(r.Context(), caARN)

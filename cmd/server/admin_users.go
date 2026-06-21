@@ -15,7 +15,7 @@ var errUIUserNotFound = errors.New("ui user not found")
 
 // ListUIUsers returns the admin-console users persisted in the database.
 func (s *dbStore) ListUIUsers(ctx context.Context) ([]uiUserConfig, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT username, password_hash, role, display_name, tenants_json FROM ui_users ORDER BY username`)
+	rows, err := s.db.QueryContext(ctx, `SELECT username, password_hash, role, display_name, accounts_json FROM ui_users ORDER BY username`)
 	if err != nil {
 		return nil, err
 	}
@@ -23,13 +23,13 @@ func (s *dbStore) ListUIUsers(ctx context.Context) ([]uiUserConfig, error) {
 	var users []uiUserConfig
 	for rows.Next() {
 		var (
-			user        uiUserConfig
-			tenantsJSON string
+			user         uiUserConfig
+			accountsJSON string
 		)
-		if err := rows.Scan(&user.Username, &user.PasswordHash, &user.Role, &user.DisplayName, &tenantsJSON); err != nil {
+		if err := rows.Scan(&user.Username, &user.PasswordHash, &user.Role, &user.DisplayName, &accountsJSON); err != nil {
 			return nil, err
 		}
-		user.Tenants = decodeTenantsJSON(tenantsJSON)
+		user.Accounts = decodeAccountsJSON(accountsJSON)
 		users = append(users, user)
 	}
 	return users, rows.Err()
@@ -45,19 +45,19 @@ func (s *dbStore) UpsertUIUser(ctx context.Context, user uiUserConfig) error {
 	if strings.TrimSpace(user.PasswordHash) == "" {
 		return errors.New("ui user requires a password hash")
 	}
-	tenantsJSON, err := encodeTenantsJSON(user.Tenants)
+	accountsJSON, err := encodeAccountsJSON(user.Accounts)
 	if err != nil {
 		return err
 	}
-	const q = `INSERT INTO ui_users (username, password_hash, role, display_name, tenants_json, updated_at)
+	const q = `INSERT INTO ui_users (username, password_hash, role, display_name, accounts_json, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
 ON CONFLICT (username) DO UPDATE SET
 	password_hash = EXCLUDED.password_hash,
 	role = EXCLUDED.role,
 	display_name = EXCLUDED.display_name,
-	tenants_json = EXCLUDED.tenants_json,
+	accounts_json = EXCLUDED.accounts_json,
 	updated_at = NOW()`
-	_, err = s.db.ExecContext(ctx, q, username, user.PasswordHash, normalizeUIRole(user.Role), user.DisplayName, tenantsJSON)
+	_, err = s.db.ExecContext(ctx, q, username, user.PasswordHash, normalizeUIRole(user.Role), user.DisplayName, accountsJSON)
 	return err
 }
 
@@ -121,23 +121,23 @@ func (s *inMemoryStore) DeleteUIUser(_ context.Context, username string) error {
 	return nil
 }
 
-func decodeTenantsJSON(raw string) []string {
+func decodeAccountsJSON(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil
 	}
-	var tenants []string
-	if err := json.Unmarshal([]byte(raw), &tenants); err != nil {
+	var accounts []string
+	if err := json.Unmarshal([]byte(raw), &accounts); err != nil {
 		return nil
 	}
-	return normalizeTenants(tenants)
+	return normalizeAccounts(accounts)
 }
 
-func encodeTenantsJSON(tenants []string) (string, error) {
-	if len(tenants) == 0 {
+func encodeAccountsJSON(accounts []string) (string, error) {
+	if len(accounts) == 0 {
 		return "[]", nil
 	}
-	b, err := json.Marshal(normalizeTenants(tenants))
+	b, err := json.Marshal(normalizeAccounts(accounts))
 	if err != nil {
 		return "", err
 	}

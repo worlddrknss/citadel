@@ -28,7 +28,7 @@ func (s *server) handleACMRequestCertificate(w http.ResponseWriter, r *http.Requ
 
 	// For now, use a default CA (Citadel root)
 	// In production, lookup CA by domain or tenant
-	caARN := "arn:aws:acm-pca:local:000000000000:certificate-authority/citadel-root"
+	caARN := s.serverARN("acm-pca", "certificate-authority/citadel-root")
 
 	// Load the default CA
 	ca, err := s.store.DescribeCertificateAuthority(r.Context(), caARN)
@@ -95,7 +95,7 @@ func (s *server) handleACMRequestCertificate(w http.ResponseWriter, r *http.Requ
 
 	// Store certificate
 	certID := randomHex(12)
-	certARN := fmt.Sprintf("arn:aws:acm:local:000000000000:certificate/%s", certID)
+	certARN := s.serverARN("acm", "certificate/"+certID)
 
 	parsedCert, err := x509.ParseCertificate(certDER)
 	if err != nil {

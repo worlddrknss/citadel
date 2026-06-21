@@ -25,6 +25,9 @@ type adminKeyView struct {
 	Alias        string
 	State        string
 	DeletionDate string
+	KeySpec      string
+	KeyUsage     string
+	KeyClass     string
 	IsSelected   bool
 }
 
@@ -56,11 +59,39 @@ type adminPageView struct {
 	Grants          []adminGrantView
 	CurrentUserName string
 	CurrentUserRole string
-	TenantScope     []string
+	AccountScope    []string
 	CanEdit         bool
 	CanAdmin        bool
 	Flash           string
 	Error           string
+}
+
+// keySpecLabel normalizes an empty key spec to the symmetric default for display.
+func keySpecLabel(spec string) string {
+	if strings.TrimSpace(spec) == "" {
+		return keySpecSymmetricDefault
+	}
+	return spec
+}
+
+// keyClassLabel reports whether a key spec is symmetric or asymmetric.
+func keyClassLabel(spec string) string {
+	if strings.TrimSpace(spec) == "" || spec == keySpecSymmetricDefault {
+		return "Symmetric"
+	}
+	return "Asymmetric"
+}
+
+// keyUsageLabel renders a friendly label for a KMS key usage value.
+func keyUsageLabel(usage string) string {
+	switch strings.TrimSpace(usage) {
+	case keyUsageSignVerify:
+		return "Sign & verify"
+	case keyUsageEncryptDecrypt, "":
+		return "Encrypt & decrypt"
+	default:
+		return usage
+	}
 }
 
 func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +114,7 @@ func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 			targetKeyID = strings.TrimSpace(r.FormValue("target_key_id"))
 		}
 		if targetKeyID != "" && !keyVisibleToSession(session, targetKeyID, aliases) {
-			s.redirectAdminError(w, r, "requested key is outside your tenant scope")
+			s.redirectAdminError(w, r, "requested key is outside your account scope")
 			return
 		}
 	}
@@ -149,7 +180,7 @@ func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		KeyCount:        len(keys),
 		CurrentUserName: session.DisplayName,
 		CurrentUserRole: session.Role,
-		TenantScope:     append([]string(nil), session.Tenants...),
+		AccountScope:    append([]string(nil), session.Accounts...),
 		CanEdit:         uiCanEdit(session),
 		CanAdmin:        uiCanAdmin(session),
 		SelectedKeyID:   strings.TrimSpace(r.URL.Query().Get("key_id")),
@@ -191,6 +222,9 @@ func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 			Alias:        aliasByKey[k.ID],
 			State:        keyState(k),
 			DeletionDate: deletionDate,
+			KeySpec:      keySpecLabel(k.KeySpec),
+			KeyUsage:     keyUsageLabel(k.KeyUsage),
+			KeyClass:     keyClassLabel(k.KeySpec),
 			IsSelected:   isSelected,
 		}
 		view.Keys = append(view.Keys, entry)
@@ -207,7 +241,7 @@ func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		view.Aliases = append(view.Aliases, adminAliasView{Name: a.AliasName, TargetKey: a.TargetKeyID})
 	}
 	if view.SelectedKeyID != "" && view.SelectedKey == nil {
-		view.Error = "requested key is outside your tenant scope"
+		view.Error = "requested key is outside your account scope"
 	}
 
 	if view.SelectedKey != nil {

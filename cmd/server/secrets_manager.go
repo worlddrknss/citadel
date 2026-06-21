@@ -510,7 +510,7 @@ func (s *dbStore) CreateSecret(ctx context.Context, req createSecretRequest) (se
 	}
 	now := time.Now().UTC()
 	meta := secretMetadataRecord{
-		ARN:               secretARN(name),
+		ARN:               s.secretARNFor(name),
 		Name:              name,
 		Description:       strings.TrimSpace(req.Description),
 		KMSKeyID:          kmsKeyID,
@@ -860,7 +860,7 @@ func (s *inMemoryStore) CreateSecret(ctx context.Context, req createSecretReques
 	}
 	now := time.Now().UTC()
 	meta := secretMetadataRecord{
-		ARN:               secretARN(name),
+		ARN:               s.secretARNFor(name),
 		Name:              name,
 		Description:       strings.TrimSpace(req.Description),
 		KMSKeyID:          kmsKeyID,
@@ -1199,10 +1199,6 @@ func normalizeSecretListLimit(limit int) (int, error) {
 		return 0, fmt.Errorf("MaxResults must be between 1 and %d", maxSecretListLimit)
 	}
 	return limit, nil
-}
-
-func secretARN(name string) string {
-	return fmt.Sprintf("arn:aws:secretsmanager:local:000000000000:secret:%s", name)
 }
 
 func classifySecretError(err error) string {

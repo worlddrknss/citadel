@@ -42,7 +42,8 @@
           <a class="{{if eq .Section "overview"}}active{{end}}" href="/admin">Overview</a>
           <a class="{{if eq .Section "users"}}active{{end}}" href="/admin/users">User Management</a>
           <a class="{{if eq .Section "rbac"}}active{{end}}" href="/admin/rbac">RBAC</a>
-          <a class="{{if eq .Section "tenants"}}active{{end}}" href="/admin/tenants">Tenant Creation</a>
+          <a class="{{if eq .Section "accounts"}}active{{end}}" href="/admin/accounts">Account Creation</a>
+          <a class="{{if eq .Section "settings"}}active{{end}}" href="/admin/settings">AWS Settings</a>
         </nav>
       </div>
       <div class="group">
@@ -54,7 +55,7 @@
     </aside>
     <main class="main">
       <div class="bar">
-        <div class="title">{{if eq .Section "overview"}}Overview{{else if eq .Section "users"}}User Management{{else if eq .Section "rbac"}}RBAC{{else}}Tenant Creation{{end}}</div>
+        <div class="title">{{if eq .Section "overview"}}Overview{{else if eq .Section "users"}}User Management{{else if eq .Section "rbac"}}RBAC{{else if eq .Section "settings"}}AWS Settings{{else}}Account Creation{{end}}</div>
         {{if .CanAdmin}}<span class="chip">admin</span>{{end}}
       </div>
 
@@ -65,7 +66,7 @@
       <div class="grid">
         <section class="card"><h3>Users</h3><div class="muted">{{len .Users}} configured</div></section>
         <section class="card"><h3>Roles</h3><div class="muted">{{if .Roles}}{{range $i, $r := .Roles}}{{if $i}}, {{end}}{{$r}}{{end}}{{else}}None{{end}}</div></section>
-        <section class="card"><h3>Tenants</h3><div class="muted">{{len .Tenants}} discovered</div></section>
+        <section class="card"><h3>Accounts</h3><div class="muted">{{len .Accounts}} discovered</div></section>
       </div>
       {{end}}
 
@@ -80,7 +81,7 @@
           </div>
           <div class="row" style="margin-top:8px;">
             <div><label>Password</label><input name="password" type="password" required></div>
-            <div><label>Tenants (comma separated)</label><input name="tenants" placeholder="tenant-a, tenant-b"></div>
+            <div><label>Accounts (comma separated)</label><input name="accounts" placeholder="account-a, account-b"></div>
             <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit">Create</button></div>
           </div>
         </form>
@@ -88,7 +89,7 @@
       <section class="card" style="margin-top:12px;">
         <h3>Configured Users</h3>
         <table>
-          <thead><tr><th>Username</th><th>Display Name</th><th>Role</th><th>Tenants</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Username</th><th>Display Name</th><th>Role</th><th>Accounts</th><th>Actions</th></tr></thead>
           <tbody>
             {{if .Users}}
               {{range .Users}}
@@ -96,7 +97,7 @@
                 <td>{{.Username}}</td>
                 <td>{{.DisplayName}}</td>
                 <td>{{.Role}}</td>
-                <td>{{if .Tenants}}{{.Tenants}}{{else}}-{{end}}</td>
+                <td>{{if .Accounts}}{{.Accounts}}{{else}}-{{end}}</td>
                 <td>
                   <div class="actions">
                     <form method="post" action="/admin/users?action=delete_user" onsubmit="return confirm('Delete user {{.Username}}?');">
@@ -113,7 +114,7 @@
                     <div class="row">
                       <div><label>Display Name</label><input name="display_name" value="{{.DisplayName}}"></div>
                       <div><label>Role</label><select name="role"><option value="viewer" {{if eq .Role "viewer"}}selected{{end}}>viewer</option><option value="editor" {{if eq .Role "editor"}}selected{{end}}>editor</option><option value="admin" {{if eq .Role "admin"}}selected{{end}}>admin</option></select></div>
-                      <div><label>Tenants (comma separated)</label><input name="tenants" value="{{.Tenants}}"></div>
+                      <div><label>Accounts (comma separated)</label><input name="accounts" value="{{.Accounts}}"></div>
                       <div><label>New Password (optional)</label><input name="password" type="password"></div>
                       <div style="display:flex;align-items:flex-end;"><button class="btn" type="submit">Update</button></div>
                     </div>
@@ -159,27 +160,27 @@
       </section>
       {{end}}
 
-      {{if eq .Section "tenants"}}
+      {{if eq .Section "accounts"}}
       <div class="grid2">
         <section class="card">
-          <h3>Create Tenant</h3>
-          <form method="post" action="/admin/tenants?action=create_tenant">
+          <h3>Create Account</h3>
+          <form method="post" action="/admin/accounts?action=create_account">
             <div class="row">
-              <div><label>Tenant Name</label><input name="tenant" placeholder="tenant-id" required></div>
+              <div><label>Account Name</label><input name="account" placeholder="account-id" required></div>
               <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit">Create</button></div>
             </div>
           </form>
-          <h3 style="margin-top:14px;">Existing Tenants</h3>
-          {{if .Tenants}}
+          <h3 style="margin-top:14px;">Existing Accounts</h3>
+          {{if .Accounts}}
             <table>
-              <thead><tr><th>Tenant</th><th>Action</th></tr></thead>
+              <thead><tr><th>Account</th><th>Action</th></tr></thead>
               <tbody>
-              {{range .Tenants}}
+              {{range .Accounts}}
                 <tr>
                   <td>{{.}}</td>
                   <td>
-                    <form method="post" action="/admin/tenants?action=delete_tenant" onsubmit="return confirm('Delete tenant {{.}} and remove it from all users?');">
-                      <input type="hidden" name="tenant" value="{{.}}">
+                    <form method="post" action="/admin/accounts?action=delete_account" onsubmit="return confirm('Delete account {{.}} and remove it from all users?');">
+                      <input type="hidden" name="account" value="{{.}}">
                       <button class="btn btn-danger" type="submit">Delete</button>
                     </form>
                   </td>
@@ -187,27 +188,47 @@
               {{end}}
               </tbody>
             </table>
-          {{else}}<p class="muted">No tenants found.</p>{{end}}
+          {{else}}<p class="muted">No accounts found.</p>{{end}}
         </section>
         <section class="card">
-          <h3>Assign Tenant to User</h3>
-          <form method="post" action="/admin/tenants?action=assign_tenant">
+          <h3>Assign Account to User</h3>
+          <form method="post" action="/admin/accounts?action=assign_account">
             <div class="row">
               <div><label>User</label><select name="username" required>{{range .Users}}<option value="{{.Username}}">{{.Username}}</option>{{end}}</select></div>
-              <div><label>Tenant</label><select name="tenant" required>{{range .Tenants}}<option value="{{.}}">{{.}}</option>{{end}}</select></div>
+              <div><label>Account</label><select name="account" required>{{range .Accounts}}<option value="{{.}}">{{.}}</option>{{end}}</select></div>
             </div>
             <div style="margin-top:8px;"><button class="btn btn-primary" type="submit">Assign</button></div>
           </form>
-          <h3 style="margin-top:14px;">Remove Tenant from User</h3>
-          <form method="post" action="/admin/tenants?action=remove_tenant">
+          <h3 style="margin-top:14px;">Remove Account from User</h3>
+          <form method="post" action="/admin/accounts?action=remove_account">
             <div class="row">
               <div><label>User</label><select name="username" required>{{range .Users}}<option value="{{.Username}}">{{.Username}}</option>{{end}}</select></div>
-              <div><label>Tenant</label><select name="tenant" required>{{range .Tenants}}<option value="{{.}}">{{.}}</option>{{end}}</select></div>
+              <div><label>Account</label><select name="account" required>{{range .Accounts}}<option value="{{.}}">{{.}}</option>{{end}}</select></div>
             </div>
             <div style="margin-top:8px;"><button class="btn" type="submit">Remove</button></div>
           </form>
         </section>
       </div>
+      {{end}}
+
+      {{if eq .Section "settings"}}
+      <section class="card">
+        <h3>AWS Deployment Identity</h3>
+        <p class="muted">Region and account ID embedded in resource ARNs (KMS keys, secrets, certificate authorities). Updating these rewrites the ARNs of existing resources.</p>
+        <form method="post" action="/admin/settings?action=update_aws_settings" onsubmit="return confirm('Update region/account ID and rewrite existing resource ARNs?');">
+          <div class="row">
+            <div>
+              <label>Region</label>
+              <select name="aws_region">
+                {{$region := .AWSRegion}}
+                {{range .AWSRegions}}<option value="{{.}}" {{if eq . $region}}selected{{end}}>{{.}}</option>{{end}}
+              </select>
+            </div>
+            <div><label>Account ID (12 digits)</label><input name="aws_account_id" value="{{.AWSAccountID}}" pattern="[0-9]{12}" maxlength="12" required></div>
+            <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit">Save</button></div>
+          </div>
+        </form>
+      </section>
       {{end}}
     </main>
   </div>
