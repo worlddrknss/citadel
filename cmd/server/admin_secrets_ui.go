@@ -315,9 +315,18 @@ func (s *server) handleAdminDeleteSecret(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	secretID := strings.TrimSpace(r.FormValue("secret_id"))
-	_, err := s.store.DeleteSecret(r.Context(), secretID, 30, false)
+	forceDelete := strings.EqualFold(strings.TrimSpace(r.FormValue("force_delete")), "true") || r.FormValue("force_delete") == "1"
+	recoveryWindowDays := 30
+	if forceDelete {
+		recoveryWindowDays = 0
+	}
+	_, err := s.store.DeleteSecret(r.Context(), secretID, recoveryWindowDays, forceDelete)
 	if err != nil {
 		s.redirectAdminSecretError(w, r, secretID, "overview", err.Error())
+		return
+	}
+	if forceDelete {
+		s.redirectAdminSecretOK(w, r, "", "", "secret deleted immediately")
 		return
 	}
 	s.redirectAdminSecretOK(w, r, secretID, "overview", "secret scheduled for deletion")
@@ -461,6 +470,10 @@ func (s *server) handleAdminBulkSecrets(w http.ResponseWriter, r *http.Request) 
 		switch action {
 		case "delete":
 			if _, err := s.store.DeleteSecret(r.Context(), secretID, 30, false); err == nil {
+				updated++
+			}
+		case "force_delete":
+			if _, err := s.store.DeleteSecret(r.Context(), secretID, 0, true); err == nil {
 				updated++
 			}
 		case "restore":

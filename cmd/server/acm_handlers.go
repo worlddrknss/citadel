@@ -94,7 +94,7 @@ func (s *server) handleACMRequestCertificate(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Store certificate
-	certID := "acm-" + randomHex(12)
+	certID := randomHex(12)
 	certARN := fmt.Sprintf("arn:aws:acm:local:000000000000:certificate/%s", certID)
 
 	parsedCert, err := x509.ParseCertificate(certDER)

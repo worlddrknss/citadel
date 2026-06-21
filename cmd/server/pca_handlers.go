@@ -51,7 +51,7 @@ func (s *server) handleCreateCertificateAuthority(w http.ResponseWriter, r *http
 	}
 
 	// For now, record the CA as CREATING and will need root cert to transition to ACTIVE
-	caID := "ca-" + randomHex(12)
+	caID := randomHex(12)
 	caARN := fmt.Sprintf("arn:aws:acm-pca:local:000000000000:certificate-authority/%s", caID)
 
 	// TODO: Build and self-sign root cert or accept cert for subordinate
@@ -231,7 +231,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Store the certificate in the database
-	certID := "cert-" + randomHex(12)
+	certID := randomHex(12)
 	certARN := fmt.Sprintf("arn:aws:acm-pca:local:000000000000:certificate/%s", certID)
 
 	// Parse certificate to get serial number and validity

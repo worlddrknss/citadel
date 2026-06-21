@@ -147,6 +147,7 @@
       <ul class="sb-nav">
         <li><a class="sb-link active" href="/"><span class="ico">🔑</span> Key Management</a></li>
         <li><a class="sb-link" href="/secrets"><span class="ico">🔒</span> Secrets Manager</a></li>
+        <li><a class="sb-link" href="/certificates"><span class="ico">📜</span> Certificate Management</a></li>
       </ul>
     </div>
     <div class="sb-section">
@@ -210,6 +211,7 @@
             <option value="enable">Enable selected</option>
             <option value="disable">Disable selected</option>
             {{if .CanAdmin}}<option value="schedule_deletion">Schedule deletion</option>{{end}}
+            {{if .CanAdmin}}<option value="force_delete">Force delete now</option>{{end}}
           </select>
           <button class="btn btn-s btn-sm" type="submit">Apply</button>
         </div>
@@ -272,6 +274,7 @@
           {{else}}
           <form method="post" action="/?action=schedule_deletion"><input type="hidden" name="key_id" value="{{.SelectedKey.ID}}"><input type="hidden" name="window_days" value="30"><button class="btn btn-d btn-sm">Schedule deletion</button></form>
           {{end}}
+          <form method="post" action="/?action=force_delete" onsubmit="return confirm('Force delete this key now? This bypasses the grace period and cannot be undone.');"><input type="hidden" name="key_id" value="{{.SelectedKey.ID}}"><button class="btn btn-d btn-sm">Force delete now</button></form>
         {{end}}
         <a class="btn btn-s btn-sm" href="/audit?q={{.SelectedKey.ID}}">Trace activity</a>
       </div>

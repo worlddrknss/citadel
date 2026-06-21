@@ -82,6 +82,7 @@ type keyStore interface {
 	SetKeyEnabled(ctx context.Context, keyID string, enabled bool) error
 	ScheduleKeyDeletion(ctx context.Context, keyID string, windowDays int) (time.Time, error)
 	CancelKeyDeletion(ctx context.Context, keyID string) error
+	ForceDeleteKey(ctx context.Context, keyID string) error
 	CreateGrant(ctx context.Context, req createGrantRequest) (kmsGrant, error)
 	ListGrants(ctx context.Context, keyID string) ([]kmsGrant, error)
 	RevokeGrant(ctx context.Context, keyID, grantID string) error
@@ -604,6 +605,7 @@ func main() {
 	mux.HandleFunc("/login", s.handleAdminLogin)
 	mux.HandleFunc("/logout", s.handleAdminLogout)
 	mux.HandleFunc("/secrets", s.handleSecretsAdmin)
+	mux.HandleFunc("/certificates", s.handleCertificatesAdmin)
 	mux.HandleFunc("/audit", s.handleAudit)
 
 	// Master admin UI pages
@@ -616,6 +618,7 @@ func main() {
 	mux.Handle("/admin/login", http.RedirectHandler("/login", http.StatusMovedPermanently))
 	mux.Handle("/admin/logout", http.RedirectHandler("/logout", http.StatusMovedPermanently))
 	mux.Handle("/admin/secrets", http.RedirectHandler("/secrets", http.StatusMovedPermanently))
+	mux.Handle("/admin/certificates", http.RedirectHandler("/certificates", http.StatusMovedPermanently))
 	mux.Handle("/admin/audit", http.RedirectHandler("/audit", http.StatusMovedPermanently))
 
 	// API endpoint remains available for AWS JSON-RPC clients
@@ -1003,7 +1006,7 @@ func maybeBootstrapFromLegacy(ctx context.Context, cfg config, store keyStore) e
 		} else if cfg.dbConnString == "" {
 			legacyKeyID = deriveDeterministicLegacyKeyID(cfg.legacyMasterKey)
 		} else {
-			legacyKeyID = "go-kms-" + randomHex(12)
+			legacyKeyID = randomHex(12)
 		}
 	}
 	k := kmsKey{
@@ -2008,7 +2011,7 @@ func (s *dbStore) CreateKey(ctx context.Context, description, keyUsage, keySpec 
 	if err != nil {
 		return kmsKey{}, err
 	}
-	id := "go-kms-" + randomHex(12)
+	id := randomHex(12)
 	k := kmsKey{
 		ID:           id,
 		ARN:          fmt.Sprintf("arn:aws:kms:local:000000000000:key/%s", id),
@@ -2230,6 +2233,41 @@ func (s *dbStore) CancelKeyDeletion(ctx context.Context, keyID string) error {
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+func (s *dbStore) ForceDeleteKey(ctx context.Context, keyID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM kms_aliases WHERE target_key_id = $1`, keyID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM kms_key_policies WHERE key_id = $1`, keyID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM kms_grants WHERE key_id = $1`, keyID); err != nil {
+		return err
+	}
+
+	res, err := tx.ExecContext(ctx, `DELETE FROM kms_keys WHERE id = $1`, keyID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "foreign key") {
+			return fmt.Errorf("key is in use and cannot be force deleted")
+		}
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+
+	return tx.Commit()
 }
 
 func (s *dbStore) CreateGrant(ctx context.Context, req createGrantRequest) (kmsGrant, error) {
@@ -2460,6 +2498,10 @@ func (s *inMemoryStore) ScheduleKeyDeletion(_ context.Context, _ string, _ int) 
 }
 
 func (s *inMemoryStore) CancelKeyDeletion(_ context.Context, _ string) error {
+	return errUnsupported
+}
+
+func (s *inMemoryStore) ForceDeleteKey(_ context.Context, _ string) error {
 	return errUnsupported
 }
 
@@ -2949,7 +2991,7 @@ func hashAuditRecord(key []byte, prevHash string, event auditEvent, ts string) s
 
 func deriveDeterministicLegacyKeyID(masterKey []byte) string {
 	sum := sha256.Sum256(masterKey)
-	return "go-kms-" + hex.EncodeToString(sum[:8])
+	return hex.EncodeToString(sum[:8])
 }
 
 func deriveWrappingKey(legacyMasterKey []byte) []byte {

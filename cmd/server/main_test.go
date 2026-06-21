@@ -253,12 +253,12 @@ func TestGrantLifecycle(t *testing.T) {
 func TestDeriveDeterministicLegacyKeyID(t *testing.T) {
 	master := bytes.Repeat([]byte{7}, 32)
 	sum := sha256.Sum256(master)
-	want := "go-kms-" + hex.EncodeToString(sum[:8])
+	want := hex.EncodeToString(sum[:8])
 	got := deriveDeterministicLegacyKeyID(master)
 	if got != want {
 		t.Fatalf("unexpected key id: got %s want %s", got, want)
 	}
-	if got == "go-kms-default-key" {
+	if got == "default-key" {
 		t.Fatalf("legacy key id must not use static default value")
 	}
 }

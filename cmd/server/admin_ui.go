@@ -119,6 +119,9 @@ func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	case "cancel_deletion":
 		s.handleAdminCancelKeyDeletion(w, r)
 		return
+	case "force_delete":
+		s.handleAdminForceDeleteKey(w, r)
+		return
 	case "put_key_policy":
 		s.handleAdminPutKeyPolicy(w, r)
 		return
@@ -344,6 +347,26 @@ func (s *server) handleAdminCancelKeyDeletion(w http.ResponseWriter, r *http.Req
 	s.redirectAdminKeyOK(w, r, keyID, "key-policy", "key deletion canceled")
 }
 
+func (s *server) handleAdminForceDeleteKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.redirectAdminError(w, r, "force delete requires POST")
+		return
+	}
+	if _, ok := s.requireUISession(w, r, "admin"); !ok {
+		return
+	}
+	keyID := strings.TrimSpace(r.FormValue("key_id"))
+	if keyID == "" {
+		s.redirectAdminError(w, r, "key_id is required")
+		return
+	}
+	if err := s.store.ForceDeleteKey(r.Context(), keyID); err != nil {
+		s.redirectAdminError(w, r, fmt.Sprintf("force delete failed: %v", err))
+		return
+	}
+	s.redirectAdminOK(w, r, "key force deleted")
+}
+
 func (s *server) handleAdminPutKeyPolicy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.redirectAdminError(w, r, "put key policy requires POST")
@@ -406,6 +429,13 @@ func (s *server) handleAdminBulkKeys(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if _, err := s.store.ScheduleKeyDeletion(r.Context(), keyID, 30); err == nil {
+				updated++
+			}
+		case "force_delete":
+			if _, ok := s.requireUISession(w, r, "admin"); !ok {
+				return
+			}
+			if err := s.store.ForceDeleteKey(r.Context(), keyID); err == nil {
 				updated++
 			}
 		}

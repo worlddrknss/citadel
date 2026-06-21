@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Citadel - Certificate Management</title>
+  <style>
+    :root{--bg:#f3f4f6;--panel:#fff;--line:#e5e7eb;--text:#111827;--muted:#6b7280;--blue:#0b74d1;--green:#166534;--red:#991b1b;--side:#1f2937;--side2:#111827}
+    *{box-sizing:border-box}body{margin:0;font:14px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
+    .shell{display:flex;min-height:100vh}.side{width:232px;background:linear-gradient(180deg,var(--side),var(--side2));color:#fff;padding:14px}
+    .logo{font-size:18px;font-weight:700;margin-bottom:12px}.label{font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;margin:12px 0 6px}
+    .nav a{display:block;color:#d1d5db;text-decoration:none;padding:8px 10px;border-radius:8px}.nav a:hover{background:#374151}.nav a.active{background:#1d4ed8;color:#fff}
+    .main{flex:1;padding:18px}.head{display:flex;justify-content:space-between;align-items:center}.title{font-size:24px;font-weight:700}
+    .flash{padding:10px 12px;border:1px solid;border-radius:8px;margin:10px 0}.ok{background:#ecfdf3;border-color:#86efac;color:var(--green)}.err{background:#fef2f2;border-color:#fca5a5;color:var(--red)}
+    .grid{display:grid;grid-template-columns:340px 1fr;gap:12px}.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+    .card h3{margin:0 0 8px;font-size:15px}.row{display:flex;gap:8px;flex-wrap:wrap}.row>div{flex:1;min-width:130px}
+    label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}input,select,textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius:8px}
+    textarea{min-height:110px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .btn{display:inline-block;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;text-decoration:none;color:var(--text);cursor:pointer}
+    .btn.primary{background:var(--blue);border-color:#0a5aa4;color:#fff}.btn.danger{border-color:#fecaca;color:var(--red)}
+    table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid var(--line);text-align:left;font-size:13px}th{font-size:11px;text-transform:uppercase;color:var(--muted)}
+    .muted{color:var(--muted)}
+    @media(max-width:1000px){.shell{display:block}.side{width:100%}.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="logo">Citadel</div>
+    <div class="label">Services</div>
+    <nav class="nav">
+      <a href="/">Key Management</a>
+      <a href="/secrets">Secrets Manager</a>
+      <a class="active" href="/certificates">Certificate Management</a>
+    </nav>
+    <div class="label">Operations</div>
+    <nav class="nav">
+      <a href="/audit">Audit Explorer</a>
+    </nav>
+    <div class="label">Master Admin</div>
+    <nav class="nav">
+      <a href="/admin">Overview</a>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/rbac">RBAC</a>
+      <a href="/admin/tenants">Tenants</a>
+    </nav>
+    <div style="margin-top:12px;"><a style="color:#fecaca;text-decoration:none" href="/logout">Sign out</a></div>
+  </aside>
+  <main class="main">
+    <div class="head">
+      <div class="title">Certificate Management</div>
+      <div class="muted">{{if .CurrentUserName}}{{.CurrentUserName}} ({{.CurrentUserRole}}){{end}}</div>
+    </div>
+    {{if .Flash}}<div class="flash ok">{{.Flash}}</div>{{end}}
+    {{if .Error}}<div class="flash err">{{.Error}}</div>{{end}}
+
+    <div class="grid">
+      <section class="card">
+        <h3>Create Certificate Authority</h3>
+        <form method="post" action="/certificates?action=create_ca">
+          <div class="row">
+            <div><label>Type</label><select name="ca_type"><option value="ROOT">ROOT</option><option value="SUBORDINATE">SUBORDINATE</option></select></div>
+            <div><label>Key Algorithm</label><select name="key_algorithm"><option value="RSA_2048">RSA_2048</option><option value="RSA_3072">RSA_3072</option><option value="RSA_4096">RSA_4096</option><option value="EC_prime256v1">EC_prime256v1</option><option value="EC_secp384r1">EC_secp384r1</option></select></div>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <div><label>Signing Algorithm</label><select name="signing_algorithm"><option value="">Auto</option><option value="RSASSA_PKCS1_V1_5_SHA_256">RSASSA_PKCS1_V1_5_SHA_256</option><option value="ECDSA_SHA_256">ECDSA_SHA_256</option><option value="ECDSA_SHA_384">ECDSA_SHA_384</option></select></div>
+            <div><label>Country</label><input name="country" placeholder="US"></div>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <div><label>Organization</label><input name="organization" placeholder="Citadel"></div>
+            <div><label>Common Name</label><input name="common_name" placeholder="Citadel Root CA" required></div>
+          </div>
+          <div style="margin-top:10px;"><button class="btn primary" type="submit">Create CA</button></div>
+        </form>
+
+        <h3 style="margin-top:14px;">Certificate Authorities</h3>
+        {{if .CAs}}
+        <table>
+          <thead><tr><th>CA ID</th><th>Type</th><th>Status</th></tr></thead>
+          <tbody>
+          {{range .CAs}}
+            <tr>
+              <td><a href="/certificates?ca_arn={{.ARN}}">{{.CAID}}</a></td>
+              <td>{{.Type}}</td>
+              <td>{{.State}}</td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+        {{else}}<p class="muted">No CAs created yet.</p>{{end}}
+      </section>
+
+      <section class="card">
+        <h3>Issue Certificate{{if .SelectedCA}} - {{.SelectedCA.CAID}}{{end}}</h3>
+        {{if .SelectedCA}}
+        <form method="post" action="/certificates?action=issue_cert">
+          <input type="hidden" name="ca_arn" value="{{.SelectedCA.ARN}}">
+          <div class="row">
+            <div><label>Validity Days</label><input name="validity_days" type="number" value="365" min="1" max="3650"></div>
+            <div><label>Signing Algorithm</label><select name="signing_algorithm"><option value="">Auto</option><option value="RSASSA_PKCS1_V1_5_SHA_256">RSASSA_PKCS1_V1_5_SHA_256</option><option value="ECDSA_SHA_256">ECDSA_SHA_256</option><option value="ECDSA_SHA_384">ECDSA_SHA_384</option></select></div>
+          </div>
+          <div style="margin-top:8px;"><label>CSR (PEM)</label><textarea name="csr_pem" placeholder="-----BEGIN CERTIFICATE REQUEST-----" required></textarea></div>
+          <div style="margin-top:10px;"><button class="btn primary" type="submit">Issue Certificate</button></div>
+        </form>
+        {{else}}<p class="muted">Select or create a CA first.</p>{{end}}
+
+        <h3 style="margin-top:14px;">Issued Certificates</h3>
+        {{if .Certificates}}
+        <table>
+          <thead><tr><th>ID</th><th>Status</th><th>Not After</th><th>Actions</th></tr></thead>
+          <tbody>
+          {{range .Certificates}}
+            <tr>
+              <td>{{.CertID}}</td>
+              <td>{{.Status}}</td>
+              <td>{{.NotAfter}}</td>
+              <td>
+                {{if ne .Status "REVOKED"}}
+                <form method="post" action="/certificates?action=revoke_cert" style="display:flex;gap:6px;align-items:center;">
+                  {{if $.SelectedCA}}<input type="hidden" name="ca_arn" value="{{$.SelectedCA.ARN}}">{{end}}
+                  <input type="hidden" name="cert_id" value="{{.CertID}}">
+                  <input name="reason" placeholder="Reason" style="width:120px">
+                  <button class="btn danger" type="submit">Revoke</button>
+                </form>
+                {{else}}
+                <span class="muted">{{.RevocationReason}}</span>
+                {{end}}
+              </td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+        {{else}}<p class="muted">No certificates issued for the selected CA.</p>{{end}}
+      </section>
+    </div>
+  </main>
+</div>
+</body>
+</html>
