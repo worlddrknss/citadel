@@ -107,7 +107,7 @@ Order is based on implementation speed and dependency chain.
 4. Phase D: Enterprise UI and Workflow UX (4-6 weeks)
 5. Phase E: Production and Compliance Readiness (longest, 6-10+ weeks)
 
-## Phase A: Compatibility Core Hardening (1-2 weeks)
+## Phase A: Compatibility Core Hardening (Completed for MVP)
 
 Objective:
 
@@ -124,6 +124,18 @@ Acceptance criteria:
 
 - >=95 percent pass rate on defined core KMS compatibility suite.
 - No breaking diffs on existing Vault auto-unseal flows.
+
+Implemented:
+
+- Core compatibility suite for high-frequency operations and error paths in `cmd/server/main_test.go`.
+- Stable `Limit` and `Marker` semantics for `TrentService.ListKeys` and `TrentService.ListAliases`.
+- Compatibility tracking in `docs/COMPATIBILITY_MATRIX.md` with current suite pass rate.
+- Vault continuity preserved through round-trip and legacy blob decrypt coverage.
+
+Completion status:
+
+- Defined compatibility suite pass rate is 100 percent (9/9 checks).
+- Existing Vault auto-unseal compatibility paths remain covered by tests.
 
 ## Phase B: Policy and AuthZ Model (2-4 weeks)
 
@@ -207,6 +219,8 @@ Done:
 - Strict SigV4 header mode and access key gate.
 - Admin UI with interactive key actions.
 - Audit chain fields and chained writes.
+- Core Secrets Manager CRUD, version listing, tags, resource policy storage, and rotation metadata APIs.
+- Secrets Manager admin UI for inventory, retrieval, versions, tags, policy, and rotation configuration.
 
 Not done yet (required for true full-compatibility positioning):
 
@@ -215,6 +229,7 @@ Not done yet (required for true full-compatibility positioning):
 - Wrapped key material at rest.
 - Enterprise-authenticated UI and full audit workflow UX.
 - HA and compliance-grade operational guarantees.
+- Secrets policy enforcement, tenant-aware authorization, and external rotation executors.
 
 ## Migration Guardrails (must keep)
 
@@ -223,3 +238,13 @@ Not done yet (required for true full-compatibility positioning):
 3. Confirm decrypt compatibility for old ciphertext blobs.
 4. Roll Vault pods one-by-one and verify auto-unseal.
 5. Remove legacy key env vars only after production soak period.
+
+## Supplemental Roadmaps
+
+- AWS Secrets Manager compatibility planning is tracked separately in `docs/SECRETS_MANAGER_PHASES.md` so it can share platform work with KMS without overloading the main KMS roadmap.
+
+Current supplemental status:
+
+- Secrets Phase S1 and S2 are complete for the current MVP.
+- Secrets Phase S4 and S5 are partially implemented for the current MVP.
+- Secrets Phase S3 mostly remains ahead of KMS authZ work.

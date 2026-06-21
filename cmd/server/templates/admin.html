@@ -48,6 +48,29 @@
       font-size: 28px;
       font-weight: 700;
     }
+    .service-nav {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 6px;
+    }
+    .service-link {
+      display: inline-block;
+      text-decoration: none;
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid #d4dbe5;
+      color: #334155;
+      background: #fff;
+      font-weight: 600;
+    }
+    .service-link.active {
+      color: #0f4d73;
+      border-color: #bfd5e6;
+      background: #edf7ff;
+    }
     .sub {
       margin: 2px 0 0;
       color: var(--muted);
@@ -221,6 +244,10 @@
     {{if not .SelectedKey}}
     <header class="topbar">
       <div>
+        <div class="service-nav">
+          <a class="service-link active" href="/admin">Key Management Service</a>
+          <a class="service-link" href="/admin/secrets">Secrets Manager</a>
+        </div>
         <h1 class="title">Customer managed keys ({{.KeyCount}})</h1>
         <div class="sub">List page</div>
       </div>
@@ -266,6 +293,10 @@
     {{else}}
     <header class="topbar">
       <div>
+        <div class="service-nav">
+          <a class="service-link active" href="/admin">Key Management Service</a>
+          <a class="service-link" href="/admin/secrets">Secrets Manager</a>
+        </div>
         <h1 class="title">{{.SelectedKey.ID}}</h1>
         <div class="sub">Key details page</div>
       </div>
@@ -335,19 +366,76 @@
         </div>
       </form>
       {{else if eq .SelectedTab "aliases"}}
-      <form method="post" action="/admin?action=update_alias" style="max-width:420px;">
-        <label><strong>Update alias target</strong></label>
-        <input type="text" name="alias_name" placeholder="alias/my-key" required>
-        <select name="target_key_id" required>
-          <option value="">Select new target key</option>
-          {{range .AvailableKeyIDs}}
-          <option value="{{.}}">{{.}}</option>
+      <div class="grid">
+        <div class="kv">
+          <h3>Create alias</h3>
+          <form method="post" action="/admin?action=create_alias">
+            <input type="text" name="alias_name" placeholder="alias/my-key" required>
+            <input type="hidden" name="target_key_id" value="{{.SelectedKey.ID}}">
+            <button class="btn" type="submit" style="margin-top:8px;">Create alias for this key</button>
+          </form>
+        </div>
+        <div class="kv">
+          <h3>Update alias target</h3>
+          <form method="post" action="/admin?action=update_alias">
+            <input type="text" name="alias_name" placeholder="alias/my-key" required>
+            <select name="target_key_id" required>
+              <option value="">Select new target key</option>
+              {{range .AvailableKeyIDs}}
+              <option value="{{.}}">{{.}}</option>
+              {{end}}
+            </select>
+            <button class="btn secondary" type="submit" style="margin-top:8px;">Update alias</button>
+          </form>
+        </div>
+      </div>
+      {{if .Aliases}}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Alias name</th>
+            <th>Target key</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Aliases}}
+          <tr>
+            <td>{{.Name}}</td>
+            <td class="mono">{{.TargetKey}}</td>
+          </tr>
           {{end}}
-        </select>
-        <button class="btn secondary" type="submit" style="margin-top:8px;">Update alias</button>
-      </form>
+        </tbody>
+      </table>
       {{else}}
-      <p class="empty">This tab is scaffolded for AWS parity and will be wired to API behavior in the next increment.</p>
+      <p class="empty">No aliases found.</p>
+      {{end}}
+      {{else if eq .SelectedTab "cryptographic-configuration"}}
+      <div class="grid">
+        <div class="kv">
+          <h3>Cryptographic configuration</h3>
+          <div><strong>Key type:</strong> Symmetric</div>
+          <div><strong>Key spec:</strong> SYMMETRIC_DEFAULT</div>
+          <div><strong>Key usage:</strong> Encrypt and decrypt</div>
+          <div><strong>Origin:</strong> AWS_KMS-compatible local provider</div>
+        </div>
+        <div class="kv">
+          <h3>Algorithms</h3>
+          <div><strong>Encryption algorithms:</strong> SYMMETRIC_DEFAULT</div>
+          <div><strong>Multi-Region:</strong> No</div>
+          <div><strong>Rotation model:</strong> Manual lifecycle in current MVP</div>
+        </div>
+      </div>
+      {{else if eq .SelectedTab "key-rotation"}}
+      <div class="kv">
+        <h3>Key rotation</h3>
+        <div>Automatic key rotation is not implemented in the current MVP.</div>
+        <div style="margin-top:8px;">Create a new key and move aliases to it when you need controlled rotation behavior.</div>
+      </div>
+      {{else}}
+      <div class="kv">
+        <h3>Tags</h3>
+        <div>No persistent tag model is implemented for KMS keys in the current MVP.</div>
+      </div>
       {{end}}
     </section>
     {{end}}

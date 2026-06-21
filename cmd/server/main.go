@@ -60,6 +60,22 @@ type keyStore interface {
 	SetKeyEnabled(ctx context.Context, keyID string, enabled bool) error
 	ScheduleKeyDeletion(ctx context.Context, keyID string, windowDays int) (time.Time, error)
 	CancelKeyDeletion(ctx context.Context, keyID string) error
+	CreateSecret(ctx context.Context, req createSecretRequest) (secretMetadataRecord, secretValueRecord, error)
+	DescribeSecret(ctx context.Context, secretID string) (secretMetadataRecord, error)
+	GetSecretValue(ctx context.Context, secretID, versionID, versionStage string) (secretValueRecord, error)
+	PutSecretValue(ctx context.Context, req putSecretValueRequest) (secretValueRecord, error)
+	UpdateSecret(ctx context.Context, req updateSecretRequest) (secretMetadataRecord, *secretValueRecord, error)
+	DeleteSecret(ctx context.Context, secretID string, recoveryWindowDays int, forceDelete bool) (secretMetadataRecord, error)
+	RestoreSecret(ctx context.Context, secretID string) (secretMetadataRecord, error)
+	ListSecrets(ctx context.Context) ([]secretMetadataRecord, error)
+	ListSecretVersionIDs(ctx context.Context, secretID string) ([]secretVersionListEntry, error)
+	TagSecret(ctx context.Context, secretID string, tags []secretTag) error
+	UntagSecret(ctx context.Context, secretID string, tagKeys []string) error
+	GetSecretResourcePolicy(ctx context.Context, secretID string) (string, error)
+	PutSecretResourcePolicy(ctx context.Context, secretID, policyDocument string) error
+	RotateSecret(ctx context.Context, secretID, rotationLambdaARN string, automaticallyAfterDays int, rotateImmediately bool, clientRequestToken string) (secretRotationResult, error)
+	CancelRotateSecret(ctx context.Context, secretID string) (secretMetadataRecord, error)
+	UpdateSecretVersionStage(ctx context.Context, secretID, versionStage, moveToVersionID, removeFromVersionID string) (secretMetadataRecord, error)
 	RecordAudit(ctx context.Context, event auditEvent) error
 }
 
@@ -70,7 +86,10 @@ type dbStore struct {
 
 type inMemoryStore struct {
 	k        kmsKey
+	keys     []kmsKey
+	aliases  []kmsAlias
 	policies map[string]string
+	secrets  map[string]*inMemorySecret
 }
 
 type kmsKey struct {
@@ -141,7 +160,14 @@ type createKeyResponse struct {
 }
 
 type listKeysResponse struct {
-	Keys []listKeyEntry `json:"Keys"`
+	Keys       []listKeyEntry `json:"Keys"`
+	NextMarker string         `json:"NextMarker,omitempty"`
+	Truncated  bool           `json:"Truncated"`
+}
+
+type listKeysRequest struct {
+	Limit  int    `json:"Limit"`
+	Marker string `json:"Marker"`
 }
 
 type listKeyEntry struct {
@@ -160,7 +186,14 @@ type updateAliasRequest struct {
 }
 
 type listAliasesResponse struct {
-	Aliases []aliasEntry `json:"Aliases"`
+	Aliases    []aliasEntry `json:"Aliases"`
+	NextMarker string       `json:"NextMarker,omitempty"`
+	Truncated  bool         `json:"Truncated"`
+}
+
+type listAliasesRequest struct {
+	Limit  int    `json:"Limit"`
+	Marker string `json:"Marker"`
 }
 
 type aliasEntry struct {
@@ -237,6 +270,7 @@ func main() {
 	mux.HandleFunc("/", s.handleKMS)
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/admin", s.handleAdmin)
+	mux.HandleFunc("/admin/secrets", s.handleSecretsAdmin)
 
 	h := withRequestLogging(mux)
 
@@ -397,6 +431,57 @@ CREATE TABLE IF NOT EXISTS kms_audit_events (
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS sm_secrets (
+	name TEXT PRIMARY KEY,
+	arn TEXT NOT NULL UNIQUE,
+	description TEXT NOT NULL DEFAULT '',
+	kms_key_id TEXT NOT NULL REFERENCES kms_keys(id),
+	current_version_id TEXT NOT NULL,
+	previous_version_id TEXT NOT NULL DEFAULT '',
+	deleted_date TIMESTAMPTZ,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS sm_secret_versions (
+	secret_name TEXT NOT NULL REFERENCES sm_secrets(name) ON DELETE CASCADE,
+	version_id TEXT NOT NULL,
+	client_request_token TEXT NOT NULL,
+	encrypted_payload_b64 TEXT NOT NULL,
+	is_binary BOOLEAN NOT NULL DEFAULT FALSE,
+	version_created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	PRIMARY KEY (secret_name, version_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS sm_secret_versions_secret_token_idx
+	ON sm_secret_versions (secret_name, client_request_token);
+
+CREATE TABLE IF NOT EXISTS sm_secret_tags (
+	secret_name TEXT NOT NULL REFERENCES sm_secrets(name) ON DELETE CASCADE,
+	tag_key TEXT NOT NULL,
+	tag_value TEXT NOT NULL,
+	PRIMARY KEY (secret_name, tag_key)
+);
+
+CREATE TABLE IF NOT EXISTS sm_secret_policies (
+	secret_name TEXT PRIMARY KEY REFERENCES sm_secrets(name) ON DELETE CASCADE,
+	policy_document TEXT NOT NULL,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS sm_secret_version_stages (
+	secret_name TEXT NOT NULL REFERENCES sm_secrets(name) ON DELETE CASCADE,
+	version_id TEXT NOT NULL,
+	stage_label TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	PRIMARY KEY (secret_name, stage_label)
+);
+
+ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS rotation_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS rotation_lambda_arn TEXT NOT NULL DEFAULT '';
+ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS rotation_days INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS next_rotation_date TIMESTAMPTZ;
+
 ALTER TABLE kms_audit_events ADD COLUMN IF NOT EXISTS prev_hash TEXT;
 ALTER TABLE kms_audit_events ADD COLUMN IF NOT EXISTS event_hash TEXT;
 ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS deletion_date TIMESTAMPTZ;
@@ -495,6 +580,40 @@ func (s *server) handleKMS(w http.ResponseWriter, r *http.Request) {
 		s.handleGetKeyPolicy(w, r)
 	case "TrentService.PutKeyPolicy":
 		s.handlePutKeyPolicy(w, r)
+	case "secretsmanager.CreateSecret":
+		s.handleCreateSecret(w, r)
+	case "secretsmanager.DescribeSecret":
+		s.handleDescribeSecret(w, r)
+	case "secretsmanager.GetSecretValue":
+		s.handleGetSecretValue(w, r)
+	case "secretsmanager.PutSecretValue":
+		s.handlePutSecretValue(w, r)
+	case "secretsmanager.UpdateSecret":
+		s.handleUpdateSecret(w, r)
+	case "secretsmanager.DeleteSecret":
+		s.handleDeleteSecret(w, r)
+	case "secretsmanager.RestoreSecret":
+		s.handleRestoreSecret(w, r)
+	case "secretsmanager.ListSecrets":
+		s.handleListSecrets(w, r)
+	case "secretsmanager.ListSecretVersionIds":
+		s.handleListSecretVersionIDs(w, r)
+	case "secretsmanager.TagResource":
+		s.handleTagSecret(w, r)
+	case "secretsmanager.UntagResource":
+		s.handleUntagSecret(w, r)
+	case "secretsmanager.GetResourcePolicy":
+		s.handleGetSecretResourcePolicy(w, r)
+	case "secretsmanager.PutResourcePolicy":
+		s.handlePutSecretResourcePolicy(w, r)
+	case "secretsmanager.ValidateResourcePolicy":
+		s.handleValidateSecretResourcePolicy(w, r)
+	case "secretsmanager.RotateSecret":
+		s.handleRotateSecret(w, r)
+	case "secretsmanager.CancelRotateSecret":
+		s.handleCancelRotateSecret(w, r)
+	case "secretsmanager.UpdateSecretVersionStage":
+		s.handleUpdateSecretVersionStage(w, r)
 	default:
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidAction", "unsupported X-Amz-Target")
 	}
@@ -745,6 +864,18 @@ func (s *server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	const action = "TrentService.ListKeys"
+	var req listKeysRequest
+	if err := decodeOptionalJSONBody(r, &req); err != nil {
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	limit, err := normalizeListLimit(req.Limit)
+	if err != nil {
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
 	keys, err := s.store.ListKeys(r.Context())
 	if err != nil {
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
@@ -755,8 +886,14 @@ func (s *server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	for _, k := range keys {
 		out = append(out, listKeyEntry{KeyID: k.ID, KeyARN: k.ARN})
 	}
+	out, nextMarker, truncated, err := paginateList(out, req.Marker, limit, func(item listKeyEntry) string { return item.KeyID })
+	if err != nil {
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
 	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
-	writeJSON(w, http.StatusOK, listKeysResponse{Keys: out})
+	writeJSON(w, http.StatusOK, listKeysResponse{Keys: out, NextMarker: nextMarker, Truncated: truncated})
 }
 
 func (s *server) handleCreateAlias(w http.ResponseWriter, r *http.Request) {
@@ -802,6 +939,18 @@ func (s *server) handleUpdateAlias(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleListAliases(w http.ResponseWriter, r *http.Request) {
 	const action = "TrentService.ListAliases"
+	var req listAliasesRequest
+	if err := decodeOptionalJSONBody(r, &req); err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		return
+	}
+	limit, err := normalizeListLimit(req.Limit)
+	if err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		return
+	}
 	aliases, err := s.store.ListAliases(r.Context())
 	if err != nil {
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "list aliases failed")
@@ -812,8 +961,14 @@ func (s *server) handleListAliases(w http.ResponseWriter, r *http.Request) {
 	for _, a := range aliases {
 		out = append(out, aliasEntry{AliasName: a.AliasName, TargetKeyID: a.TargetKeyID})
 	}
+	out, nextMarker, truncated, err := paginateList(out, req.Marker, limit, func(item aliasEntry) string { return item.AliasName })
+	if err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		return
+	}
 	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
-	writeJSON(w, http.StatusOK, listAliasesResponse{Aliases: out})
+	writeJSON(w, http.StatusOK, listAliasesResponse{Aliases: out, NextMarker: nextMarker, Truncated: truncated})
 }
 
 func (s *server) handleSetKeyEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
@@ -977,20 +1132,20 @@ WHERE id = $1
 	var (
 		k            kmsKey
 		masterB64    string
-			wrappedB64   string
-			nonceB64     string
+		wrappedB64   string
+		nonceB64     string
 		deletionDate sql.NullTime
 	)
-		err := s.db.QueryRowContext(ctx, q, keyID).Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt)
+	err := s.db.QueryRowContext(ctx, q, keyID).Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt)
 	if err != nil {
 		return kmsKey{}, err
 	}
 	if deletionDate.Valid {
 		k.DeletionDate = &deletionDate.Time
 	}
-		k.MasterKeyRaw, err = s.resolveKeyMaterial(ctx, k.ID, masterB64, wrappedB64, nonceB64)
+	k.MasterKeyRaw, err = s.resolveKeyMaterial(ctx, k.ID, masterB64, wrappedB64, nonceB64)
 	if err != nil {
-			return kmsKey{}, fmt.Errorf("load key material for %s: %w", k.ID, err)
+		return kmsKey{}, fmt.Errorf("load key material for %s: %w", k.ID, err)
 	}
 	return k, nil
 }
@@ -1278,14 +1433,20 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 }
 
 func (s *inMemoryStore) ResolveByID(_ context.Context, keyID string) (kmsKey, error) {
-	if keyID == "" || keyID == s.k.ID {
-		return s.k, nil
+	for _, key := range s.keysSnapshot() {
+		if keyID == "" || keyID == key.ID {
+			return key, nil
+		}
 	}
 	return kmsKey{}, sql.ErrNoRows
 }
 
 func (s *inMemoryStore) ResolveDefault(_ context.Context) (kmsKey, error) {
-	return s.k, nil
+	keys := s.keysSnapshot()
+	if len(keys) == 0 {
+		return kmsKey{}, sql.ErrNoRows
+	}
+	return keys[0], nil
 }
 
 func (s *inMemoryStore) EnsureBootstrap(_ context.Context, _ kmsKey) error {
@@ -1297,7 +1458,7 @@ func (s *inMemoryStore) CreateKey(_ context.Context, _ string) (kmsKey, error) {
 }
 
 func (s *inMemoryStore) ListKeys(_ context.Context) ([]kmsKey, error) {
-	return []kmsKey{s.k}, nil
+	return s.keysSnapshot(), nil
 }
 
 func (s *inMemoryStore) GetKeyPolicy(_ context.Context, keyID, policyName string) (string, error) {
@@ -1339,7 +1500,24 @@ func (s *inMemoryStore) UpdateAlias(_ context.Context, _, _ string) error {
 }
 
 func (s *inMemoryStore) ListAliases(_ context.Context) ([]kmsAlias, error) {
-	return nil, nil
+	if len(s.aliases) == 0 {
+		return nil, nil
+	}
+	out := make([]kmsAlias, len(s.aliases))
+	copy(out, s.aliases)
+	return out, nil
+}
+
+func (s *inMemoryStore) keysSnapshot() []kmsKey {
+	if len(s.keys) == 0 {
+		if strings.TrimSpace(s.k.ID) == "" {
+			return nil
+		}
+		return []kmsKey{s.k}
+	}
+	out := make([]kmsKey, len(s.keys))
+	copy(out, s.keys)
+	return out
 }
 
 func (s *inMemoryStore) SetKeyEnabled(_ context.Context, _ string, _ bool) error {
@@ -1613,6 +1791,55 @@ func decodeJSONBody(r *http.Request, target any) error {
 		return fmt.Errorf("invalid JSON body: %w", err)
 	}
 	return nil
+}
+
+func decodeOptionalJSONBody(r *http.Request, target any) error {
+	defer r.Body.Close()
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(target); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return fmt.Errorf("invalid JSON body: %w", err)
+	}
+	return nil
+}
+
+func normalizeListLimit(limit int) (int, error) {
+	if limit == 0 {
+		return 100, nil
+	}
+	if limit < 0 || limit > 1000 {
+		return 0, errors.New("Limit must be between 1 and 1000")
+	}
+	return limit, nil
+}
+
+func paginateList[T any](items []T, marker string, limit int, idOf func(T) string) ([]T, string, bool, error) {
+	start := 0
+	if marker != "" {
+		found := false
+		for i, item := range items {
+			if idOf(item) == marker {
+				start = i + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, "", false, errors.New("Marker is invalid")
+		}
+	}
+	if start >= len(items) {
+		return []T{}, "", false, nil
+	}
+	end := start + limit
+	if end >= len(items) {
+		return items[start:], "", false, nil
+	}
+	nextMarker := idOf(items[end-1])
+	return items[start:end], nextMarker, true, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

@@ -70,6 +70,8 @@ seal "awskms" {
 - This service targets protocol compatibility for Vault unseal flows and is not a full AWS KMS implementation.
 - For production, add strict SigV4 verification, mTLS, key wrapping (HSM or Vault transit), and immutable audit logging.
 - Full phased implementation details are in `docs/PHASES.md`.
+- Phase A compatibility status is tracked in `docs/COMPATIBILITY_MATRIX.md`.
+- AWS Secrets Manager supplemental planning is tracked in `docs/SECRETS_MANAGER_PHASES.md`.
 
 ## Build Roadmap (5 phases)
 
