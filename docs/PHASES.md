@@ -28,7 +28,7 @@ Pending in phase:
 - Move from plaintext `master_key_b64` to wrapped key material.
 - Add startup health checks that assert key presence in DB.
 
-## Phase 2 (Started)
+## Phase 2 (Completed for MVP)
 
 Goal: key lifecycle API surface.
 
@@ -36,39 +36,48 @@ Implemented:
 
 - `TrentService.CreateKey`
 - `TrentService.ListKeys`
+- `TrentService.CreateAlias`
+- `TrentService.UpdateAlias`
+- `TrentService.ListAliases`
+- `TrentService.EnableKey`
+- `TrentService.DisableKey`
+- `TrentService.ScheduleKeyDeletion`
+- `TrentService.CancelKeyDeletion`
 
 Pending in phase:
 
-- `CreateAlias`, `ListAliases`, `UpdateAlias`.
-- `EnableKey`, `DisableKey`, `ScheduleKeyDeletion`, `CancelKeyDeletion`.
 - Rotation metadata and versioned key material.
 
-## Phase 3 (Scaffolded)
+## Phase 3 (Completed for MVP)
 
 Goal: authN/authZ parity direction.
 
-Started:
+Implemented:
 
 - Access key gate is still available (`KMS_ACCESS_KEY_ID`).
+- Optional strict SigV4 header validation mode (`KMS_SIGV4_STRICT=true`).
 
-Planned:
+Remaining hardening:
 
-- Full SigV4 signature validation.
+- Full cryptographic SigV4 signature verification.
 - Grants and key policies in DB.
 - Tenant-aware authorization model.
 
-## Phase 4 (Planned)
+## Phase 4 (Completed for MVP)
 
 Goal: management UI.
 
-Planned scope:
+Implemented scope:
 
-- Key inventory and detail pages.
-- Alias and policy management.
-- Key state transitions.
-- Audit event explorer.
+- Minimal management UI endpoint at `/admin` with key and alias inventory.
 
-## Phase 5 (Started)
+Remaining UI expansion:
+
+- Authenticated UI with RBAC.
+- Key workflows and policy editors.
+- Audit explorer and tenant views.
+
+## Phase 5 (Completed for MVP)
 
 Goal: operational hardening and audit.
 
@@ -76,10 +85,10 @@ Implemented:
 
 - Audit table scaffold (`kms_audit_events`).
 - API action audit inserts for main operations.
+- Tamper-evident chaining fields (`prev_hash`, `event_hash`) with chained writes.
 
-Planned:
+Remaining hardening:
 
-- Tamper-evident hash chaining on audit rows.
 - Metrics, SLOs, and failure budget alerts.
 - HA deployment profile and backup/restore runbooks.
 

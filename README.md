@@ -9,6 +9,17 @@ Lightweight AWS KMS JSON API-compatible service intended for Vault auto-unseal l
 - `TrentService.DescribeKey`
 - `TrentService.CreateKey` (DB mode)
 - `TrentService.ListKeys`
+- `TrentService.CreateAlias`
+- `TrentService.UpdateAlias`
+- `TrentService.ListAliases`
+- `TrentService.EnableKey`
+- `TrentService.DisableKey`
+- `TrentService.ScheduleKeyDeletion`
+- `TrentService.CancelKeyDeletion`
+
+Additional endpoints:
+
+- `GET /admin` for management overview of keys and aliases.
 
 Current implementation status:
 

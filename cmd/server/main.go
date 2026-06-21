@@ -34,6 +34,7 @@ type config struct {
 	dbConnString      string
 	requireAccessKey  bool
 	expectedAccessKey string
+	strictSigV4       bool
 
 	legacyKeyID     string
 	legacyMasterKey []byte
@@ -50,6 +51,12 @@ type keyStore interface {
 	EnsureBootstrap(ctx context.Context, k kmsKey) error
 	CreateKey(ctx context.Context, description string) (kmsKey, error)
 	ListKeys(ctx context.Context) ([]kmsKey, error)
+	CreateAlias(ctx context.Context, aliasName, keyID string) error
+	UpdateAlias(ctx context.Context, aliasName, keyID string) error
+	ListAliases(ctx context.Context) ([]kmsAlias, error)
+	SetKeyEnabled(ctx context.Context, keyID string, enabled bool) error
+	ScheduleKeyDeletion(ctx context.Context, keyID string, windowDays int) (time.Time, error)
+	CancelKeyDeletion(ctx context.Context, keyID string) error
 	RecordAudit(ctx context.Context, event auditEvent) error
 }
 
@@ -68,6 +75,12 @@ type kmsKey struct {
 	Description  string
 	CreatedAt    time.Time
 	Enabled      bool
+	DeletionDate *time.Time
+}
+
+type kmsAlias struct {
+	AliasName string
+	TargetKeyID string
 }
 
 type awsError struct {
@@ -131,6 +144,39 @@ type listKeyEntry struct {
 	KeyARN string `json:"KeyArn"`
 }
 
+type createAliasRequest struct {
+	AliasName   string `json:"AliasName"`
+	TargetKeyID string `json:"TargetKeyId"`
+}
+
+type updateAliasRequest struct {
+	AliasName   string `json:"AliasName"`
+	TargetKeyID string `json:"TargetKeyId"`
+}
+
+type listAliasesResponse struct {
+	Aliases []aliasEntry `json:"Aliases"`
+}
+
+type aliasEntry struct {
+	AliasName   string `json:"AliasName"`
+	TargetKeyID string `json:"TargetKeyId"`
+}
+
+type keyIDRequest struct {
+	KeyID string `json:"KeyId"`
+}
+
+type scheduleKeyDeletionRequest struct {
+	KeyID                 string `json:"KeyId"`
+	PendingWindowInDays   int    `json:"PendingWindowInDays"`
+}
+
+type scheduleKeyDeletionResponse struct {
+	KeyID        string    `json:"KeyId"`
+	DeletionDate time.Time `json:"DeletionDate"`
+}
+
 type keyMetadata struct {
 	AWSAccountID                string    `json:"AWSAccountId"`
 	KeyID                       string    `json:"KeyId"`
@@ -170,6 +216,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc("/admin", s.handleAdmin)
 
 	h := withRequestLogging(mux)
 
@@ -198,6 +245,7 @@ func loadConfig() (config, error) {
 	expectedAccessKey := os.Getenv("KMS_ACCESS_KEY_ID")
 	cfg.expectedAccessKey = expectedAccessKey
 	cfg.requireAccessKey = expectedAccessKey != ""
+	cfg.strictSigV4 = strings.EqualFold(envOrDefault("KMS_SIGV4_STRICT", "false"), "true")
 
 	masterKeyB64 := os.Getenv("KMS_MASTER_KEY_B64")
 	if masterKeyB64 != "" {
@@ -261,8 +309,16 @@ CREATE TABLE IF NOT EXISTS kms_keys (
   master_key_b64 TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
+	deletion_date TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS kms_aliases (
+	alias_name TEXT PRIMARY KEY,
+	target_key_id TEXT NOT NULL REFERENCES kms_keys(id),
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS kms_settings (
@@ -278,8 +334,14 @@ CREATE TABLE IF NOT EXISTS kms_audit_events (
 	result TEXT NOT NULL,
 	error_type TEXT,
 	actor TEXT,
+	prev_hash TEXT,
+	event_hash TEXT,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE kms_audit_events ADD COLUMN IF NOT EXISTS prev_hash TEXT;
+ALTER TABLE kms_audit_events ADD COLUMN IF NOT EXISTS event_hash TEXT;
+ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS deletion_date TIMESTAMPTZ;
 `
 	if _, err := db.ExecContext(ctx, ddl); err != nil {
 		return fmt.Errorf("initialize schema: %w", err)
@@ -319,6 +381,12 @@ func (s *server) handleKMS(w http.ResponseWriter, r *http.Request) {
 		writeAWSJSONError(w, http.StatusMethodNotAllowed, "InvalidAction", "method not allowed")
 		return
 	}
+	if s.cfg.strictSigV4 {
+		if err := validateSigV4Request(r); err != nil {
+			writeAWSJSONError(w, http.StatusForbidden, "IncompleteSignature", err.Error())
+			return
+		}
+	}
 
 	if s.cfg.requireAccessKey {
 		if !hasAccessKey(r.Header.Get("Authorization"), s.cfg.expectedAccessKey) {
@@ -339,6 +407,20 @@ func (s *server) handleKMS(w http.ResponseWriter, r *http.Request) {
 		s.handleCreateKey(w, r)
 	case "TrentService.ListKeys":
 		s.handleListKeys(w, r)
+	case "TrentService.CreateAlias":
+		s.handleCreateAlias(w, r)
+	case "TrentService.UpdateAlias":
+		s.handleUpdateAlias(w, r)
+	case "TrentService.ListAliases":
+		s.handleListAliases(w, r)
+	case "TrentService.EnableKey":
+		s.handleSetKeyEnabled(w, r, true)
+	case "TrentService.DisableKey":
+		s.handleSetKeyEnabled(w, r, false)
+	case "TrentService.ScheduleKeyDeletion":
+		s.handleScheduleKeyDeletion(w, r)
+	case "TrentService.CancelKeyDeletion":
+		s.handleCancelKeyDeletion(w, r)
 	default:
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidAction", "unsupported X-Amz-Target")
 	}
@@ -541,8 +623,182 @@ func (s *server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, listKeysResponse{Keys: out})
 }
 
-func keyState(enabled bool) string {
+func (s *server) handleCreateAlias(w http.ResponseWriter, r *http.Request) {
+	const action = "TrentService.CreateAlias"
+	var req createAliasRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if req.AliasName == "" || req.TargetKeyID == "" {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "AliasName and TargetKeyId are required")
+		return
+	}
+	if err := s.store.CreateAlias(r.Context(), req.AliasName, req.TargetKeyID); err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "target key not found or alias exists")
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		return
+	}
+	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.TargetKeyID, Result: "ok", Actor: r.RemoteAddr})
+	writeJSON(w, http.StatusOK, map[string]any{})
+}
+
+func (s *server) handleUpdateAlias(w http.ResponseWriter, r *http.Request) {
+	const action = "TrentService.UpdateAlias"
+	var req updateAliasRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if req.AliasName == "" || req.TargetKeyID == "" {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "AliasName and TargetKeyId are required")
+		return
+	}
+	if err := s.store.UpdateAlias(r.Context(), req.AliasName, req.TargetKeyID); err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "alias or key not found")
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		return
+	}
+	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.TargetKeyID, Result: "ok", Actor: r.RemoteAddr})
+	writeJSON(w, http.StatusOK, map[string]any{})
+}
+
+func (s *server) handleListAliases(w http.ResponseWriter, r *http.Request) {
+	const action = "TrentService.ListAliases"
+	aliases, err := s.store.ListAliases(r.Context())
+	if err != nil {
+		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "list aliases failed")
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		return
+	}
+	out := make([]aliasEntry, 0, len(aliases))
+	for _, a := range aliases {
+		out = append(out, aliasEntry{AliasName: a.AliasName, TargetKeyID: a.TargetKeyID})
+	}
+	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	writeJSON(w, http.StatusOK, listAliasesResponse{Aliases: out})
+}
+
+func (s *server) handleSetKeyEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
+	action := "TrentService.DisableKey"
 	if enabled {
+		action = "TrentService.EnableKey"
+	}
+	var req keyIDRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if req.KeyID == "" {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "KeyId is required")
+		return
+	}
+	if err := s.store.SetKeyEnabled(r.Context(), req.KeyID, enabled); err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		return
+	}
+	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
+	writeJSON(w, http.StatusOK, map[string]any{})
+}
+
+func (s *server) handleScheduleKeyDeletion(w http.ResponseWriter, r *http.Request) {
+	const action = "TrentService.ScheduleKeyDeletion"
+	var req scheduleKeyDeletionRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if req.KeyID == "" {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "KeyId is required")
+		return
+	}
+	if req.PendingWindowInDays == 0 {
+		req.PendingWindowInDays = 30
+	}
+	if req.PendingWindowInDays < 7 || req.PendingWindowInDays > 30 {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "PendingWindowInDays must be between 7 and 30")
+		return
+	}
+	deletionDate, err := s.store.ScheduleKeyDeletion(r.Context(), req.KeyID, req.PendingWindowInDays)
+	if err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		return
+	}
+	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
+	writeJSON(w, http.StatusOK, scheduleKeyDeletionResponse{KeyID: req.KeyID, DeletionDate: deletionDate})
+}
+
+func (s *server) handleCancelKeyDeletion(w http.ResponseWriter, r *http.Request) {
+	const action = "TrentService.CancelKeyDeletion"
+	var req keyIDRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if req.KeyID == "" {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "KeyId is required")
+		return
+	}
+	if err := s.store.CancelKeyDeletion(r.Context(), req.KeyID); err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		return
+	}
+	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
+	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
+	if err != nil {
+		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "reload key failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"KeyMetadata": toKeyMetadata(key)})
+}
+
+func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	keys, err := s.store.ListKeys(r.Context())
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("failed to list keys"))
+		return
+	}
+	aliases, err := s.store.ListAliases(r.Context())
+	if err != nil {
+		aliases = nil
+	}
+	var b strings.Builder
+	b.WriteString("<html><head><title>go-kms admin</title></head><body><h1>go-kms admin</h1>")
+	b.WriteString("<h2>Keys</h2><ul>")
+	for _, k := range keys {
+		b.WriteString("<li>")
+		b.WriteString(k.ID)
+		b.WriteString(" state=")
+		b.WriteString(keyState(k))
+		b.WriteString("</li>")
+	}
+	b.WriteString("</ul><h2>Aliases</h2><ul>")
+	for _, a := range aliases {
+		b.WriteString("<li>")
+		b.WriteString(a.AliasName)
+		b.WriteString(" -> ")
+		b.WriteString(a.TargetKeyID)
+		b.WriteString("</li>")
+	}
+	b.WriteString("</ul></body></html>")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(b.String()))
+}
+
+func keyState(key kmsKey) string {
+	if key.DeletionDate != nil {
+		return "PendingDeletion"
+	}
+	if key.Enabled {
 		return "Enabled"
 	}
 	return "Disabled"
@@ -557,14 +813,48 @@ func toKeyMetadata(key kmsKey) keyMetadata {
 		Enabled:               key.Enabled,
 		Description:           key.Description,
 		KeyUsage:              "ENCRYPT_DECRYPT",
-		KeyState:              keyState(key.Enabled),
+		KeyState:              keyState(key),
 		Origin:                "AWS_KMS",
 		KeyManager:            "CUSTOMER",
 		CustomerMasterKeySpec: "SYMMETRIC_DEFAULT",
 		KeySpec:               "SYMMETRIC_DEFAULT",
 		EncryptionAlgorithms:  []string{"SYMMETRIC_DEFAULT"},
 		MultiRegion:           false,
+		PendingDeletionWindowInDays: pendingDeletionDays(key.DeletionDate),
 	}
+}
+
+func pendingDeletionDays(deletionDate *time.Time) int {
+	if deletionDate == nil {
+		return 0
+	}
+	days := int(time.Until(*deletionDate).Hours() / 24)
+	if days < 0 {
+		return 0
+	}
+	return days
+}
+
+func validateSigV4Request(r *http.Request) error {
+	auth := r.Header.Get("Authorization")
+	if auth == "" {
+		return errors.New("missing Authorization header")
+	}
+	if !strings.HasPrefix(auth, "AWS4-HMAC-SHA256 ") {
+		return errors.New("unsupported authorization algorithm")
+	}
+	for _, part := range []string{"Credential=", "SignedHeaders=", "Signature="} {
+		if !strings.Contains(auth, part) {
+			return fmt.Errorf("authorization header missing %s", strings.TrimSuffix(part, "="))
+		}
+	}
+	if r.Header.Get("X-Amz-Date") == "" {
+		return errors.New("missing X-Amz-Date header")
+	}
+	if r.Header.Get("X-Amz-Target") == "" {
+		return errors.New("missing X-Amz-Target header")
+	}
+	return nil
 }
 
 func (s *server) recordAudit(ctx context.Context, event auditEvent) {
@@ -574,18 +864,29 @@ func (s *server) recordAudit(ctx context.Context, event auditEvent) {
 }
 
 func (s *dbStore) ResolveByID(ctx context.Context, keyID string) (kmsKey, error) {
+	if strings.HasPrefix(keyID, "alias/") {
+		var target string
+		if err := s.db.QueryRowContext(ctx, `SELECT target_key_id FROM kms_aliases WHERE alias_name = $1`, keyID).Scan(&target); err != nil {
+			return kmsKey{}, err
+		}
+		keyID = target
+	}
 	const q = `
-SELECT id, arn, master_key_b64, description, enabled, created_at
+SELECT id, arn, master_key_b64, description, enabled, deletion_date, created_at
 FROM kms_keys
 WHERE id = $1
 `
 	var (
-		k         kmsKey
-		masterB64 string
+		k            kmsKey
+		masterB64    string
+		deletionDate sql.NullTime
 	)
-	err := s.db.QueryRowContext(ctx, q, keyID).Scan(&k.ID, &k.ARN, &masterB64, &k.Description, &k.Enabled, &k.CreatedAt)
+	err := s.db.QueryRowContext(ctx, q, keyID).Scan(&k.ID, &k.ARN, &masterB64, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt)
 	if err != nil {
 		return kmsKey{}, err
+	}
+	if deletionDate.Valid {
+		k.DeletionDate = &deletionDate.Time
 	}
 	k.MasterKeyRaw, err = base64.StdEncoding.DecodeString(masterB64)
 	if err != nil {
@@ -661,8 +962,8 @@ func (s *dbStore) CreateKey(ctx context.Context, description string) (kmsKey, er
 	}
 	masterKeyB64 := base64.StdEncoding.EncodeToString(k.MasterKeyRaw)
 	const q = `
-INSERT INTO kms_keys (id, arn, master_key_b64, description, enabled, created_at)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO kms_keys (id, arn, master_key_b64, description, enabled, deletion_date, created_at)
+VALUES ($1, $2, $3, $4, $5, NULL, $6)
 `
 	if _, err := s.db.ExecContext(ctx, q, k.ID, k.ARN, masterKeyB64, k.Description, k.Enabled, k.CreatedAt); err != nil {
 		return kmsKey{}, err
@@ -672,7 +973,7 @@ VALUES ($1, $2, $3, $4, $5, $6)
 
 func (s *dbStore) ListKeys(ctx context.Context) ([]kmsKey, error) {
 	const q = `
-SELECT id, arn, master_key_b64, description, enabled, created_at
+SELECT id, arn, master_key_b64, description, enabled, deletion_date, created_at
 FROM kms_keys
 ORDER BY created_at ASC
 `
@@ -685,11 +986,15 @@ ORDER BY created_at ASC
 	out := make([]kmsKey, 0)
 	for rows.Next() {
 		var (
-			k         kmsKey
-			masterB64 string
+			k            kmsKey
+			masterB64    string
+			deletionDate sql.NullTime
 		)
-		if err := rows.Scan(&k.ID, &k.ARN, &masterB64, &k.Description, &k.Enabled, &k.CreatedAt); err != nil {
+		if err := rows.Scan(&k.ID, &k.ARN, &masterB64, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt); err != nil {
 			return nil, err
+		}
+		if deletionDate.Valid {
+			k.DeletionDate = &deletionDate.Time
 		}
 		k.MasterKeyRaw, err = base64.StdEncoding.DecodeString(masterB64)
 		if err != nil {
@@ -703,12 +1008,122 @@ ORDER BY created_at ASC
 	return out, nil
 }
 
-func (s *dbStore) RecordAudit(ctx context.Context, event auditEvent) error {
+func (s *dbStore) CreateAlias(ctx context.Context, aliasName, keyID string) error {
 	const q = `
-INSERT INTO kms_audit_events (action, key_id, result, error_type, actor)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO kms_aliases (alias_name, target_key_id)
+VALUES ($1, $2)
 `
-	_, err := s.db.ExecContext(ctx, q, event.Action, event.KeyID, event.Result, event.ErrorType, event.Actor)
+	_, err := s.db.ExecContext(ctx, q, aliasName, keyID)
+	return err
+}
+
+func (s *dbStore) UpdateAlias(ctx context.Context, aliasName, keyID string) error {
+	const q = `
+UPDATE kms_aliases
+SET target_key_id = $2, updated_at = NOW()
+WHERE alias_name = $1
+`
+	res, err := s.db.ExecContext(ctx, q, aliasName, keyID)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *dbStore) ListAliases(ctx context.Context) ([]kmsAlias, error) {
+	const q = `
+SELECT alias_name, target_key_id
+FROM kms_aliases
+ORDER BY alias_name ASC
+`
+	rows, err := s.db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]kmsAlias, 0)
+	for rows.Next() {
+		var a kmsAlias
+		if err := rows.Scan(&a.AliasName, &a.TargetKeyID); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *dbStore) SetKeyEnabled(ctx context.Context, keyID string, enabled bool) error {
+	const q = `UPDATE kms_keys SET enabled = $2, updated_at = NOW() WHERE id = $1`
+	res, err := s.db.ExecContext(ctx, q, keyID, enabled)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *dbStore) ScheduleKeyDeletion(ctx context.Context, keyID string, windowDays int) (time.Time, error) {
+	deletionDate := time.Now().UTC().Add(time.Duration(windowDays) * 24 * time.Hour)
+	const q = `UPDATE kms_keys SET deletion_date = $2, updated_at = NOW() WHERE id = $1`
+	res, err := s.db.ExecContext(ctx, q, keyID, deletionDate)
+	if err != nil {
+		return time.Time{}, err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return time.Time{}, err
+	}
+	if rows == 0 {
+		return time.Time{}, sql.ErrNoRows
+	}
+	return deletionDate, nil
+}
+
+func (s *dbStore) CancelKeyDeletion(ctx context.Context, keyID string) error {
+	const q = `UPDATE kms_keys SET deletion_date = NULL, updated_at = NOW() WHERE id = $1`
+	res, err := s.db.ExecContext(ctx, q, keyID)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *dbStore) RecordAudit(ctx context.Context, event auditEvent) error {
+	var prevHash sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT event_hash FROM kms_audit_events ORDER BY id DESC LIMIT 1`).Scan(&prevHash); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	prev := ""
+	if prevHash.Valid {
+		prev = prevHash.String
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	eventHash := hashAuditRecord(prev, event, now)
+	const q = `
+INSERT INTO kms_audit_events (action, key_id, result, error_type, actor, prev_hash, event_hash, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+`
+	_, err := s.db.ExecContext(ctx, q, event.Action, event.KeyID, event.Result, event.ErrorType, event.Actor, prev, eventHash, now)
 	return err
 }
 
@@ -733,6 +1148,30 @@ func (s *inMemoryStore) CreateKey(_ context.Context, _ string) (kmsKey, error) {
 
 func (s *inMemoryStore) ListKeys(_ context.Context) ([]kmsKey, error) {
 	return []kmsKey{s.k}, nil
+}
+
+func (s *inMemoryStore) CreateAlias(_ context.Context, _, _ string) error {
+	return errUnsupported
+}
+
+func (s *inMemoryStore) UpdateAlias(_ context.Context, _, _ string) error {
+	return errUnsupported
+}
+
+func (s *inMemoryStore) ListAliases(_ context.Context) ([]kmsAlias, error) {
+	return nil, nil
+}
+
+func (s *inMemoryStore) SetKeyEnabled(_ context.Context, _ string, _ bool) error {
+	return errUnsupported
+}
+
+func (s *inMemoryStore) ScheduleKeyDeletion(_ context.Context, _ string, _ int) (time.Time, error) {
+	return time.Time{}, errUnsupported
+}
+
+func (s *inMemoryStore) CancelKeyDeletion(_ context.Context, _ string) error {
+	return errUnsupported
 }
 
 func (s *inMemoryStore) RecordAudit(_ context.Context, _ auditEvent) error {
@@ -893,4 +1332,9 @@ func randomHex(n int) string {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
+}
+
+func hashAuditRecord(prevHash string, event auditEvent, ts string) string {
+	h := sha256.Sum256([]byte(strings.Join([]string{prevHash, event.Action, event.KeyID, event.Result, event.ErrorType, event.Actor, ts}, "|")))
+	return hex.EncodeToString(h[:])
 }
