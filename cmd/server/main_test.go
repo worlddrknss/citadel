@@ -7,10 +7,19 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestEncryptDecryptRoundTrip(t *testing.T) {
-	s := &server{cfg: config{masterKey: bytes.Repeat([]byte{1}, 32), keyID: "go-kms-default-key"}}
+	k := kmsKey{
+		ID:           "go-kms-default-key",
+		ARN:          "arn:aws:kms:local:000000000000:key/go-kms-default-key",
+		MasterKeyRaw: bytes.Repeat([]byte{1}, 32),
+		Description:  "test key",
+		CreatedAt:    time.Unix(1, 0).UTC(),
+		Enabled:      true,
+	}
+	s := &server{cfg: config{}, store: &inMemoryStore{k: k}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 
@@ -47,7 +56,15 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 }
 
 func TestEncryptRejectsUnknownKeyID(t *testing.T) {
-	s := &server{cfg: config{masterKey: bytes.Repeat([]byte{2}, 32), keyID: "kms-a"}}
+	k := kmsKey{
+		ID:           "kms-a",
+		ARN:          "arn:aws:kms:local:000000000000:key/kms-a",
+		MasterKeyRaw: bytes.Repeat([]byte{2}, 32),
+		Description:  "test key",
+		CreatedAt:    time.Unix(1, 0).UTC(),
+		Enabled:      true,
+	}
+	s := &server{cfg: config{}, store: &inMemoryStore{k: k}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 
@@ -58,6 +75,45 @@ func TestEncryptRejectsUnknownKeyID(t *testing.T) {
 	rec := post(t, mux, "TrentService.Encrypt", body)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status got %d want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestDecryptLegacyBlobCompatibility(t *testing.T) {
+	k := kmsKey{
+		ID:           "go-kms-default-key",
+		ARN:          "arn:aws:kms:local:000000000000:key/go-kms-default-key",
+		MasterKeyRaw: bytes.Repeat([]byte{3}, 32),
+		Description:  "test key",
+		CreatedAt:    time.Unix(1, 0).UTC(),
+		Enabled:      true,
+	}
+	s := &server{cfg: config{}, store: &inMemoryStore{k: k}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleKMS)
+
+	plaintext := []byte("legacy-ciphertext")
+	rawBlob, err := encryptLegacyBlob(k.MasterKeyRaw, plaintext, canonicalContext(map[string]string{"a": "b"}))
+	if err != nil {
+		t.Fatalf("encrypt legacy blob: %v", err)
+	}
+
+	resp := callKMS(t, mux, "TrentService.Decrypt", map[string]any{
+		"CiphertextBlob": base64.StdEncoding.EncodeToString(rawBlob),
+		"EncryptionContext": map[string]string{
+			"a": "b",
+		},
+	})
+
+	gotPlainB64, ok := resp["Plaintext"].(string)
+	if !ok {
+		t.Fatalf("missing Plaintext in response: %#v", resp)
+	}
+	gotPlain, err := base64.StdEncoding.DecodeString(gotPlainB64)
+	if err != nil {
+		t.Fatalf("decode plaintext: %v", err)
+	}
+	if string(gotPlain) != string(plaintext) {
+		t.Fatalf("plaintext mismatch: got %q want %q", string(gotPlain), string(plaintext))
 	}
 }
 
