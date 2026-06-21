@@ -37,11 +37,6 @@ type adminPageView struct {
 }
 
 func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
 	switch r.URL.Query().Get("action") {
 	case "create_key":
 		s.handleAdminCreateKey(w, r)
@@ -63,6 +58,11 @@ func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	case "cancel_deletion":
 		s.handleAdminCancelKeyDeletion(w, r)
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
