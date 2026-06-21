@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -175,6 +177,33 @@ func TestPutAndGetKeyPolicy(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(gotPolicy), []byte("AllowAll")) {
 		t.Fatalf("policy not persisted: %s", gotPolicy)
+	}
+}
+
+func TestDeriveDeterministicLegacyKeyID(t *testing.T) {
+	master := bytes.Repeat([]byte{7}, 32)
+	sum := sha256.Sum256(master)
+	want := "go-kms-" + hex.EncodeToString(sum[:8])
+	got := deriveDeterministicLegacyKeyID(master)
+	if got != want {
+		t.Fatalf("unexpected key id: got %s want %s", got, want)
+	}
+	if got == "go-kms-default-key" {
+		t.Fatalf("legacy key id must not use static default value")
+	}
+}
+
+func TestDecodeCipherBlobLegacyFallbackOnMalformedHeader(t *testing.T) {
+	legacy := []byte{cipherBlobVersionV1, 250, 1, 2, 3, 4}
+	keyID, raw, err := decodeCipherBlob(legacy)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if keyID != "" {
+		t.Fatalf("expected empty key id for legacy fallback")
+	}
+	if !bytes.Equal(raw, legacy) {
+		t.Fatalf("expected legacy blob passthrough")
 	}
 }
 

@@ -37,6 +37,7 @@ type adminPageView struct {
 	Keys            []adminKeyView
 	Aliases         []adminAliasView
 	AvailableKeyIDs []string
+	KeyCount        int
 	SelectedKey     *adminKeyView
 	SelectedKeyID   string
 	SelectedTab     string
@@ -93,6 +94,7 @@ func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		Keys:            make([]adminKeyView, 0, len(keys)),
 		Aliases:         make([]adminAliasView, 0, len(aliases)),
 		AvailableKeyIDs: make([]string, 0, len(keys)),
+		KeyCount:        len(keys),
 		SelectedKeyID:   strings.TrimSpace(r.URL.Query().Get("key_id")),
 		SelectedTab:     strings.TrimSpace(r.URL.Query().Get("tab")),
 		PolicyName:      strings.TrimSpace(r.URL.Query().Get("policy_name")),
@@ -113,17 +115,13 @@ func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if view.SelectedKeyID == "" && len(keys) > 0 {
-		view.SelectedKeyID = keys[0].ID
-	}
-
 	for _, k := range keys {
 		deletionDate := ""
 		if k.DeletionDate != nil {
 			deletionDate = k.DeletionDate.UTC().Format(time.RFC3339)
 		}
 		createdAt := k.CreatedAt.UTC().Format("2006-01-02 15:04:05 MST")
-		isSelected := k.ID == view.SelectedKeyID
+		isSelected := view.SelectedKeyID != "" && k.ID == view.SelectedKeyID
 		view.AvailableKeyIDs = append(view.AvailableKeyIDs, k.ID)
 		entry := adminKeyView{
 			ID:           k.ID,

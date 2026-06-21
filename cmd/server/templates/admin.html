@@ -24,61 +24,66 @@
       font-family: "Public Sans", "Segoe UI", sans-serif;
       padding: 18px;
     }
-    .shell {
+    .wrap {
       max-width: 1440px;
       margin: 0 auto;
-      display: grid;
-      grid-template-columns: 280px minmax(0, 1fr);
-      gap: 16px;
-    }
-    @media (max-width: 1080px) {
-      .shell { grid-template-columns: 1fr; }
-    }
-    .card {
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 14px;
       box-shadow: 0 8px 20px rgba(26, 39, 60, .06);
+      overflow: hidden;
     }
-    .left {
-      padding: 14px;
-      display: grid;
-      gap: 12px;
-      align-content: start;
+    .topbar {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, #fff 0%, #f8fbff 100%);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
     }
-    h1 {
+    .title {
       margin: 0;
-      font-size: 18px;
+      font-size: 28px;
       font-weight: 700;
-      color: #101828;
     }
     .sub {
-      margin: 4px 0 0;
+      margin: 2px 0 0;
       color: var(--muted);
       font-size: 13px;
     }
-    .key-list {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      display: grid;
-      gap: 8px;
-      max-height: 380px;
-      overflow: auto;
-    }
-    .key-list a {
-      text-decoration: none;
-      color: inherit;
-      display: block;
-      border: 1px solid var(--line);
+    .flash {
+      margin: 14px 16px 0;
       border-radius: 10px;
-      padding: 9px;
-      background: #fff;
+      padding: 10px 12px;
+      font-size: 13px;
+      border: 1px solid;
     }
-    .key-list a.active {
-      border-color: var(--brand);
-      box-shadow: 0 0 0 2px rgba(0, 115, 187, .12);
-      background: #f0f8ff;
+    .flash.ok { color: #0f6b18; background: #edf8ee; border-color: #9ed2a4; }
+    .flash.err { color: #8f1d1d; background: #fef2f2; border-color: #efb3b3; }
+    .section { padding: 16px; }
+    .btn {
+      border: 1px solid var(--brand-2);
+      background: var(--brand);
+      color: #fff;
+      border-radius: 20px;
+      padding: 8px 13px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+    }
+    .btn.secondary {
+      border-color: #9babbe;
+      background: #fff;
+      color: #1f2937;
+    }
+    .btn.warn {
+      border-color: #c2410c;
+      background: #d13212;
+      color: #fff;
     }
     .mono {
       font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
@@ -87,7 +92,6 @@
     }
     .state {
       display: inline-block;
-      margin-top: 5px;
       font-size: 11px;
       border-radius: 999px;
       padding: 2px 8px;
@@ -98,7 +102,6 @@
     .state.Enabled { color: var(--ok); border-color: #9ed2a4; background: #ecfbef; }
     .state.Disabled { color: #9f1f1f; border-color: #efb3b3; background: #fff0f0; }
     .state.PendingDeletion { color: #8f4b00; border-color: #efcd95; background: #fff7e8; }
-    .form-stack { display: grid; gap: 8px; }
     input, select, textarea {
       width: 100%;
       border: 1px solid #b9c6d8;
@@ -115,52 +118,46 @@
       font-size: 12px;
       line-height: 1.5;
     }
-    .btn {
-      border: 1px solid var(--brand-2);
-      background: var(--brand);
-      color: #fff;
-      border-radius: 20px;
-      padding: 7px 12px;
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+    .table th, .table td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    .table th {
+      color: var(--muted);
       font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: .3px;
     }
-    .btn.secondary {
-      border-color: #9babbe;
-      background: #fff;
-      color: #1f2937;
+    .details {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      margin: 16px;
+      overflow: hidden;
     }
-    .btn.warn {
-      border-color: #c2410c;
-      background: #d13212;
-      color: #fff;
-    }
-    .main { padding: 0; overflow: hidden; }
-    .toolbar {
-      padding: 14px 18px;
+    .details-head {
+      padding: 12px 14px;
       border-bottom: 1px solid var(--line);
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 10px;
       flex-wrap: wrap;
-      background: linear-gradient(180deg, #fff 0%, #f8fbff 100%);
+      background: #fbfdff;
     }
-    .toolbar .title {
-      font-size: 22px;
-      margin: 0;
-      font-weight: 700;
-    }
-    .toolbar .row {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .section { padding: 16px 18px; }
+    .details-body { padding: 14px; }
     .grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 16px;
+      margin-bottom: 14px;
     }
     @media (max-width: 860px) {
       .grid { grid-template-columns: 1fr; }
@@ -182,8 +179,7 @@
       display: flex;
       gap: 2px;
       border-bottom: 1px solid var(--line);
-      padding: 0 18px;
-      background: #fff;
+      margin: 0 16px;
       overflow: auto;
     }
     .tab {
@@ -200,73 +196,90 @@
       border-bottom-color: var(--brand);
       font-weight: 700;
     }
-    .flash {
-      margin: 12px 18px 0;
-      border-radius: 10px;
-      padding: 10px 12px;
-      font-size: 13px;
-      border: 1px solid;
-    }
-    .flash.ok { color: #0f6b18; background: #edf8ee; border-color: #9ed2a4; }
-    .flash.err { color: #8f1d1d; background: #fef2f2; border-color: #efb3b3; }
     .empty { color: var(--muted); font-size: 14px; }
-    details { border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
-    summary { cursor: pointer; font-weight: 600; }
+    .toolbar-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .inline-form {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .inline-form input[type="text"] { min-width: 260px; }
   </style>
 </head>
 <body>
-  <div class="shell">
-    <aside class="card left">
+  <main class="wrap">
+    {{if .Flash}}<div class="flash ok">{{.Flash}}</div>{{end}}
+    {{if .Error}}<div class="flash err">{{.Error}}</div>{{end}}
+
+    {{if not .SelectedKey}}
+    <header class="topbar">
       <div>
-        <h1>Customer managed keys</h1>
-        <p class="sub">AWS-style key selection and detail workflows</p>
+        <h1 class="title">Customer managed keys ({{.KeyCount}})</h1>
+        <div class="sub">List page</div>
       </div>
+      <form class="inline-form" method="post" action="/admin?action=create_key">
+        <input type="text" name="description" placeholder="Description (optional)">
+        <button class="btn" type="submit">Create key</button>
+      </form>
+    </header>
 
-      <ul class="key-list">
-        {{range .Keys}}
-        <li>
-          <a href="/admin?key_id={{.ID}}&tab=key-policy" class="{{if .IsSelected}}active{{end}}">
-            <div class="mono">{{.ID}}</div>
-            <span class="state {{.State}}">{{.State}}</span>
-          </a>
-        </li>
-        {{end}}
-      </ul>
+    <section class="section">
+      <div class="toolbar-row">
+        <input type="text" placeholder="Filter keys by properties or tags" disabled>
+      </div>
+      {{if .Keys}}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Aliases</th>
+            <th>Key ID</th>
+            <th>Status</th>
+            <th>Key type</th>
+            <th>Key spec</th>
+            <th>Key usage</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Keys}}
+          <tr>
+            <td>{{if .Alias}}<a href="/admin?key_id={{.ID}}&tab=aliases">{{.Alias}}</a>{{else}}-{{end}}</td>
+            <td><a class="mono" href="/admin?key_id={{.ID}}&tab=key-policy">{{.ID}}</a></td>
+            <td><span class="state {{.State}}">{{.State}}</span></td>
+            <td>Symmetric</td>
+            <td>SYMMETRIC_DEFAULT</td>
+            <td>Encrypt and decrypt</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <p class="empty">No keys found.</p>
+      {{end}}
+    </section>
+    {{else}}
+    <header class="topbar">
+      <div>
+        <h1 class="title">{{.SelectedKey.ID}}</h1>
+        <div class="sub">Key details page</div>
+      </div>
+      <div class="inline-form">
+        <a class="btn secondary" href="/admin">Back to customer managed keys</a>
+      </div>
+    </header>
 
-      <details>
-        <summary>Create key</summary>
-        <form class="form-stack" method="post" action="/admin?action=create_key" style="margin-top:10px;">
-          <input type="text" name="description" placeholder="Description (optional)">
-          <button class="btn" type="submit">Create symmetric key</button>
-        </form>
-      </details>
-
-      <details>
-        <summary>Create alias</summary>
-        <form class="form-stack" method="post" action="/admin?action=create_alias" style="margin-top:10px;">
-          <input type="text" name="alias_name" placeholder="alias/my-key">
-          <select name="target_key_id" required>
-            <option value="">Select target key</option>
-            {{range .AvailableKeyIDs}}
-            <option value="{{.}}">{{.}}</option>
-            {{end}}
-          </select>
-          <button class="btn secondary" type="submit">Create alias</button>
-        </form>
-      </details>
-    </aside>
-
-    <main class="card main">
-      {{if .Flash}}<div class="flash ok">{{.Flash}}</div>{{end}}
-      {{if .Error}}<div class="flash err">{{.Error}}</div>{{end}}
-
-      {{if .SelectedKey}}
-      <div class="toolbar">
+    <div class="details">
+      <div class="details-head">
         <div>
-          <h2 class="title">{{.SelectedKey.ID}}</h2>
-          <div class="sub">Key ID: {{.SelectedKey.ID}}</div>
+          <strong>General configuration</strong>
         </div>
-        <div class="row">
+        <div class="inline-form">
           <form method="post" action="/admin?action=enable_key">
             <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
             <button class="btn secondary" type="submit">Enable</button>
@@ -282,8 +295,7 @@
           </form>
         </div>
       </div>
-
-      <section class="section">
+      <div class="details-body">
         <div class="grid">
           <div class="kv">
             <h3>General configuration</h3>
@@ -299,50 +311,46 @@
             {{if .SelectedKey.DeletionDate}}<div><strong>Deletion date:</strong> {{.SelectedKey.DeletionDate}}</div>{{end}}
           </div>
         </div>
-      </section>
+      </div>
+    </div>
 
-      <nav class="tabs">
-        <a class="tab {{if eq .SelectedTab "key-policy"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-policy">Key policy</a>
-        <a class="tab {{if eq .SelectedTab "cryptographic-configuration"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=cryptographic-configuration">Cryptographic configuration</a>
-        <a class="tab {{if eq .SelectedTab "tags"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=tags">Tags</a>
-        <a class="tab {{if eq .SelectedTab "key-rotation"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-rotation">Key rotation</a>
-        <a class="tab {{if eq .SelectedTab "aliases"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=aliases">Aliases</a>
-      </nav>
+    <nav class="tabs">
+      <a class="tab {{if eq .SelectedTab "key-policy"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-policy">Key policy</a>
+      <a class="tab {{if eq .SelectedTab "cryptographic-configuration"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=cryptographic-configuration">Cryptographic configuration</a>
+      <a class="tab {{if eq .SelectedTab "tags"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=tags">Tags</a>
+      <a class="tab {{if eq .SelectedTab "key-rotation"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-rotation">Key rotation</a>
+      <a class="tab {{if eq .SelectedTab "aliases"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=aliases">Aliases</a>
+    </nav>
 
-      <section class="section">
-        {{if eq .SelectedTab "key-policy"}}
-        <form class="form-stack" method="post" action="/admin?action=put_key_policy">
-          <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
-          <input type="hidden" name="policy_name" value="{{.PolicyName}}">
-          <label><strong>Key policy</strong></label>
-          <textarea name="policy_document" spellcheck="false">{{.PolicyDocument}}</textarea>
-          <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <button class="btn" type="submit">Save changes</button>
-            <a class="btn secondary" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-policy">Discard</a>
-          </div>
-        </form>
-        {{else if eq .SelectedTab "aliases"}}
-        <form class="form-stack" method="post" action="/admin?action=update_alias" style="max-width:420px;">
-          <label><strong>Update alias target</strong></label>
-          <input type="text" name="alias_name" placeholder="alias/my-key" required>
-          <select name="target_key_id" required>
-            <option value="">Select new target key</option>
-            {{range .AvailableKeyIDs}}
-            <option value="{{.}}">{{.}}</option>
-            {{end}}
-          </select>
-          <button class="btn secondary" type="submit">Update alias</button>
-        </form>
-        {{else}}
-        <p class="empty">This tab is scaffolded for AWS parity and will be wired to API behavior in the next increment.</p>
-        {{end}}
-      </section>
+    <section class="section">
+      {{if eq .SelectedTab "key-policy"}}
+      <form method="post" action="/admin?action=put_key_policy">
+        <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
+        <input type="hidden" name="policy_name" value="{{.PolicyName}}">
+        <label><strong>Key policy</strong></label>
+        <textarea name="policy_document" spellcheck="false">{{.PolicyDocument}}</textarea>
+        <div class="inline-form" style="margin-top:10px;">
+          <button class="btn" type="submit">Save changes</button>
+          <a class="btn secondary" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-policy">Discard</a>
+        </div>
+      </form>
+      {{else if eq .SelectedTab "aliases"}}
+      <form method="post" action="/admin?action=update_alias" style="max-width:420px;">
+        <label><strong>Update alias target</strong></label>
+        <input type="text" name="alias_name" placeholder="alias/my-key" required>
+        <select name="target_key_id" required>
+          <option value="">Select new target key</option>
+          {{range .AvailableKeyIDs}}
+          <option value="{{.}}">{{.}}</option>
+          {{end}}
+        </select>
+        <button class="btn secondary" type="submit" style="margin-top:8px;">Update alias</button>
+      </form>
       {{else}}
-      <section class="section">
-        <p class="empty">No keys found. Create your first key from the left panel.</p>
-      </section>
+      <p class="empty">This tab is scaffolded for AWS parity and will be wired to API behavior in the next increment.</p>
       {{end}}
-    </main>
-  </div>
+    </section>
+    {{end}}
+  </main>
 </body>
 </html>

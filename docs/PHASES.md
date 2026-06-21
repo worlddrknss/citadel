@@ -152,7 +152,8 @@ Objective:
 Deliverables:
 
 - Replace `master_key_b64` at rest with wrapped key material.
-- External root-of-trust support (Vault transit or HSM-backed wrapping key).
+- Internal wrapping-key subsystem so go-kms remains fully standalone by default.
+- Optional external root-of-trust integrations as an add-on, not a core dependency.
 - Key versioning and rotation metadata for symmetric keys.
 - Safe migration path from existing DB rows.
 

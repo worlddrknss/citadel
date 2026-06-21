@@ -35,6 +35,7 @@ type config struct {
 	requireAccessKey  bool
 	expectedAccessKey string
 	strictSigV4       bool
+	wrappingKey       []byte
 
 	legacyKeyID     string
 	legacyMasterKey []byte
@@ -63,7 +64,8 @@ type keyStore interface {
 }
 
 type dbStore struct {
-	db *sql.DB
+	db          *sql.DB
+	wrappingKey []byte
 }
 
 type inMemoryStore struct {
@@ -275,11 +277,29 @@ func loadConfig() (config, error) {
 			return config{}, errors.New("KMS_MASTER_KEY_B64 must decode to exactly 32 bytes")
 		}
 		cfg.legacyMasterKey = masterKey
-		cfg.legacyKeyID = envOrDefault("KMS_KEY_ID", "go-kms-default-key")
+		cfg.legacyKeyID = os.Getenv("KMS_KEY_ID")
+	}
+
+	wrappingKeyB64 := os.Getenv("KMS_WRAPPING_KEY_B64")
+	if wrappingKeyB64 != "" {
+		wrappingKey, err := base64.StdEncoding.DecodeString(wrappingKeyB64)
+		if err != nil {
+			return config{}, fmt.Errorf("decode KMS_WRAPPING_KEY_B64: %w", err)
+		}
+		if len(wrappingKey) != 32 {
+			return config{}, errors.New("KMS_WRAPPING_KEY_B64 must decode to exactly 32 bytes")
+		}
+		cfg.wrappingKey = wrappingKey
+	}
+	if len(cfg.wrappingKey) == 0 && len(cfg.legacyMasterKey) == 32 {
+		cfg.wrappingKey = deriveWrappingKey(cfg.legacyMasterKey)
 	}
 
 	if cfg.dbConnString == "" && len(cfg.legacyMasterKey) == 0 {
 		return config{}, errors.New("set KMS_DB_URL, or provide legacy KMS_MASTER_KEY_B64")
+	}
+	if cfg.dbConnString != "" && len(cfg.wrappingKey) != 32 {
+		return config{}, errors.New("set KMS_WRAPPING_KEY_B64 (or KMS_MASTER_KEY_B64 for derived wrapping key) when using KMS_DB_URL")
 	}
 
 	return cfg, nil
@@ -290,9 +310,13 @@ func buildStore(cfg config) (keyStore, func(), error) {
 		if len(cfg.legacyMasterKey) == 0 {
 			return nil, nil, errors.New("legacy key is required when KMS_DB_URL is not set")
 		}
+		legacyKeyID := strings.TrimSpace(cfg.legacyKeyID)
+		if legacyKeyID == "" {
+			legacyKeyID = deriveDeterministicLegacyKeyID(cfg.legacyMasterKey)
+		}
 		k := kmsKey{
-			ID:           cfg.legacyKeyID,
-			ARN:          envOrDefault("KMS_KEY_ARN", fmt.Sprintf("arn:aws:kms:local:000000000000:key/%s", cfg.legacyKeyID)),
+			ID:           legacyKeyID,
+			ARN:          envOrDefault("KMS_KEY_ARN", fmt.Sprintf("arn:aws:kms:local:000000000000:key/%s", legacyKeyID)),
 			MasterKeyRaw: cfg.legacyMasterKey,
 			Description:  "go-kms key",
 			CreatedAt:    time.Now().UTC(),
@@ -316,7 +340,12 @@ func buildStore(cfg config) (keyStore, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	return &dbStore{db: db}, cleanup, nil
+	store := &dbStore{db: db, wrappingKey: cfg.wrappingKey}
+	if err := store.migrateLegacyKeyMaterial(context.Background()); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("migrate legacy key material: %w", err)
+	}
+	return store, cleanup, nil
 }
 
 func ensureSchema(ctx context.Context, db *sql.DB) error {
@@ -325,6 +354,8 @@ CREATE TABLE IF NOT EXISTS kms_keys (
   id TEXT PRIMARY KEY,
   arn TEXT NOT NULL UNIQUE,
   master_key_b64 TEXT NOT NULL,
+	wrapped_key_b64 TEXT NOT NULL DEFAULT '',
+	key_nonce_b64 TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
 	deletion_date TIMESTAMPTZ,
@@ -369,6 +400,8 @@ CREATE TABLE IF NOT EXISTS kms_audit_events (
 ALTER TABLE kms_audit_events ADD COLUMN IF NOT EXISTS prev_hash TEXT;
 ALTER TABLE kms_audit_events ADD COLUMN IF NOT EXISTS event_hash TEXT;
 ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS deletion_date TIMESTAMPTZ;
+ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS wrapped_key_b64 TEXT NOT NULL DEFAULT '';
+ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS key_nonce_b64 TEXT NOT NULL DEFAULT '';
 `
 	if _, err := db.ExecContext(ctx, ddl); err != nil {
 		return fmt.Errorf("initialize schema: %w", err)
@@ -380,9 +413,19 @@ func maybeBootstrapFromLegacy(ctx context.Context, cfg config, store keyStore) e
 	if len(cfg.legacyMasterKey) == 0 {
 		return nil
 	}
+	legacyKeyID := strings.TrimSpace(cfg.legacyKeyID)
+	if legacyKeyID == "" {
+		if existing, err := store.ResolveDefault(ctx); err == nil && strings.TrimSpace(existing.ID) != "" {
+			legacyKeyID = existing.ID
+		} else if cfg.dbConnString == "" {
+			legacyKeyID = deriveDeterministicLegacyKeyID(cfg.legacyMasterKey)
+		} else {
+			legacyKeyID = "go-kms-" + randomHex(12)
+		}
+	}
 	k := kmsKey{
-		ID:           cfg.legacyKeyID,
-		ARN:          envOrDefault("KMS_KEY_ARN", fmt.Sprintf("arn:aws:kms:local:000000000000:key/%s", cfg.legacyKeyID)),
+		ID:           legacyKeyID,
+		ARN:          envOrDefault("KMS_KEY_ARN", fmt.Sprintf("arn:aws:kms:local:000000000000:key/%s", legacyKeyID)),
 		MasterKeyRaw: cfg.legacyMasterKey,
 		Description:  "go-kms key",
 		CreatedAt:    time.Now().UTC(),
@@ -927,25 +970,27 @@ func (s *dbStore) ResolveByID(ctx context.Context, keyID string) (kmsKey, error)
 		keyID = target
 	}
 	const q = `
-SELECT id, arn, master_key_b64, description, enabled, deletion_date, created_at
+	SELECT id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, description, enabled, deletion_date, created_at
 FROM kms_keys
 WHERE id = $1
 `
 	var (
 		k            kmsKey
 		masterB64    string
+			wrappedB64   string
+			nonceB64     string
 		deletionDate sql.NullTime
 	)
-	err := s.db.QueryRowContext(ctx, q, keyID).Scan(&k.ID, &k.ARN, &masterB64, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt)
+		err := s.db.QueryRowContext(ctx, q, keyID).Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt)
 	if err != nil {
 		return kmsKey{}, err
 	}
 	if deletionDate.Valid {
 		k.DeletionDate = &deletionDate.Time
 	}
-	k.MasterKeyRaw, err = base64.StdEncoding.DecodeString(masterB64)
+		k.MasterKeyRaw, err = s.resolveKeyMaterial(ctx, k.ID, masterB64, wrappedB64, nonceB64)
 	if err != nil {
-		return kmsKey{}, fmt.Errorf("decode key material for %s: %w", k.ID, err)
+			return kmsKey{}, fmt.Errorf("load key material for %s: %w", k.ID, err)
 	}
 	return k, nil
 }
@@ -980,13 +1025,16 @@ LIMIT 1
 }
 
 func (s *dbStore) EnsureBootstrap(ctx context.Context, k kmsKey) error {
-	masterKeyB64 := base64.StdEncoding.EncodeToString(k.MasterKeyRaw)
+	wrappedB64, nonceB64, err := s.wrapKeyMaterial(k.MasterKeyRaw)
+	if err != nil {
+		return fmt.Errorf("wrap bootstrap key material: %w", err)
+	}
 	const upsertKey = `
-INSERT INTO kms_keys (id, arn, master_key_b64, description, enabled, created_at)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, description, enabled, created_at)
+VALUES ($1, $2, '', $3, $4, $5, $6, $7)
 ON CONFLICT (id) DO NOTHING
 `
-	if _, err := s.db.ExecContext(ctx, upsertKey, k.ID, k.ARN, masterKeyB64, k.Description, k.Enabled, k.CreatedAt); err != nil {
+	if _, err := s.db.ExecContext(ctx, upsertKey, k.ID, k.ARN, wrappedB64, nonceB64, k.Description, k.Enabled, k.CreatedAt); err != nil {
 		return fmt.Errorf("bootstrap key row: %w", err)
 	}
 
@@ -1015,12 +1063,15 @@ func (s *dbStore) CreateKey(ctx context.Context, description string) (kmsKey, er
 		Enabled:      true,
 		CreatedAt:    time.Now().UTC(),
 	}
-	masterKeyB64 := base64.StdEncoding.EncodeToString(k.MasterKeyRaw)
+	wrappedB64, nonceB64, err := s.wrapKeyMaterial(k.MasterKeyRaw)
+	if err != nil {
+		return kmsKey{}, err
+	}
 	const q = `
-INSERT INTO kms_keys (id, arn, master_key_b64, description, enabled, deletion_date, created_at)
-VALUES ($1, $2, $3, $4, $5, NULL, $6)
+INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, description, enabled, deletion_date, created_at)
+VALUES ($1, $2, '', $3, $4, $5, $6, NULL, $7)
 `
-	if _, err := s.db.ExecContext(ctx, q, k.ID, k.ARN, masterKeyB64, k.Description, k.Enabled, k.CreatedAt); err != nil {
+	if _, err := s.db.ExecContext(ctx, q, k.ID, k.ARN, wrappedB64, nonceB64, k.Description, k.Enabled, k.CreatedAt); err != nil {
 		return kmsKey{}, err
 	}
 	return k, nil
@@ -1028,7 +1079,7 @@ VALUES ($1, $2, $3, $4, $5, NULL, $6)
 
 func (s *dbStore) ListKeys(ctx context.Context) ([]kmsKey, error) {
 	const q = `
-SELECT id, arn, master_key_b64, description, enabled, deletion_date, created_at
+	SELECT id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, description, enabled, deletion_date, created_at
 FROM kms_keys
 ORDER BY created_at ASC
 `
@@ -1043,15 +1094,17 @@ ORDER BY created_at ASC
 		var (
 			k            kmsKey
 			masterB64    string
+			wrappedB64   string
+			nonceB64     string
 			deletionDate sql.NullTime
 		)
-		if err := rows.Scan(&k.ID, &k.ARN, &masterB64, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt); err != nil {
+		if err := rows.Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt); err != nil {
 			return nil, err
 		}
 		if deletionDate.Valid {
 			k.DeletionDate = &deletionDate.Time
 		}
-		k.MasterKeyRaw, err = base64.StdEncoding.DecodeString(masterB64)
+		k.MasterKeyRaw, err = s.resolveKeyMaterial(ctx, k.ID, masterB64, wrappedB64, nonceB64)
 		if err != nil {
 			return nil, err
 		}
@@ -1305,6 +1358,128 @@ func (s *inMemoryStore) RecordAudit(_ context.Context, _ auditEvent) error {
 	return nil
 }
 
+func (s *dbStore) resolveKeyMaterial(ctx context.Context, keyID, masterB64, wrappedB64, nonceB64 string) ([]byte, error) {
+	if strings.TrimSpace(wrappedB64) != "" && strings.TrimSpace(nonceB64) != "" {
+		return s.unwrapKeyMaterial(wrappedB64, nonceB64)
+	}
+	if strings.TrimSpace(masterB64) == "" {
+		return nil, errors.New("missing key material")
+	}
+	raw, err := base64.StdEncoding.DecodeString(masterB64)
+	if err != nil {
+		return nil, err
+	}
+	wrapped, nonce, err := s.wrapKeyMaterial(raw)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.persistWrappedKeyMaterial(ctx, keyID, wrapped, nonce); err != nil {
+		log.Printf("key migration warning key=%s: %v", keyID, err)
+	}
+	return raw, nil
+}
+
+func (s *dbStore) wrapKeyMaterial(raw []byte) (string, string, error) {
+	if len(s.wrappingKey) != 32 {
+		return "", "", errors.New("wrapping key is not configured")
+	}
+	block, err := aes.NewCipher(s.wrappingKey)
+	if err != nil {
+		return "", "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", "", err
+	}
+	sealed := gcm.Seal(nil, nonce, raw, nil)
+	return base64.StdEncoding.EncodeToString(sealed), base64.StdEncoding.EncodeToString(nonce), nil
+}
+
+func (s *dbStore) unwrapKeyMaterial(wrappedB64, nonceB64 string) ([]byte, error) {
+	if len(s.wrappingKey) != 32 {
+		return nil, errors.New("wrapping key is not configured")
+	}
+	wrapped, err := base64.StdEncoding.DecodeString(wrappedB64)
+	if err != nil {
+		return nil, err
+	}
+	nonce, err := base64.StdEncoding.DecodeString(nonceB64)
+	if err != nil {
+		return nil, err
+	}
+	block, err := aes.NewCipher(s.wrappingKey)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	return gcm.Open(nil, nonce, wrapped, nil)
+}
+
+func (s *dbStore) persistWrappedKeyMaterial(ctx context.Context, keyID, wrappedB64, nonceB64 string) error {
+	const q = `
+UPDATE kms_keys
+SET wrapped_key_b64 = $2, key_nonce_b64 = $3, master_key_b64 = '', updated_at = NOW()
+WHERE id = $1
+`
+	_, err := s.db.ExecContext(ctx, q, keyID, wrappedB64, nonceB64)
+	return err
+}
+
+func (s *dbStore) migrateLegacyKeyMaterial(ctx context.Context) error {
+	const q = `
+SELECT id, master_key_b64
+FROM kms_keys
+WHERE master_key_b64 <> '' AND wrapped_key_b64 = '' AND key_nonce_b64 = ''
+`
+	rows, err := s.db.QueryContext(ctx, q)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type row struct {
+		id        string
+		masterB64 string
+	}
+	legacy := make([]row, 0)
+	for rows.Next() {
+		var item row
+		if err := rows.Scan(&item.id, &item.masterB64); err != nil {
+			return err
+		}
+		legacy = append(legacy, item)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, item := range legacy {
+		raw, err := base64.StdEncoding.DecodeString(item.masterB64)
+		if err != nil {
+			return fmt.Errorf("decode legacy key %s: %w", item.id, err)
+		}
+		wrapped, nonce, err := s.wrapKeyMaterial(raw)
+		if err != nil {
+			return fmt.Errorf("wrap legacy key %s: %w", item.id, err)
+		}
+		if err := s.persistWrappedKeyMaterial(ctx, item.id, wrapped, nonce); err != nil {
+			return fmt.Errorf("persist wrapped key %s: %w", item.id, err)
+		}
+	}
+
+	if len(legacy) > 0 {
+		log.Printf("migrated %d legacy key rows to wrapped storage", len(legacy))
+	}
+	return nil
+}
+
 func withRequestLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("%s %s target=%s", r.Method, r.URL.Path, r.Header.Get("X-Amz-Target"))
@@ -1404,10 +1579,14 @@ func decodeCipherBlob(blob []byte) (string, []byte, error) {
 	}
 	keyLen := int(blob[1])
 	if len(blob) < 2+keyLen {
-		return "", nil, errors.New("invalid ciphertext header")
+		return "", blob, nil
 	}
 	keyID := string(blob[2 : 2+keyLen])
-	return keyID, blob[2+keyLen:], nil
+	raw := blob[2+keyLen:]
+	if len(raw) < 12+16 {
+		return "", blob, nil
+	}
+	return keyID, raw, nil
 }
 
 func encodeCipherBlob(keyID string, raw []byte) []byte {
@@ -1464,6 +1643,19 @@ func randomHex(n int) string {
 func hashAuditRecord(prevHash string, event auditEvent, ts string) string {
 	h := sha256.Sum256([]byte(strings.Join([]string{prevHash, event.Action, event.KeyID, event.Result, event.ErrorType, event.Actor, ts}, "|")))
 	return hex.EncodeToString(h[:])
+}
+
+func deriveDeterministicLegacyKeyID(masterKey []byte) string {
+	sum := sha256.Sum256(masterKey)
+	return "go-kms-" + hex.EncodeToString(sum[:8])
+}
+
+func deriveWrappingKey(legacyMasterKey []byte) []byte {
+	seed := append([]byte("go-kms-wrap-v1|"), legacyMasterKey...)
+	sum := sha256.Sum256(seed)
+	out := make([]byte, 32)
+	copy(out, sum[:])
+	return out
 }
 
 func normalizePolicyDocument(raw string) (string, error) {
