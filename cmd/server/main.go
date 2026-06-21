@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -17,8 +18,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -26,6 +30,9 @@ import (
 
 const (
 	cipherBlobVersionV1 byte = 1
+
+	// appName is the user-facing product name used in logs and UI.
+	appName = "Citadel"
 )
 
 var (
@@ -38,9 +45,18 @@ type config struct {
 	dbConnString      string
 	requireAccessKey  bool
 	expectedAccessKey string
+	secretAccessKey   string
 	strictSigV4       bool
+	defaultDenyPolicy bool
 	wrappingKey       []byte
+	legacyWrappingKey []byte
+	auditHMACKey      []byte
 	uiUsers           map[string]uiUserConfig
+	uiSecureCookies   bool
+	sessionIdleTTL    time.Duration
+	sessionAbsTTL     time.Duration
+	tlsCertFile       string
+	tlsKeyFile        string
 
 	legacyKeyID     string
 	legacyMasterKey []byte
@@ -88,22 +104,30 @@ type keyStore interface {
 	UpdateSecretVersionStage(ctx context.Context, secretID, versionStage, moveToVersionID, removeFromVersionID string) (secretMetadataRecord, error)
 	ListAuditEvents(ctx context.Context, limit int) ([]auditRecord, error)
 	RecordAudit(ctx context.Context, event auditEvent) error
+	ListUIUsers(ctx context.Context) ([]uiUserConfig, error)
+	UpsertUIUser(ctx context.Context, user uiUserConfig) error
+	DeleteUIUser(ctx context.Context, username string) error
 }
 
 type dbStore struct {
-	db          *sql.DB
-	wrappingKey []byte
+	db                *sql.DB
+	wrappingKey       []byte
+	legacyWrappingKey []byte
+	auditHMACKey      []byte
 }
 
 type inMemoryStore struct {
-	k        kmsKey
-	keys     []kmsKey
-	aliases  []kmsAlias
-	grants   []kmsGrant
-	policies map[string]string
-	secrets  map[string]*inMemorySecret
-	audit    []auditRecord
-	auditSeq int64
+	mu           sync.Mutex
+	k            kmsKey
+	keys         []kmsKey
+	aliases      []kmsAlias
+	grants       []kmsGrant
+	policies     map[string]string
+	secrets      map[string]*inMemorySecret
+	audit        []auditRecord
+	auditSeq     int64
+	auditHMACKey []byte
+	uiUsers      map[string]uiUserConfig
 }
 
 type kmsKey struct {
@@ -343,6 +367,14 @@ func main() {
 		log.Fatalf("failed to bootstrap key material: %v", err)
 	}
 
+	// Merge admin-console users from the database (RBAC tied into the DB) with
+	// any env-configured users, seeding env users into the DB on first run.
+	if mergedUsers, err := mergeDBUIUsers(context.Background(), store, cfg.uiUsers); err != nil {
+		log.Printf("warning: failed to load admin users from database: %v", err)
+	} else {
+		cfg.uiUsers = mergedUsers
+	}
+
 	s := &server{cfg: cfg, store: store}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
@@ -353,22 +385,46 @@ func main() {
 	mux.HandleFunc("/admin/audit", s.handleAudit)
 	mux.HandleFunc("/admin/secrets", s.handleSecretsAdmin)
 
-	h := withRequestLogging(mux)
+	// Middleware chain (outermost first): panic recovery, security headers,
+	// request logging.
+	h := withPanicRecovery(withSecurityHeaders(withRequestLogging(mux)))
 
 	httpServer := &http.Server{
 		Addr:              cfg.addr,
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
-	log.Printf("go-kms listening on %s", cfg.addr)
-	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("server exited with error: %v", err)
-	}
+	serveErr := make(chan error, 1)
+	go func() {
+		if cfg.tlsCertFile != "" && cfg.tlsKeyFile != "" {
+			log.Printf("%s listening on %s (TLS)", appName, cfg.addr)
+			serveErr <- httpServer.ListenAndServeTLS(cfg.tlsCertFile, cfg.tlsKeyFile)
+			return
+		}
+		log.Printf("%s listening on %s", appName, cfg.addr)
+		serveErr <- httpServer.ListenAndServe()
+	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = httpServer.Shutdown(ctx)
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case err := <-serveErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server exited with error: %v", err)
+		}
+	case sig := <-sigCh:
+		log.Printf("received %s, shutting down gracefully", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(ctx); err != nil {
+			log.Printf("graceful shutdown error: %v", err)
+		}
+	}
 }
 
 func loadConfig() (config, error) {
@@ -380,7 +436,22 @@ func loadConfig() (config, error) {
 	expectedAccessKey := os.Getenv("KMS_ACCESS_KEY_ID")
 	cfg.expectedAccessKey = expectedAccessKey
 	cfg.requireAccessKey = expectedAccessKey != ""
+	cfg.secretAccessKey = os.Getenv("KMS_SECRET_ACCESS_KEY")
 	cfg.strictSigV4 = strings.EqualFold(envOrDefault("KMS_SIGV4_STRICT", "false"), "true")
+	cfg.defaultDenyPolicy = strings.EqualFold(envOrDefault("KMS_POLICY_DEFAULT_DENY", "false"), "true")
+	cfg.uiSecureCookies = strings.EqualFold(envOrDefault("KMS_UI_SECURE_COOKIES", "false"), "true")
+	cfg.sessionIdleTTL = envDurationOrDefault("KMS_UI_SESSION_IDLE_TTL", 30*time.Minute)
+	cfg.sessionAbsTTL = envDurationOrDefault("KMS_UI_SESSION_MAX_TTL", 12*time.Hour)
+	cfg.tlsCertFile = os.Getenv("KMS_TLS_CERT_FILE")
+	cfg.tlsKeyFile = os.Getenv("KMS_TLS_KEY_FILE")
+
+	if hmacKeyB64 := os.Getenv("KMS_AUDIT_HMAC_KEY_B64"); hmacKeyB64 != "" {
+		hmacKey, err := base64.StdEncoding.DecodeString(hmacKeyB64)
+		if err != nil {
+			return config{}, fmt.Errorf("decode KMS_AUDIT_HMAC_KEY_B64: %w", err)
+		}
+		cfg.auditHMACKey = hmacKey
+	}
 
 	masterKeyB64 := os.Getenv("KMS_MASTER_KEY_B64")
 	if masterKeyB64 != "" {
@@ -407,7 +478,10 @@ func loadConfig() (config, error) {
 		cfg.wrappingKey = wrappingKey
 	}
 	if len(cfg.wrappingKey) == 0 && len(cfg.legacyMasterKey) == 32 {
-		cfg.wrappingKey = deriveWrappingKey(cfg.legacyMasterKey)
+		cfg.wrappingKey = deriveWrappingKeyHKDF(cfg.legacyMasterKey)
+		// Retain the previous (v1) derivation so key material wrapped before the
+		// HKDF upgrade can still be unwrapped.
+		cfg.legacyWrappingKey = deriveWrappingKey(cfg.legacyMasterKey)
 	}
 
 	if cfg.dbConnString == "" && len(cfg.legacyMasterKey) == 0 {
@@ -443,7 +517,7 @@ func buildStore(cfg config) (keyStore, func(), error) {
 			CreatedAt:    time.Now().UTC(),
 			Enabled:      true,
 		}
-		return &inMemoryStore{k: k}, func() {}, nil
+		return &inMemoryStore{k: k, auditHMACKey: cfg.auditHMACKey}, func() {}, nil
 	}
 
 	db, err := sql.Open("postgres", cfg.dbConnString)
@@ -461,7 +535,7 @@ func buildStore(cfg config) (keyStore, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	store := &dbStore{db: db, wrappingKey: cfg.wrappingKey}
+	store := &dbStore{db: db, wrappingKey: cfg.wrappingKey, legacyWrappingKey: cfg.legacyWrappingKey, auditHMACKey: cfg.auditHMACKey}
 	if err := store.migrateLegacyKeyMaterial(context.Background()); err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("migrate legacy key material: %w", err)
@@ -575,6 +649,16 @@ CREATE TABLE IF NOT EXISTS sm_secret_version_stages (
 	PRIMARY KEY (secret_name, stage_label)
 );
 
+CREATE TABLE IF NOT EXISTS ui_users (
+	username TEXT PRIMARY KEY,
+	password_hash TEXT NOT NULL,
+	role TEXT NOT NULL DEFAULT 'viewer',
+	display_name TEXT NOT NULL DEFAULT '',
+	tenants_json TEXT NOT NULL DEFAULT '[]',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS rotation_enabled BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS rotation_lambda_arn TEXT NOT NULL DEFAULT '';
 ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS rotation_days INTEGER NOT NULL DEFAULT 0;
@@ -636,8 +720,22 @@ func (s *server) handleKMS(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.cfg.strictSigV4 {
 		if err := validateSigV4Request(r); err != nil {
-			writeAWSJSONError(w, http.StatusForbidden, "IncompleteSignature", err.Error())
+			writeAWSJSONError(w, http.StatusForbidden, "IncompleteSignature", "request signature is invalid")
 			return
+		}
+		// When a secret access key is configured, verify the signature
+		// cryptographically rather than only checking header presence.
+		if s.cfg.secretAccessKey != "" {
+			bodyHash, err := drainAndHashBody(r, 1<<20)
+			if err != nil {
+				writeAWSJSONError(w, http.StatusBadRequest, "InvalidSignatureException", "request signature is invalid")
+				return
+			}
+			if err := verifyAWSV4Signature(r, bodyHash, s.cfg.secretAccessKey); err != nil {
+				log.Printf("sigv4 verification failed: %v", err)
+				writeAWSJSONError(w, http.StatusForbidden, "InvalidSignatureException", "request signature is invalid")
+				return
+			}
 		}
 	}
 
@@ -1501,7 +1599,7 @@ LIMIT 1
 }
 
 func (s *dbStore) EnsureBootstrap(ctx context.Context, k kmsKey) error {
-	wrappedB64, nonceB64, err := s.wrapKeyMaterial(k.MasterKeyRaw)
+	wrappedB64, nonceB64, err := s.wrapKeyMaterial(k.ID, k.MasterKeyRaw)
 	if err != nil {
 		return fmt.Errorf("wrap bootstrap key material: %w", err)
 	}
@@ -1539,7 +1637,7 @@ func (s *dbStore) CreateKey(ctx context.Context, description string) (kmsKey, er
 		Enabled:      true,
 		CreatedAt:    time.Now().UTC(),
 	}
-	wrappedB64, nonceB64, err := s.wrapKeyMaterial(k.MasterKeyRaw)
+	wrappedB64, nonceB64, err := s.wrapKeyMaterial(k.ID, k.MasterKeyRaw)
 	if err != nil {
 		return kmsKey{}, err
 	}
@@ -1826,7 +1924,7 @@ func (s *dbStore) RecordAudit(ctx context.Context, event auditEvent) error {
 		prev = prevHash.String
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	eventHash := hashAuditRecord(prev, event, now)
+	eventHash := hashAuditRecord(s.auditHMACKey, prev, event, now)
 	const q = `
 INSERT INTO kms_audit_events (action, key_id, result, error_type, actor, prev_hash, event_hash, created_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -1891,6 +1989,8 @@ func (s *inMemoryStore) ListKeys(_ context.Context) ([]kmsKey, error) {
 }
 
 func (s *inMemoryStore) GetKeyPolicy(_ context.Context, keyID, policyName string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if keyID != "" && keyID != s.k.ID {
 		return "", sql.ErrNoRows
 	}
@@ -1907,6 +2007,8 @@ func (s *inMemoryStore) GetKeyPolicy(_ context.Context, keyID, policyName string
 }
 
 func (s *inMemoryStore) PutKeyPolicy(_ context.Context, keyID, policyName, policyDocument string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if keyID != "" && keyID != s.k.ID {
 		return sql.ErrNoRows
 	}
@@ -1962,6 +2064,8 @@ func (s *inMemoryStore) CancelKeyDeletion(_ context.Context, _ string) error {
 }
 
 func (s *inMemoryStore) CreateGrant(_ context.Context, req createGrantRequest) (kmsGrant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	grant := kmsGrant{
 		GrantID:           "grant-" + randomHex(12),
 		GrantToken:        randomHex(16),
@@ -1977,6 +2081,8 @@ func (s *inMemoryStore) CreateGrant(_ context.Context, req createGrantRequest) (
 }
 
 func (s *inMemoryStore) ListGrants(_ context.Context, keyID string) ([]kmsGrant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	out := make([]kmsGrant, 0)
 	for _, grant := range s.grants {
 		if grant.KeyID == keyID {
@@ -1989,6 +2095,8 @@ func (s *inMemoryStore) ListGrants(_ context.Context, keyID string) ([]kmsGrant,
 }
 
 func (s *inMemoryStore) RevokeGrant(_ context.Context, keyID, grantID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i, grant := range s.grants {
 		if grant.KeyID == keyID && grant.GrantID == grantID {
 			s.grants = append(s.grants[:i], s.grants[i+1:]...)
@@ -1999,6 +2107,8 @@ func (s *inMemoryStore) RevokeGrant(_ context.Context, keyID, grantID string) er
 }
 
 func (s *inMemoryStore) RetireGrant(_ context.Context, grantID, grantToken string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i, grant := range s.grants {
 		if (grantID != "" && grant.GrantID == grantID) || (grantToken != "" && grant.GrantToken == grantToken) {
 			s.grants = append(s.grants[:i], s.grants[i+1:]...)
@@ -2009,18 +2119,22 @@ func (s *inMemoryStore) RetireGrant(_ context.Context, grantID, grantToken strin
 }
 
 func (s *inMemoryStore) RecordAudit(_ context.Context, event auditEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.auditSeq++
 	createdAt := time.Now().UTC()
 	entry := auditRecord{ID: s.auditSeq, Action: event.Action, KeyID: event.KeyID, Result: event.Result, ErrorType: event.ErrorType, Actor: event.Actor, CreatedAt: createdAt}
 	if len(s.audit) > 0 {
 		entry.PrevHash = s.audit[len(s.audit)-1].EventHash
 	}
-	entry.EventHash = hashAuditRecord(entry.PrevHash, event, createdAt.Format(time.RFC3339Nano))
+	entry.EventHash = hashAuditRecord(s.auditHMACKey, entry.PrevHash, event, createdAt.Format(time.RFC3339Nano))
 	s.audit = append(s.audit, entry)
 	return nil
 }
 
 func (s *inMemoryStore) ListAuditEvents(_ context.Context, limit int) ([]auditRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
@@ -2040,7 +2154,7 @@ func (s *inMemoryStore) ListAuditEvents(_ context.Context, limit int) ([]auditRe
 
 func (s *dbStore) resolveKeyMaterial(ctx context.Context, keyID, masterB64, wrappedB64, nonceB64 string) ([]byte, error) {
 	if strings.TrimSpace(wrappedB64) != "" && strings.TrimSpace(nonceB64) != "" {
-		return s.unwrapKeyMaterial(wrappedB64, nonceB64)
+		return s.unwrapKeyMaterial(keyID, wrappedB64, nonceB64)
 	}
 	if strings.TrimSpace(masterB64) == "" {
 		return nil, errors.New("missing key material")
@@ -2049,7 +2163,7 @@ func (s *dbStore) resolveKeyMaterial(ctx context.Context, keyID, masterB64, wrap
 	if err != nil {
 		return nil, err
 	}
-	wrapped, nonce, err := s.wrapKeyMaterial(raw)
+	wrapped, nonce, err := s.wrapKeyMaterial(keyID, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -2059,7 +2173,7 @@ func (s *dbStore) resolveKeyMaterial(ctx context.Context, keyID, masterB64, wrap
 	return raw, nil
 }
 
-func (s *dbStore) wrapKeyMaterial(raw []byte) (string, string, error) {
+func (s *dbStore) wrapKeyMaterial(keyID string, raw []byte) (string, string, error) {
 	if len(s.wrappingKey) != 32 {
 		return "", "", errors.New("wrapping key is not configured")
 	}
@@ -2075,11 +2189,13 @@ func (s *dbStore) wrapKeyMaterial(raw []byte) (string, string, error) {
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", "", err
 	}
-	sealed := gcm.Seal(nil, nonce, raw, nil)
+	// Bind the key ID as additional authenticated data so a wrapped blob cannot
+	// be transplanted onto a different key row.
+	sealed := gcm.Seal(nil, nonce, raw, []byte(keyID))
 	return base64.StdEncoding.EncodeToString(sealed), base64.StdEncoding.EncodeToString(nonce), nil
 }
 
-func (s *dbStore) unwrapKeyMaterial(wrappedB64, nonceB64 string) ([]byte, error) {
+func (s *dbStore) unwrapKeyMaterial(keyID, wrappedB64, nonceB64 string) ([]byte, error) {
 	if len(s.wrappingKey) != 32 {
 		return nil, errors.New("wrapping key is not configured")
 	}
@@ -2091,15 +2207,49 @@ func (s *dbStore) unwrapKeyMaterial(wrappedB64, nonceB64 string) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	block, err := aes.NewCipher(s.wrappingKey)
-	if err != nil {
-		return nil, err
+	// Try the current key with AAD, then legacy combinations so material wrapped
+	// before AAD binding / the HKDF derivation upgrade still decrypts.
+	candidates := []struct {
+		key []byte
+		aad []byte
+	}{
+		{s.wrappingKey, []byte(keyID)},
+		{s.wrappingKey, nil},
 	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
+	if len(s.legacyWrappingKey) == 32 {
+		candidates = append(candidates,
+			struct {
+				key []byte
+				aad []byte
+			}{s.legacyWrappingKey, []byte(keyID)},
+			struct {
+				key []byte
+				aad []byte
+			}{s.legacyWrappingKey, nil},
+		)
 	}
-	return gcm.Open(nil, nonce, wrapped, nil)
+	var lastErr error
+	for _, c := range candidates {
+		block, err := aes.NewCipher(c.key)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		gcm, err := cipher.NewGCM(block)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if out, err := gcm.Open(nil, nonce, wrapped, c.aad); err == nil {
+			return out, nil
+		} else {
+			lastErr = err
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("unwrap failed")
+	}
+	return nil, lastErr
 }
 
 func (s *dbStore) persistWrappedKeyMaterial(ctx context.Context, keyID, wrappedB64, nonceB64 string) error {
@@ -2145,7 +2295,7 @@ WHERE master_key_b64 <> '' AND wrapped_key_b64 = '' AND key_nonce_b64 = ''
 		if err != nil {
 			return fmt.Errorf("decode legacy key %s: %w", item.id, err)
 		}
-		wrapped, nonce, err := s.wrapKeyMaterial(raw)
+		wrapped, nonce, err := s.wrapKeyMaterial(item.id, raw)
 		if err != nil {
 			return fmt.Errorf("wrap legacy key %s: %w", item.id, err)
 		}
@@ -2361,6 +2511,19 @@ func envOrDefault(key, fallback string) string {
 	return fallback
 }
 
+func envDurationOrDefault(key string, fallback time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		log.Printf("invalid duration for %s=%q, using default %s", key, v, fallback)
+		return fallback
+	}
+	return d
+}
+
 func randomHex(n int) string {
 	b := make([]byte, n)
 	if _, err := io.ReadFull(rand.Reader, b); err != nil {
@@ -2369,8 +2532,18 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-func hashAuditRecord(prevHash string, event auditEvent, ts string) string {
-	h := sha256.Sum256([]byte(strings.Join([]string{prevHash, event.Action, event.KeyID, event.Result, event.ErrorType, event.Actor, ts}, "|")))
+// hashAuditRecord computes the chain hash for an audit record. When key is
+// non-empty it produces an HMAC-SHA256 (authenticity: an attacker with DB write
+// access cannot forge a valid chain without the key); otherwise it falls back to
+// a plain SHA-256 chain (integrity only).
+func hashAuditRecord(key []byte, prevHash string, event auditEvent, ts string) string {
+	payload := []byte(strings.Join([]string{prevHash, event.Action, event.KeyID, event.Result, event.ErrorType, event.Actor, ts}, "|"))
+	if len(key) > 0 {
+		mac := hmac.New(sha256.New, key)
+		mac.Write(payload)
+		return hex.EncodeToString(mac.Sum(nil))
+	}
+	h := sha256.Sum256(payload)
 	return hex.EncodeToString(h[:])
 }
 
@@ -2399,7 +2572,7 @@ func (s *server) authorizeKeyAction(ctx context.Context, r *http.Request, key km
 	if err != nil {
 		return err
 	}
-	allowed, err := policyAllows(policy, requestPrincipal(r), action, key.ARN)
+	allowed, err := policyAllows(policy, requestPrincipal(r), action, key.ARN, s.cfg.defaultDenyPolicy)
 	if err != nil {
 		return err
 	}
@@ -2423,7 +2596,11 @@ func requestPrincipal(r *http.Request) string {
 	return "arn:aws:iam::000000000000:root"
 }
 
-func policyAllows(rawPolicy, principal, action, resource string) (bool, error) {
+// policyAllows evaluates an AWS-style policy document. An explicit Deny always
+// wins. When no statement matches the action/resource, the result depends on
+// defaultDeny: false preserves the permissive legacy behavior, true enforces
+// AWS-like deny-by-default.
+func policyAllows(rawPolicy, principal, action, resource string, defaultDeny bool) (bool, error) {
 	var doc map[string]any
 	if err := json.Unmarshal([]byte(rawPolicy), &doc); err != nil {
 		return false, err
@@ -2449,7 +2626,7 @@ func policyAllows(rawPolicy, principal, action, resource string) (bool, error) {
 	if hasRelevantStatement {
 		return allowed, nil
 	}
-	return true, nil
+	return !defaultDeny, nil
 }
 
 func asPolicyStatements(value any) []map[string]any {

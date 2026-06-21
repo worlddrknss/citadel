@@ -17,11 +17,22 @@ const adminSessionCookieName = "go_kms_admin_session"
 var adminLoginTemplate = template.Must(template.ParseFS(uiTemplatesFS, "templates/admin_login.html"))
 
 type uiUserConfig struct {
-	Username    string   `json:"username"`
-	Password    string   `json:"password"`
-	Role        string   `json:"role"`
-	DisplayName string   `json:"displayName"`
-	Tenants     []string `json:"tenants"`
+	Username     string   `json:"username"`
+	Password     string   `json:"password"`
+	PasswordHash string   `json:"passwordHash"`
+	Role         string   `json:"role"`
+	DisplayName  string   `json:"displayName"`
+	Tenants      []string `json:"tenants"`
+}
+
+// storedCredential returns the secret used to verify a login attempt. An
+// Argon2id PHC hash is preferred; the plaintext Password field is only a
+// fallback for legacy/env-configured users.
+func (u uiUserConfig) storedCredential() string {
+	if strings.TrimSpace(u.PasswordHash) != "" {
+		return u.PasswordHash
+	}
+	return u.Password
 }
 
 type uiSession struct {
@@ -35,11 +46,19 @@ type uiSession struct {
 }
 
 type uiRuntime struct {
-	enabled  bool
-	users    map[string]uiUserConfig
-	sessions map[string]uiSession
-	mu       sync.Mutex
+	enabled       bool
+	users         map[string]uiUserConfig
+	sessions      map[string]uiSession
+	idleTTL       time.Duration
+	absoluteTTL   time.Duration
+	secureCookies bool
+	mu            sync.Mutex
 }
+
+// dummyArgon2Hash is a fixed, valid Argon2id hash used to spend comparable CPU
+// time when an unknown username is supplied, mitigating user-enumeration via
+// response-timing differences. It corresponds to no real password.
+const dummyArgon2Hash = "$argon2id$v=19$m=65536,t=3,p=2$+Zzc6FCiVBHCPF1Llgz3pQ$ZHroDCBLTiLB04VvCEgi3y0p/p4AyUyYe3rT8HAkYvc"
 
 type adminLoginView struct {
 	NextPath string
@@ -73,13 +92,14 @@ func normalizeUIUsers(users []uiUserConfig) (map[string]uiUserConfig, error) {
 	for _, user := range users {
 		user.Username = strings.TrimSpace(user.Username)
 		user.Password = strings.TrimSpace(user.Password)
+		user.PasswordHash = strings.TrimSpace(user.PasswordHash)
 		user.Role = normalizeUIRole(user.Role)
 		if user.DisplayName == "" {
 			user.DisplayName = user.Username
 		}
 		user.Tenants = normalizeTenants(user.Tenants)
-		if user.Username == "" || user.Password == "" {
-			return nil, errors.New("ui users require username and password")
+		if user.Username == "" || (user.Password == "" && user.PasswordHash == "") {
+			return nil, errors.New("ui users require username and password (or passwordHash)")
 		}
 		out[user.Username] = user
 	}
@@ -91,7 +111,14 @@ func newUIRuntime(cfg config) *uiRuntime {
 	if users == nil {
 		users = map[string]uiUserConfig{}
 	}
-	return &uiRuntime{enabled: len(users) > 0, users: users, sessions: map[string]uiSession{}}
+	return &uiRuntime{
+		enabled:       len(users) > 0,
+		users:         users,
+		sessions:      map[string]uiSession{},
+		idleTTL:       cfg.sessionIdleTTL,
+		absoluteTTL:   cfg.sessionAbsTTL,
+		secureCookies: cfg.uiSecureCookies,
+	}
 }
 
 func (s *server) uiRuntime() *uiRuntime {
@@ -121,7 +148,13 @@ func (s *server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	runtime.mu.Lock()
 	user, ok := runtime.users[username]
 	runtime.mu.Unlock()
-	if !ok || !compareSecret(user.Password, password) {
+	// Always run a verification to keep timing roughly constant whether or not
+	// the username exists, mitigating user enumeration.
+	stored := dummyArgon2Hash
+	if ok {
+		stored = user.storedCredential()
+	}
+	if !verifyPassword(stored, password) || !ok {
 		s.renderAdminLogin(w, adminLoginView{NextPath: nextPath, Error: "Invalid username or password"})
 		return
 	}
@@ -131,7 +164,7 @@ func (s *server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	runtime.mu.Lock()
 	runtime.sessions[sessionID] = session
 	runtime.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: adminSessionCookieName, Value: sessionID, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: false})
+	http.SetCookie(w, &http.Cookie{Name: adminSessionCookieName, Value: sessionID, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: runtime.secureCookies})
 	http.Redirect(w, r, nextPath, http.StatusSeeOther)
 }
 
@@ -158,8 +191,13 @@ func (s *server) requireUISession(w http.ResponseWriter, r *http.Request, minRol
 	}
 	runtime.mu.Lock()
 	session, ok := runtime.sessions[cookie.Value]
+	now := time.Now().UTC()
+	if ok && sessionExpired(session, now, runtime.idleTTL, runtime.absoluteTTL) {
+		delete(runtime.sessions, cookie.Value)
+		ok = false
+	}
 	if ok {
-		session.LastSeenAt = time.Now().UTC()
+		session.LastSeenAt = now
 		runtime.sessions[cookie.Value] = session
 	}
 	runtime.mu.Unlock()

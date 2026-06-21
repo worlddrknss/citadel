@@ -841,6 +841,8 @@ WHERE secret_name = $1 AND client_request_token = $2
 }
 
 func (s *inMemoryStore) CreateSecret(ctx context.Context, req createSecretRequest) (secretMetadataRecord, secretValueRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.secrets == nil {
 		s.secrets = map[string]*inMemorySecret{}
 	}
@@ -884,6 +886,8 @@ func (s *inMemoryStore) CreateSecret(ctx context.Context, req createSecretReques
 }
 
 func (s *inMemoryStore) DescribeSecret(_ context.Context, secretID string) (secretMetadataRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	secret, err := s.findSecret(secretID)
 	if err != nil {
 		return secretMetadataRecord{}, err
@@ -892,6 +896,13 @@ func (s *inMemoryStore) DescribeSecret(_ context.Context, secretID string) (secr
 }
 
 func (s *inMemoryStore) GetSecretValue(ctx context.Context, secretID, versionID, versionStage string) (secretValueRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.getSecretValueLocked(ctx, secretID, versionID, versionStage)
+}
+
+// getSecretValueLocked implements GetSecretValue. The caller must hold s.mu.
+func (s *inMemoryStore) getSecretValueLocked(ctx context.Context, secretID, versionID, versionStage string) (secretValueRecord, error) {
 	secret, err := s.findSecret(secretID)
 	if err != nil {
 		return secretValueRecord{}, err
@@ -911,6 +922,13 @@ func (s *inMemoryStore) GetSecretValue(ctx context.Context, secretID, versionID,
 }
 
 func (s *inMemoryStore) PutSecretValue(ctx context.Context, req putSecretValueRequest) (secretValueRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.putSecretValueLocked(ctx, req)
+}
+
+// putSecretValueLocked implements PutSecretValue. The caller must hold s.mu.
+func (s *inMemoryStore) putSecretValueLocked(ctx context.Context, req putSecretValueRequest) (secretValueRecord, error) {
 	secret, err := s.findSecret(req.SecretID)
 	if err != nil {
 		return secretValueRecord{}, err
@@ -940,6 +958,8 @@ func (s *inMemoryStore) PutSecretValue(ctx context.Context, req putSecretValueRe
 }
 
 func (s *inMemoryStore) UpdateSecret(ctx context.Context, req updateSecretRequest) (secretMetadataRecord, *secretValueRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	secret, err := s.findSecret(req.SecretID)
 	if err != nil {
 		return secretMetadataRecord{}, nil, err
@@ -961,7 +981,7 @@ func (s *inMemoryStore) UpdateSecret(ctx context.Context, req updateSecretReques
 	ensureSecretStageMap(&secret.metadata)
 	var value *secretValueRecord
 	if req.SecretString != "" || req.SecretBinary != "" {
-		putValue, err := s.PutSecretValue(ctx, putSecretValueRequest{SecretID: secret.metadata.Name, ClientRequestToken: req.ClientRequestToken, SecretString: req.SecretString, SecretBinary: req.SecretBinary})
+		putValue, err := s.putSecretValueLocked(ctx, putSecretValueRequest{SecretID: secret.metadata.Name, ClientRequestToken: req.ClientRequestToken, SecretString: req.SecretString, SecretBinary: req.SecretBinary})
 		if err != nil {
 			return secretMetadataRecord{}, nil, err
 		}
@@ -971,6 +991,8 @@ func (s *inMemoryStore) UpdateSecret(ctx context.Context, req updateSecretReques
 }
 
 func (s *inMemoryStore) DeleteSecret(_ context.Context, secretID string, recoveryWindowDays int, forceDelete bool) (secretMetadataRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	secret, err := s.findSecret(secretID)
 	if err != nil {
 		return secretMetadataRecord{}, err
@@ -985,6 +1007,8 @@ func (s *inMemoryStore) DeleteSecret(_ context.Context, secretID string, recover
 }
 
 func (s *inMemoryStore) RestoreSecret(_ context.Context, secretID string) (secretMetadataRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	secret, err := s.findSecret(secretID)
 	if err != nil {
 		return secretMetadataRecord{}, err
@@ -995,6 +1019,8 @@ func (s *inMemoryStore) RestoreSecret(_ context.Context, secretID string) (secre
 }
 
 func (s *inMemoryStore) ListSecrets(_ context.Context) ([]secretMetadataRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if len(s.secrets) == 0 {
 		return nil, nil
 	}
@@ -1221,7 +1247,7 @@ func (s *server) authorizeSecretAction(ctx context.Context, r *http.Request, met
 			return err
 		}
 	}
-	allowed, err := policyAllows(policy, requestPrincipal(r), action, meta.ARN)
+	allowed, err := policyAllows(policy, requestPrincipal(r), action, meta.ARN, s.cfg.defaultDenyPolicy)
 	if err != nil {
 		return err
 	}

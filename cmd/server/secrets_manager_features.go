@@ -622,6 +622,8 @@ func (s *dbStore) loadSecretTags(ctx context.Context, secretName string) ([]secr
 }
 
 func (s *inMemoryStore) ListSecretVersionIDs(_ context.Context, secretID string) ([]secretVersionListEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	secret, err := s.findSecret(secretID)
 	if err != nil {
 		return nil, err
@@ -635,6 +637,8 @@ func (s *inMemoryStore) ListSecretVersionIDs(_ context.Context, secretID string)
 }
 
 func (s *inMemoryStore) TagSecret(_ context.Context, secretID string, tags []secretTag) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	secret, err := s.findSecret(secretID)
 	if err != nil {
 		return err
@@ -662,6 +666,8 @@ func (s *inMemoryStore) TagSecret(_ context.Context, secretID string, tags []sec
 }
 
 func (s *inMemoryStore) UntagSecret(_ context.Context, secretID string, tagKeys []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	secret, err := s.findSecret(secretID)
 	if err != nil {
 		return err
@@ -681,6 +687,8 @@ func (s *inMemoryStore) UntagSecret(_ context.Context, secretID string, tagKeys 
 }
 
 func (s *inMemoryStore) GetSecretResourcePolicy(_ context.Context, secretID string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	secret, err := s.findSecret(secretID)
 	if err != nil {
 		return "", err
@@ -692,6 +700,8 @@ func (s *inMemoryStore) GetSecretResourcePolicy(_ context.Context, secretID stri
 }
 
 func (s *inMemoryStore) PutSecretResourcePolicy(_ context.Context, secretID, policyDocument string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	secret, err := s.findSecret(secretID)
 	if err != nil {
 		return err
@@ -701,6 +711,8 @@ func (s *inMemoryStore) PutSecretResourcePolicy(_ context.Context, secretID, pol
 }
 
 func (s *inMemoryStore) RotateSecret(ctx context.Context, secretID, rotationLambdaARN string, automaticallyAfterDays int, rotateImmediately bool, clientRequestToken string) (secretRotationResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	secret, err := s.findSecret(secretID)
 	if err != nil {
 		return secretRotationResult{}, err
@@ -715,7 +727,7 @@ func (s *inMemoryStore) RotateSecret(ctx context.Context, secretID, rotationLamb
 	secret.metadata.NextRotationDate = &next
 	versionID := ""
 	if rotateImmediately {
-		currentValue, err := s.GetSecretValue(ctx, secret.metadata.Name, secret.metadata.CurrentVersionID, "")
+		currentValue, err := s.getSecretValueLocked(ctx, secret.metadata.Name, secret.metadata.CurrentVersionID, "")
 		if err != nil {
 			return secretRotationResult{}, err
 		}
@@ -729,7 +741,7 @@ func (s *inMemoryStore) RotateSecret(ctx context.Context, secretID, rotationLamb
 		} else {
 			putReq = putSecretValueRequest{SecretID: secret.metadata.Name, ClientRequestToken: versionID, SecretBinary: currentValue.SecretBinary}
 		}
-		if _, err := s.PutSecretValue(ctx, putReq); err != nil {
+		if _, err := s.putSecretValueLocked(ctx, putReq); err != nil {
 			return secretRotationResult{}, err
 		}
 		assignSecretStage(&secret.metadata, pendingVersionStage, versionID)
@@ -738,6 +750,8 @@ func (s *inMemoryStore) RotateSecret(ctx context.Context, secretID, rotationLamb
 }
 
 func (s *inMemoryStore) CancelRotateSecret(_ context.Context, secretID string) (secretMetadataRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	secret, err := s.findSecret(secretID)
 	if err != nil {
 		return secretMetadataRecord{}, err
@@ -751,6 +765,8 @@ func (s *inMemoryStore) CancelRotateSecret(_ context.Context, secretID string) (
 }
 
 func (s *inMemoryStore) UpdateSecretVersionStage(_ context.Context, secretID, versionStage, moveToVersionID, removeFromVersionID string) (secretMetadataRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	secret, err := s.findSecret(secretID)
 	if err != nil {
 		return secretMetadataRecord{}, err

@@ -1,6 +1,12 @@
-# go-kms
+# Citadel
 
-Lightweight AWS KMS JSON API-compatible service intended for Vault auto-unseal lab environments.
+Citadel is a lightweight AWS KMS + Secrets Manager JSON API-compatible service
+intended for Vault auto-unseal and secret storage.
+
+> Naming: the product is **Citadel**. The Go module path
+> (`github.com/worlddrknss/go-kms`), container image, Kubernetes manifests, and
+> `KMS_*` environment variables retain the historical `go-kms` / `KMS_`
+> identifiers for backward compatibility with existing deployments.
 
 ## Supported AWS KMS actions
 
@@ -68,7 +74,8 @@ seal "awskms" {
 ## Notes
 
 - This service targets protocol compatibility for Vault unseal flows and is not a full AWS KMS implementation.
-- For production, add strict SigV4 verification, mTLS, key wrapping (HSM or Vault transit), and immutable audit logging.
+- Security model, trust boundaries, and a production hardening checklist are documented in `docs/SECURITY.md`.
+- Production deployments should enable strict SigV4 verification (`KMS_SIGV4_STRICT=true` with `KMS_SECRET_ACCESS_KEY`), default-deny policies, HMAC audit chaining, TLS, and Argon2id-hashed admin users. See `docs/SECURITY.md`.
 - Full phased implementation details are in `docs/PHASES.md`.
 - Phase A compatibility status is tracked in `docs/COMPATIBILITY_MATRIX.md`.
 - AWS Secrets Manager supplemental planning is tracked in `docs/SECRETS_MANAGER_PHASES.md`.
