@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"html/template"
 	"net/http"
 	"strings"
@@ -18,6 +19,7 @@ type auditExplorerRow struct {
 	Result    string
 	ErrorType string
 	Actor     string
+	PrevHash  string
 	EventHash string
 }
 
@@ -25,17 +27,25 @@ type auditExplorerView struct {
 	Rows           []auditExplorerRow
 	SelectedServer string
 	Query          string
+	ActorFilter    string
+	SelectedEvent  *auditExplorerRow
 	TotalCount     int
 	VisibleCount   int
 	KMSCount       int
 	SecretsCount   int
 	ErrorCount     int
 	OkCount        int
+	CurrentUserName string
+	CurrentUserRole string
 	Flash          string
 	Error          string
 }
 
 func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.requireUISession(w, r, "viewer")
+	if !ok {
+		return
+	}
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -49,10 +59,15 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 
 	serviceFilter := normalizeAuditService(strings.TrimSpace(r.URL.Query().Get("service")))
 	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	actorFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("actor")))
+	selectedEventID := strings.TrimSpace(r.URL.Query().Get("event"))
 	view := auditExplorerView{
 		SelectedServer: serviceFilter,
 		Query:          strings.TrimSpace(r.URL.Query().Get("q")),
+		ActorFilter:    strings.TrimSpace(r.URL.Query().Get("actor")),
 		TotalCount:     len(records),
+		CurrentUserName: session.DisplayName,
+		CurrentUserRole: session.Role,
 		Flash:          r.URL.Query().Get("ok"),
 		Error:          r.URL.Query().Get("err"),
 	}
@@ -79,7 +94,10 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		if query != "" && !auditRecordMatches(record, query) {
 			continue
 		}
-		view.Rows = append(view.Rows, auditExplorerRow{
+		if actorFilter != "" && !strings.Contains(strings.ToLower(record.Actor), actorFilter) {
+			continue
+		}
+		row := auditExplorerRow{
 			ID:        record.ID,
 			Time:      record.CreatedAt.UTC().Format("2006-01-02 15:04:05 MST"),
 			Service:   strings.ToUpper(svc),
@@ -88,8 +106,14 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 			Result:    record.Result,
 			ErrorType: record.ErrorType,
 			Actor:     record.Actor,
+			PrevHash:  record.PrevHash,
 			EventHash: record.EventHash,
-		})
+		}
+		view.Rows = append(view.Rows, row)
+		if selectedEventID != "" && selectedEventID == fmt.Sprintf("%d", record.ID) {
+			selected := row
+			view.SelectedEvent = &selected
+		}
 	}
 	view.VisibleCount = len(view.Rows)
 

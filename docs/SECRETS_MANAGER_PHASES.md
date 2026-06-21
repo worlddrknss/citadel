@@ -240,10 +240,11 @@ Implemented so far:
 - UI pages for secret inventory, retrieval, version history, tags, resource policy, and rotation configuration.
 - API-level audit recording through the shared request audit path.
 - Shared audit explorer coverage across Secrets Manager and KMS control-plane events.
+- Authenticated admin console access with role-aware entry to Secrets workflows.
+- Tenant-scoped secret visibility and bulk secret lifecycle actions in the UI.
 
 Remaining in phase:
 
-- Authenticated UI with RBAC and tenant scoping.
 - Richer secret-specific audit event analysis.
 - Metrics, alerts, backup guidance, restore runbooks, and rotation incident docs.
 - UI support for binary-secret workflows and more advanced operator controls.

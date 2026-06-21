@@ -71,11 +71,15 @@ Implemented scope:
 
 - Management UI endpoint at `/admin` with key inventory, key details, alias workflows, and policy editing.
 - Shared audit explorer at `/admin/audit` with cross-service filtering for KMS and Secrets Manager events.
+- Authenticated admin login/logout flow with role-aware console access.
+- Tenant-scoped UI visibility for keys and secrets plus bulk operator actions.
+- KMS grants management workflow in the admin console.
 
 Remaining UI expansion:
 
-- Authenticated UI with RBAC.
-- Grants workflows, tenant views, and stronger destructive-action confirmations.
+- Stronger destructive-action confirmations and safer review dialogs.
+- Richer tenant administration views beyond name/alias-based scoping.
+- Request tracing views that stitch together broader multi-step workflows.
 
 ## Phase 5 (Completed for MVP)
 
@@ -229,12 +233,14 @@ Implemented so far:
 - Modular template-backed admin UI for KMS and Secrets Manager.
 - Key detail pages, alias workflows, and key policy editing.
 - Shared audit explorer and cross-service navigation shell.
+- Authenticated UI with role-aware access levels and logout flow.
+- Tenant-scoped visibility plus bulk key and secret workflows.
+- Grants management UI for KMS.
 
 Remaining in phase:
 
-- Authenticated UI with RBAC and tenant scoping.
-- Grants workflows and richer destructive-action UX.
-- Request tracing views and bulk operator workflows.
+- Stronger destructive-action UX and review safeguards.
+- Richer request-tracing flows and broader operator workflow composition.
 
 ## Phase E: Production and Compliance Readiness (Partially implemented for MVP)
 

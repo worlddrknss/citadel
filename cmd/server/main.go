@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -39,6 +40,7 @@ type config struct {
 	expectedAccessKey string
 	strictSigV4       bool
 	wrappingKey       []byte
+	uiUsers           map[string]uiUserConfig
 
 	legacyKeyID     string
 	legacyMasterKey []byte
@@ -47,6 +49,7 @@ type config struct {
 type server struct {
 	cfg   config
 	store keyStore
+	ui    *uiRuntime
 }
 
 type keyStore interface {
@@ -344,6 +347,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc("/admin/login", s.handleAdminLogin)
+	mux.HandleFunc("/admin/logout", s.handleAdminLogout)
 	mux.HandleFunc("/admin", s.handleAdmin)
 	mux.HandleFunc("/admin/audit", s.handleAudit)
 	mux.HandleFunc("/admin/secrets", s.handleSecretsAdmin)
@@ -411,6 +416,12 @@ func loadConfig() (config, error) {
 	if cfg.dbConnString != "" && len(cfg.wrappingKey) != 32 {
 		return config{}, errors.New("set KMS_WRAPPING_KEY_B64 (or KMS_MASTER_KEY_B64 for derived wrapping key) when using KMS_DB_URL")
 	}
+
+	uiUsers, err := loadUIUsersFromEnv()
+	if err != nil {
+		return config{}, err
+	}
+	cfg.uiUsers = uiUsers
 
 	return cfg, nil
 }
@@ -2374,6 +2385,13 @@ func deriveWrappingKey(legacyMasterKey []byte) []byte {
 	out := make([]byte, 32)
 	copy(out, sum[:])
 	return out
+}
+
+func compareSecret(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 func (s *server) authorizeKeyAction(ctx context.Context, r *http.Request, key kmsKey, action string) error {

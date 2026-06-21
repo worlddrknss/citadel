@@ -33,24 +33,73 @@ type adminAliasView struct {
 	TargetKey string
 }
 
+type adminGrantView struct {
+	GrantID           string
+	GranteePrincipal  string
+	RetiringPrincipal string
+	Operations        string
+	Name              string
+	CreatedAt         string
+}
+
 type adminPageView struct {
 	Keys            []adminKeyView
 	Aliases         []adminAliasView
 	AvailableKeyIDs []string
 	KeyCount        int
+	VisibleKeyCount int
 	SelectedKey     *adminKeyView
 	SelectedKeyID   string
 	SelectedTab     string
 	PolicyName      string
 	PolicyDocument  string
+	Grants          []adminGrantView
+	CurrentUserName string
+	CurrentUserRole string
+	TenantScope     []string
+	CanEdit         bool
+	CanAdmin        bool
 	Flash           string
 	Error           string
 }
 
 func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
+	requiredRole := "viewer"
 	switch r.URL.Query().Get("action") {
+	case "create_alias", "update_alias", "enable_key", "disable_key":
+		requiredRole = "editor"
+	case "create_key", "schedule_deletion", "cancel_deletion", "put_key_policy":
+		requiredRole = "admin"
+	}
+	session, ok := s.requireUISession(w, r, requiredRole)
+	if !ok {
+		return
+	}
+	action := r.URL.Query().Get("action")
+	if action != "" && !uiCanAdmin(session) {
+		aliases, _ := s.store.ListAliases(r.Context())
+		targetKeyID := strings.TrimSpace(r.FormValue("key_id"))
+		if targetKeyID == "" {
+			targetKeyID = strings.TrimSpace(r.FormValue("target_key_id"))
+		}
+		if targetKeyID != "" && !keyVisibleToSession(session, targetKeyID, aliases) {
+			s.redirectAdminError(w, r, "requested key is outside your tenant scope")
+			return
+		}
+	}
+
+	switch action {
 	case "create_key":
 		s.handleAdminCreateKey(w, r)
+		return
+	case "create_grant":
+		s.handleAdminCreateGrant(w, r)
+		return
+	case "revoke_grant":
+		s.handleAdminRevokeGrant(w, r)
+		return
+	case "bulk_keys":
+		s.handleAdminBulkKeys(w, r)
 		return
 	case "create_alias":
 		s.handleAdminCreateAlias(w, r)
@@ -95,6 +144,11 @@ func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		Aliases:         make([]adminAliasView, 0, len(aliases)),
 		AvailableKeyIDs: make([]string, 0, len(keys)),
 		KeyCount:        len(keys),
+		CurrentUserName: session.DisplayName,
+		CurrentUserRole: session.Role,
+		TenantScope:     append([]string(nil), session.Tenants...),
+		CanEdit:         uiCanEdit(session),
+		CanAdmin:        uiCanAdmin(session),
 		SelectedKeyID:   strings.TrimSpace(r.URL.Query().Get("key_id")),
 		SelectedTab:     strings.TrimSpace(r.URL.Query().Get("tab")),
 		PolicyName:      strings.TrimSpace(r.URL.Query().Get("policy_name")),
@@ -116,6 +170,9 @@ func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, k := range keys {
+		if !keyVisibleToSession(session, k.ID, aliases) {
+			continue
+		}
 		deletionDate := ""
 		if k.DeletionDate != nil {
 			deletionDate = k.DeletionDate.UTC().Format(time.RFC3339)
@@ -139,8 +196,15 @@ func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 			view.SelectedKey = &selected
 		}
 	}
+	view.VisibleKeyCount = len(view.Keys)
 	for _, a := range aliases {
+		if !keyVisibleToSession(session, a.TargetKeyID, aliases) {
+			continue
+		}
 		view.Aliases = append(view.Aliases, adminAliasView{Name: a.AliasName, TargetKey: a.TargetKeyID})
+	}
+	if view.SelectedKeyID != "" && view.SelectedKey == nil {
+		view.Error = "requested key is outside your tenant scope"
 	}
 
 	if view.SelectedKey != nil {
@@ -155,6 +219,11 @@ func (s *server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			view.PolicyDocument = policyDocument
+		}
+		if grants, err := s.store.ListGrants(r.Context(), view.SelectedKeyID); err == nil {
+			for _, grant := range grants {
+				view.Grants = append(view.Grants, adminGrantView{GrantID: grant.GrantID, GranteePrincipal: grant.GranteePrincipal, RetiringPrincipal: grant.RetiringPrincipal, Operations: strings.Join(grant.Operations, ", "), Name: grant.Name, CreatedAt: grant.CreatedAt.UTC().Format("2006-01-02 15:04:05 MST")})
+			}
 		}
 	}
 
@@ -304,6 +373,86 @@ func (s *server) handleAdminPutKeyPolicy(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.redirectAdminKeyOK(w, r, keyID, "key-policy", "key policy updated")
+}
+
+func (s *server) handleAdminBulkKeys(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.redirectAdminError(w, r, "bulk key updates require POST")
+		return
+	}
+	keyIDs := r.Form["key_id"]
+	if len(keyIDs) == 0 {
+		s.redirectAdminError(w, r, "select at least one key")
+		return
+	}
+	action := strings.TrimSpace(r.FormValue("bulk_action"))
+	updated := 0
+	for _, keyID := range keyIDs {
+		keyID = strings.TrimSpace(keyID)
+		if keyID == "" {
+			continue
+		}
+		switch action {
+		case "enable":
+			if err := s.store.SetKeyEnabled(r.Context(), keyID, true); err == nil {
+				updated++
+			}
+		case "disable":
+			if err := s.store.SetKeyEnabled(r.Context(), keyID, false); err == nil {
+				updated++
+			}
+		case "schedule_deletion":
+			if _, ok := s.requireUISession(w, r, "admin"); !ok {
+				return
+			}
+			if _, err := s.store.ScheduleKeyDeletion(r.Context(), keyID, 30); err == nil {
+				updated++
+			}
+		}
+	}
+	if updated == 0 {
+		s.redirectAdminError(w, r, "no keys were updated")
+		return
+	}
+	s.redirectAdminOK(w, r, fmt.Sprintf("updated %d keys", updated))
+}
+
+func (s *server) handleAdminCreateGrant(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.redirectAdminError(w, r, "create grant requires POST")
+		return
+	}
+	keyID := strings.TrimSpace(r.FormValue("key_id"))
+	principal := strings.TrimSpace(r.FormValue("grantee_principal"))
+	operations := splitCommaList(r.FormValue("operations"))
+	if keyID == "" || principal == "" || len(operations) == 0 {
+		s.redirectAdminKeyError(w, r, keyID, "grants", "key_id, grantee_principal, and operations are required")
+		return
+	}
+	_, err := s.store.CreateGrant(r.Context(), createGrantRequest{KeyID: keyID, GranteePrincipal: principal, RetiringPrincipal: strings.TrimSpace(r.FormValue("retiring_principal")), Operations: operations, Name: strings.TrimSpace(r.FormValue("grant_name"))})
+	if err != nil {
+		s.redirectAdminKeyError(w, r, keyID, "grants", fmt.Sprintf("create grant failed: %v", err))
+		return
+	}
+	s.redirectAdminKeyOK(w, r, keyID, "grants", "grant created")
+}
+
+func (s *server) handleAdminRevokeGrant(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.redirectAdminError(w, r, "revoke grant requires POST")
+		return
+	}
+	keyID := strings.TrimSpace(r.FormValue("key_id"))
+	grantID := strings.TrimSpace(r.FormValue("grant_id"))
+	if keyID == "" || grantID == "" {
+		s.redirectAdminKeyError(w, r, keyID, "grants", "key_id and grant_id are required")
+		return
+	}
+	if err := s.store.RevokeGrant(r.Context(), keyID, grantID); err != nil {
+		s.redirectAdminKeyError(w, r, keyID, "grants", fmt.Sprintf("revoke grant failed: %v", err))
+		return
+	}
+	s.redirectAdminKeyOK(w, r, keyID, "grants", "grant revoked")
 }
 
 func (s *server) redirectAdminOK(w http.ResponseWriter, r *http.Request, msg string) {

@@ -249,40 +249,54 @@
           <a class="service-link" href="/admin/secrets">Secrets Manager</a>
           <a class="service-link" href="/admin/audit">Audit Explorer</a>
         </div>
-        <h1 class="title">Customer managed keys ({{.KeyCount}})</h1>
-        <div class="sub">List page</div>
+        <h1 class="title">Customer managed keys ({{.VisibleKeyCount}})</h1>
+        <div class="sub">{{if .TenantScope}}Scoped to {{range $index, $tenant := .TenantScope}}{{if $index}}, {{end}}{{$tenant}}{{end}}{{else}}All tenants{{end}} · Signed in as {{.CurrentUserName}} ({{.CurrentUserRole}})</div>
       </div>
-      <form class="inline-form" method="post" action="/admin?action=create_key">
+      <div class="inline-form">
+        <a class="btn secondary" href="/admin/logout">Sign out</a>
+      </div>
+      {{if .CanAdmin}}<form class="inline-form" method="post" action="/admin?action=create_key">
         <input type="text" name="description" placeholder="Description (optional)">
         <button class="btn" type="submit">Create key</button>
-      </form>
+      </form>{{end}}
     </header>
 
     <section class="section">
+      <form method="post" action="/admin?action=bulk_keys">
       <div class="toolbar-row">
         <input type="text" placeholder="Filter keys by properties or tags" disabled>
+        {{if .CanEdit}}<select name="bulk_action">
+          <option value="enable">Bulk enable</option>
+          <option value="disable">Bulk disable</option>
+          {{if .CanAdmin}}<option value="schedule_deletion">Bulk schedule deletion</option>{{end}}
+        </select>
+        <button class="btn secondary" type="submit">Apply to selected</button>{{end}}
       </div>
       {{if .Keys}}
       <table class="table">
         <thead>
           <tr>
+            {{if .CanEdit}}<th>Select</th>{{end}}
             <th>Aliases</th>
             <th>Key ID</th>
             <th>Status</th>
             <th>Key type</th>
             <th>Key spec</th>
             <th>Key usage</th>
+            <th>Trace</th>
           </tr>
         </thead>
         <tbody>
           {{range .Keys}}
           <tr>
+            {{if $.CanEdit}}<td><input type="checkbox" name="key_id" value="{{.ID}}"></td>{{end}}
             <td>{{if .Alias}}<a href="/admin?key_id={{.ID}}&tab=aliases">{{.Alias}}</a>{{else}}-{{end}}</td>
             <td><a class="mono" href="/admin?key_id={{.ID}}&tab=key-policy">{{.ID}}</a></td>
             <td><span class="state {{.State}}">{{.State}}</span></td>
             <td>Symmetric</td>
             <td>SYMMETRIC_DEFAULT</td>
             <td>Encrypt and decrypt</td>
+            <td><a href="/admin/audit?q={{.ID}}">Trace</a></td>
           </tr>
           {{end}}
         </tbody>
@@ -290,6 +304,7 @@
       {{else}}
       <p class="empty">No keys found.</p>
       {{end}}
+      </form>
     </section>
     {{else}}
     <header class="topbar">
@@ -300,10 +315,12 @@
           <a class="service-link" href="/admin/audit">Audit Explorer</a>
         </div>
         <h1 class="title">{{.SelectedKey.ID}}</h1>
-        <div class="sub">Key details page</div>
+        <div class="sub">Key details page · Signed in as {{.CurrentUserName}} ({{.CurrentUserRole}})</div>
       </div>
       <div class="inline-form">
         <a class="btn secondary" href="/admin">Back to customer managed keys</a>
+        <a class="btn secondary" href="/admin/audit?q={{.SelectedKey.ID}}">Trace activity</a>
+        <a class="btn secondary" href="/admin/logout">Sign out</a>
       </div>
     </header>
 
@@ -350,6 +367,7 @@
     <nav class="tabs">
       <a class="tab {{if eq .SelectedTab "key-policy"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-policy">Key policy</a>
       <a class="tab {{if eq .SelectedTab "cryptographic-configuration"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=cryptographic-configuration">Cryptographic configuration</a>
+      <a class="tab {{if eq .SelectedTab "grants"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=grants">Grants</a>
       <a class="tab {{if eq .SelectedTab "tags"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=tags">Tags</a>
       <a class="tab {{if eq .SelectedTab "key-rotation"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=key-rotation">Key rotation</a>
       <a class="tab {{if eq .SelectedTab "aliases"}}active{{end}}" href="/admin?key_id={{.SelectedKey.ID}}&tab=aliases">Aliases</a>
@@ -427,6 +445,61 @@
           <div><strong>Rotation model:</strong> Manual lifecycle in current MVP</div>
         </div>
       </div>
+      {{else if eq .SelectedTab "grants"}}
+      <div class="grid">
+        <div class="kv">
+          <h3>Create grant</h3>
+          <form method="post" action="/admin?action=create_grant">
+            <input type="hidden" name="key_id" value="{{.SelectedKey.ID}}">
+            <label><strong>Grantee principal</strong></label>
+            <input type="text" name="grantee_principal" placeholder="arn:aws:iam::000000000000:user/app" required>
+            <label style="display:block; margin-top:8px;"><strong>Operations</strong></label>
+            <input type="text" name="operations" placeholder="Encrypt,Decrypt" required>
+            <label style="display:block; margin-top:8px;"><strong>Retiring principal</strong></label>
+            <input type="text" name="retiring_principal" placeholder="Optional ARN">
+            <label style="display:block; margin-top:8px;"><strong>Grant name</strong></label>
+            <input type="text" name="grant_name" placeholder="app-grant">
+            <button class="btn" type="submit" style="margin-top:8px;">Create grant</button>
+          </form>
+        </div>
+        <div class="kv">
+          <h3>Delegate usage</h3>
+          <div>Use grants to delegate key usage without editing the base key policy.</div>
+          <div style="margin-top:8px;">Track grant activity from the audit explorer for this key.</div>
+        </div>
+      </div>
+      {{if .Grants}}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Grant ID</th>
+            <th>Grantee</th>
+            <th>Operations</th>
+            <th>Created</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Grants}}
+          <tr>
+            <td class="mono">{{.GrantID}}</td>
+            <td class="mono">{{.GranteePrincipal}}</td>
+            <td>{{.Operations}}</td>
+            <td>{{.CreatedAt}}</td>
+            <td>
+              <form method="post" action="/admin?action=revoke_grant">
+                <input type="hidden" name="key_id" value="{{$.SelectedKey.ID}}">
+                <input type="hidden" name="grant_id" value="{{.GrantID}}">
+                <button class="btn secondary" type="submit">Revoke</button>
+              </form>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <p class="empty">No grants found.</p>
+      {{end}}
       {{else if eq .SelectedTab "key-rotation"}}
       <div class="kv">
         <h3>Key rotation</h3>

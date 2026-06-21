@@ -247,11 +247,12 @@
           <a class="service-link active" href="/admin/audit">Audit Explorer</a>
         </div>
         <h1 class="title">Audit Explorer</h1>
-        <div class="sub">Recent tamper-evident control-plane events across KMS and Secrets Manager.</div>
+        <div class="sub">Recent tamper-evident control-plane events across KMS and Secrets Manager. Signed in as {{.CurrentUserName}} ({{.CurrentUserRole}}).</div>
       </div>
       <div class="toolbar">
         <a class="btn secondary" href="/admin">KMS console</a>
         <a class="btn secondary" href="/admin/secrets">Secrets console</a>
+        <a class="btn secondary" href="/admin/logout">Sign out</a>
       </div>
     </header>
 
@@ -272,6 +273,10 @@
         <div class="field">
           <label for="q">Search</label>
           <input id="q" type="text" name="q" value="{{.Query}}" placeholder="Action, key id, actor, error type, hash">
+        </div>
+        <div class="field" style="flex-basis: 180px; max-width: 240px;">
+          <label for="actor">Actor</label>
+          <input id="actor" type="text" name="actor" value="{{.ActorFilter}}" placeholder="127.0.0.1 or user ARN">
         </div>
         <button class="btn" type="submit">Filter events</button>
         <a class="btn secondary" href="/admin/audit">Reset</a>
@@ -313,6 +318,7 @@
               <th>Error</th>
               <th>Actor</th>
               <th>Event hash</th>
+              <th>Trace</th>
             </tr>
           </thead>
           <tbody>
@@ -326,6 +332,7 @@
               <td>{{if .ErrorType}}{{.ErrorType}}{{else}}-{{end}}</td>
               <td class="mono">{{if .Actor}}{{.Actor}}{{else}}-{{end}}</td>
               <td class="mono">{{.EventHash}}</td>
+              <td><a href="/admin/audit?service={{$.SelectedServer}}&q={{$.Query}}&actor={{$.ActorFilter}}&event={{.ID}}">Open</a></td>
             </tr>
             {{end}}
           </tbody>
@@ -334,6 +341,21 @@
         <div class="empty">No audit events matched the current filters.</div>
         {{end}}
       </div>
+      {{if .SelectedEvent}}
+      <div class="table-wrap" style="margin-top:16px;">
+        <div class="table-head">
+          <strong>Selected event</strong>
+          <span>Trace anchor {{.SelectedEvent.ID}}</span>
+        </div>
+        <div class="empty">
+          <div><strong>Action:</strong> <span class="mono">{{.SelectedEvent.Action}}</span></div>
+          <div><strong>Resource:</strong> <span class="mono">{{if .SelectedEvent.KeyID}}{{.SelectedEvent.KeyID}}{{else}}-{{end}}</span></div>
+          <div><strong>Actor:</strong> <span class="mono">{{if .SelectedEvent.Actor}}{{.SelectedEvent.Actor}}{{else}}-{{end}}</span></div>
+          <div><strong>Previous hash:</strong> <span class="mono">{{if .SelectedEvent.PrevHash}}{{.SelectedEvent.PrevHash}}{{else}}-{{end}}</span></div>
+          <div><strong>Event hash:</strong> <span class="mono">{{.SelectedEvent.EventHash}}</span></div>
+        </div>
+      </div>
+      {{end}}
     </section>
   </main>
 </body>

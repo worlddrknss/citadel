@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -47,17 +48,49 @@ type adminSecretsPageView struct {
 	Secrets          []adminSecretView
 	AvailableKeyIDs  []string
 	SecretCount      int
+	VisibleCount     int
 	SelectedSecret   *adminSecretView
 	SelectedSecretID string
 	SelectedTab      string
+	CurrentUserName  string
+	CurrentUserRole  string
+	TenantScope      []string
+	CanEdit          bool
+	CanAdmin         bool
 	Flash            string
 	Error            string
 }
 
 func (s *server) handleSecretsAdmin(w http.ResponseWriter, r *http.Request) {
+	requiredRole := "viewer"
 	switch r.URL.Query().Get("action") {
+	case "create_secret", "update_secret", "put_secret_value", "tag_secret", "untag_secret", "rotate_secret", "cancel_rotate_secret", "promote_secret_version":
+		requiredRole = "editor"
+	case "delete_secret", "restore_secret", "put_secret_policy":
+		requiredRole = "admin"
+	}
+	session, ok := s.requireUISession(w, r, requiredRole)
+	if !ok {
+		return
+	}
+	action := r.URL.Query().Get("action")
+	if action != "" && !uiCanAdmin(session) {
+		secretID := strings.TrimSpace(r.FormValue("secret_id"))
+		if secretID == "" {
+			secretID = strings.TrimSpace(r.FormValue("name"))
+		}
+		if secretID != "" && !secretVisibleToSession(session, secretID) {
+			s.redirectAdminSecretsError(w, r, "requested secret is outside your tenant scope")
+			return
+		}
+	}
+
+	switch action {
 	case "create_secret":
 		s.handleAdminCreateSecret(w, r)
+		return
+	case "bulk_secrets":
+		s.handleAdminBulkSecrets(w, r)
 		return
 	case "update_secret":
 		s.handleAdminUpdateSecret(w, r)
@@ -110,6 +143,11 @@ func (s *server) handleSecretsAdmin(w http.ResponseWriter, r *http.Request) {
 		Secrets:          make([]adminSecretView, 0, len(secrets)),
 		AvailableKeyIDs:  make([]string, 0, len(keys)),
 		SecretCount:      len(secrets),
+		CurrentUserName:  session.DisplayName,
+		CurrentUserRole:  session.Role,
+		TenantScope:      append([]string(nil), session.Tenants...),
+		CanEdit:          uiCanEdit(session),
+		CanAdmin:         uiCanAdmin(session),
 		SelectedSecretID: strings.TrimSpace(r.URL.Query().Get("secret_id")),
 		SelectedTab:      strings.TrimSpace(r.URL.Query().Get("tab")),
 		Flash:            r.URL.Query().Get("ok"),
@@ -123,6 +161,9 @@ func (s *server) handleSecretsAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, secret := range secrets {
+		if !secretVisibleToSession(session, secret.Name) {
+			continue
+		}
 		entry := adminSecretView{
 			Name:              secret.Name,
 			ARN:               secret.ARN,
@@ -140,8 +181,12 @@ func (s *server) handleSecretsAdmin(w http.ResponseWriter, r *http.Request) {
 		}
 		view.Secrets = append(view.Secrets, entry)
 	}
+	view.VisibleCount = len(view.Secrets)
 
 	if view.SelectedSecretID != "" {
+		if !secretVisibleToSession(session, view.SelectedSecretID) {
+			view.Error = "requested secret is outside your tenant scope"
+		} else {
 		meta, err := s.store.DescribeSecret(r.Context(), view.SelectedSecretID)
 		if err != nil {
 			view.Error = err.Error()
@@ -200,6 +245,7 @@ func (s *server) handleSecretsAdmin(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			view.SelectedSecret = &selected
+		}
 		}
 	}
 
@@ -390,6 +436,44 @@ func (s *server) handleAdminPromoteSecretVersion(w http.ResponseWriter, r *http.
 		return
 	}
 	s.redirectAdminSecretOK(w, r, meta.Name, "versions", "secret version promoted")
+}
+
+func (s *server) handleAdminBulkSecrets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.redirectAdminSecretsError(w, r, "bulk secret updates require POST")
+		return
+	}
+	if _, ok := s.requireUISession(w, r, "admin"); !ok {
+		return
+	}
+	secretIDs := r.Form["secret_id"]
+	if len(secretIDs) == 0 {
+		s.redirectAdminSecretsError(w, r, "select at least one secret")
+		return
+	}
+	action := strings.TrimSpace(r.FormValue("bulk_action"))
+	updated := 0
+	for _, secretID := range secretIDs {
+		secretID = strings.TrimSpace(secretID)
+		if secretID == "" {
+			continue
+		}
+		switch action {
+		case "delete":
+			if _, err := s.store.DeleteSecret(r.Context(), secretID, 30, false); err == nil {
+				updated++
+			}
+		case "restore":
+			if _, err := s.store.RestoreSecret(r.Context(), secretID); err == nil {
+				updated++
+			}
+		}
+	}
+	if updated == 0 {
+		s.redirectAdminSecretsError(w, r, "no secrets were updated")
+		return
+	}
+	s.redirectAdminSecretOK(w, r, "", "", fmt.Sprintf("updated %d secrets", updated))
 }
 
 func (s *server) redirectAdminSecretsError(w http.ResponseWriter, r *http.Request, msg string) {

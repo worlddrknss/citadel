@@ -821,6 +821,44 @@ func TestAuditExplorerRenders(t *testing.T) {
 	}
 }
 
+func TestAdminUIAuthenticationFlow(t *testing.T) {
+	key := sampleKey(1)
+	s := &server{cfg: config{uiUsers: map[string]uiUserConfig{"admin": {Username: "admin", Password: "secret", Role: "admin", DisplayName: "Admin"}}}, store: &inMemoryStore{k: key}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin", s.handleAdmin)
+	mux.HandleFunc("/admin/login", s.handleAdminLogin)
+
+	unauthReq := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	unauthRec := httptest.NewRecorder()
+	mux.ServeHTTP(unauthRec, unauthReq)
+	if unauthRec.Code != http.StatusSeeOther {
+		t.Fatalf("unexpected unauthenticated status: %d", unauthRec.Code)
+	}
+	if location := unauthRec.Header().Get("Location"); !strings.HasPrefix(location, "/admin/login") {
+		t.Fatalf("expected login redirect, got %q", location)
+	}
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/admin/login?next=/admin", strings.NewReader("username=admin&password=secret"))
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginRec := httptest.NewRecorder()
+	mux.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusSeeOther {
+		t.Fatalf("unexpected login status: %d body=%s", loginRec.Code, loginRec.Body.String())
+	}
+	cookies := loginRec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatalf("expected session cookie after login")
+	}
+
+	authReq := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	authReq.AddCookie(cookies[0])
+	authRec := httptest.NewRecorder()
+	mux.ServeHTTP(authRec, authReq)
+	if authRec.Code != http.StatusOK {
+		t.Fatalf("unexpected authenticated status: %d", authRec.Code)
+	}
+}
+
 func sampleKey(seed byte) kmsKey {
 	return kmsKey{
 		ID:           "key-" + string(rune('0'+seed)),
