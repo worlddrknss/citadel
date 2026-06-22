@@ -185,18 +185,25 @@ func (s *server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if user belongs to the account
-	userAccounts, err := s.store.ListUserAccounts(r.Context(), username)
-	if err != nil || len(userAccounts) == 0 {
-		s.renderAdminLogin(w, adminLoginView{NextPath: nextPath, Error: "Invalid credentials or account access denied"})
-		return
-	}
-
+	// Check if user belongs to the account. Prefer the DB-backed junction table
+	// (multi-tenant SaaS path); fall back to the user's statically-configured
+	// accounts (legacy env users / in-memory store) so single-tenant and
+	// bootstrap deployments continue to work.
 	found := false
-	for _, ua := range userAccounts {
-		if ua.AccountID == accountID {
-			found = true
-			break
+	if userAccounts, err := s.store.ListUserAccounts(r.Context(), username); err == nil {
+		for _, ua := range userAccounts {
+			if ua.AccountID == accountID {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		for _, a := range user.Accounts {
+			if a == accountID {
+				found = true
+				break
+			}
 		}
 	}
 	if !found {

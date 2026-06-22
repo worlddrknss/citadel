@@ -1,10 +1,68 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"html/template"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 )
+
+// oneTimeSecret holds a freshly created access key secret that must be shown to
+// the user exactly once. The plaintext secret is never persisted and never
+// placed in a URL; it is handed out a single time via an opaque reveal token.
+type oneTimeSecret struct {
+	accessKeyID string
+	secret      string
+	expires     time.Time
+}
+
+var (
+	oneTimeSecretsMu sync.Mutex
+	oneTimeSecrets   = map[string]oneTimeSecret{}
+)
+
+// stashOneTimeSecret stores a secret server-side and returns an opaque,
+// single-use token used to reveal it exactly once within a short window.
+func stashOneTimeSecret(accessKeyID, secret string) string {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(b)
+
+	oneTimeSecretsMu.Lock()
+	defer oneTimeSecretsMu.Unlock()
+	now := time.Now()
+	for k, v := range oneTimeSecrets {
+		if now.After(v.expires) {
+			delete(oneTimeSecrets, k)
+		}
+	}
+	oneTimeSecrets[token] = oneTimeSecret{accessKeyID: accessKeyID, secret: secret, expires: now.Add(5 * time.Minute)}
+	return token
+}
+
+// popOneTimeSecret atomically retrieves and removes a stashed secret. It returns
+// ok=false if the token is unknown, already consumed, or expired.
+func popOneTimeSecret(token string) (oneTimeSecret, bool) {
+	if strings.TrimSpace(token) == "" {
+		return oneTimeSecret{}, false
+	}
+	oneTimeSecretsMu.Lock()
+	defer oneTimeSecretsMu.Unlock()
+	v, ok := oneTimeSecrets[token]
+	if !ok {
+		return oneTimeSecret{}, false
+	}
+	delete(oneTimeSecrets, token)
+	if time.Now().After(v.expires) {
+		return oneTimeSecret{}, false
+	}
+	return v, true
+}
 
 // handleAccountProfile displays user profile and account information.
 func (s *server) handleAccountProfile(w http.ResponseWriter, r *http.Request) {
@@ -110,8 +168,10 @@ func (s *server) handleAccountKeys(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, "/account/keys?error="+strings.ReplaceAll(err.Error(), " ", "+"), http.StatusSeeOther)
 				return
 			}
-			// Redirect to display secret once
-			http.Redirect(w, r, "/account/keys?created="+secret.AccessKeyID+"&secret="+secret.SecretKey, http.StatusSeeOther)
+			// Stash the secret server-side and reveal it once via an opaque,
+			// single-use token. The plaintext secret is never put in a URL.
+			revealToken := stashOneTimeSecret(secret.AccessKeyID, secret.SecretKey)
+			http.Redirect(w, r, "/account/keys?reveal="+revealToken, http.StatusSeeOther)
 			return
 		case "delete":
 			keyID := strings.TrimSpace(r.FormValue("key_id"))
@@ -148,6 +208,15 @@ func (s *server) handleAccountKeys(w http.ResponseWriter, r *http.Request) {
 		keys = []accessKeyInfo{}
 	}
 
+	// Reveal a freshly created secret exactly once. The secret is retrieved from
+	// the server-side single-use cache via an opaque token; it is never read from
+	// the URL and cannot be shown again on refresh.
+	var createdKeyID, createdSecret string
+	if ots, ok := popOneTimeSecret(r.URL.Query().Get("reveal")); ok {
+		createdKeyID = ots.accessKeyID
+		createdSecret = ots.secret
+	}
+
 	pageView := struct {
 		Username      string
 		AccountID     string
@@ -161,8 +230,8 @@ func (s *server) handleAccountKeys(w http.ResponseWriter, r *http.Request) {
 		Username:      session.Username,
 		AccountID:     session.AccountID,
 		Keys:          keys,
-		CreatedKeyID:  r.URL.Query().Get("created"),
-		CreatedSecret: r.URL.Query().Get("secret"),
+		CreatedKeyID:  createdKeyID,
+		CreatedSecret: createdSecret,
 		DeletedKeyID:  r.URL.Query().Get("deleted"),
 		DeactivatedID: r.URL.Query().Get("deactivated"),
 		ErrorMsg:      r.URL.Query().Get("error"),

@@ -321,7 +321,8 @@ func (s *server) masterAdminDeleteAccount(r *http.Request) (error, string) {
 	if err := s.store.DeleteUIAccount(r.Context(), accountID); err != nil {
 		return err, ""
 	}
-	// TODO: Phase 2 - remove user_accounts entries when junction table is added
+	// user_accounts rows for this account are removed automatically via the
+	// ON DELETE CASCADE foreign key on user_accounts.account_id.
 	return nil, "account deleted"
 }
 

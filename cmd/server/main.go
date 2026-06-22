@@ -1037,8 +1037,8 @@ BEGIN
 		END;
 		-- Add new account_id column
 		ALTER TABLE ui_accounts ADD COLUMN account_id CHAR(12);
-		-- Backfill with deterministic IDs based on account name
-		UPDATE ui_accounts SET account_id = SUBSTR('1' || LPAD(SUBSTR(MD5(account), 1, 11), 11, '0'), 1, 12)
+		-- Backfill with deterministic numeric IDs based on account name
+		UPDATE ui_accounts SET account_id = SUBSTR('1' || SUBSTR(TRANSLATE(MD5(account), 'abcdef', '012345'), 1, 11), 1, 12)
 			WHERE account_id IS NULL;
 		-- Add NOT NULL constraint
 		ALTER TABLE ui_accounts ALTER COLUMN account_id SET NOT NULL;
@@ -1226,6 +1226,35 @@ CREATE TABLE IF NOT EXISTS acme_le_certificates (
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Per-account isolation: tag every resource with the owning account's 12-digit
+-- ID. Columns are added nullable (no FK) so existing inserts keep working; the
+-- backfill assigns legacy rows to the deployment's global/root account. Query
+-- scoping is applied at the store layer only when an authenticated caller
+-- account is present (DB-backed strict SigV4), so behavior is unchanged until
+-- that path is enabled.
+ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS account_id CHAR(12);
+ALTER TABLE kms_aliases ADD COLUMN IF NOT EXISTS account_id CHAR(12);
+ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS account_id CHAR(12);
+ALTER TABLE pca_certificate_authorities ADD COLUMN IF NOT EXISTS account_id CHAR(12);
+ALTER TABLE pca_certificates ADD COLUMN IF NOT EXISTS account_id CHAR(12);
+ALTER TABLE acme_le_certificates ADD COLUMN IF NOT EXISTS account_id CHAR(12);
+
+DO $$
+DECLARE
+	root_acct CHAR(12);
+BEGIN
+	SELECT setting_value INTO root_acct FROM kms_settings WHERE setting_key = 'aws_account_id' LIMIT 1;
+	IF root_acct IS NULL OR LENGTH(TRIM(root_acct)) <> 12 THEN
+		root_acct := '000000000000';
+	END IF;
+	UPDATE kms_keys SET account_id = root_acct WHERE account_id IS NULL;
+	UPDATE kms_aliases SET account_id = root_acct WHERE account_id IS NULL;
+	UPDATE sm_secrets SET account_id = root_acct WHERE account_id IS NULL;
+	UPDATE pca_certificate_authorities SET account_id = root_acct WHERE account_id IS NULL;
+	UPDATE pca_certificates SET account_id = root_acct WHERE account_id IS NULL;
+	UPDATE acme_le_certificates SET account_id = root_acct WHERE account_id IS NULL;
+END $$;
 `
 	if _, err := db.ExecContext(ctx, ddl); err != nil {
 		return fmt.Errorf("initialize schema: %w", err)
@@ -2159,6 +2188,12 @@ func (s *dbStore) ResolveByID(ctx context.Context, keyID string) (kmsKey, error)
 FROM kms_keys
 WHERE id = $1
 `
+	query := q
+	args := []any{keyID}
+	if cond, extra := accountFilter(ctx, "account_id", 2); cond != "" {
+		query += " AND " + cond
+		args = append(args, extra...)
+	}
 	var (
 		k            kmsKey
 		masterB64    string
@@ -2169,7 +2204,7 @@ WHERE id = $1
 		keySpec      string
 		deletionDate sql.NullTime
 	)
-	err := s.db.QueryRowContext(ctx, q, keyID).Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &publicB64, &keyUsage, &keySpec, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt)
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &publicB64, &keyUsage, &keySpec, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt)
 	if err != nil {
 		return kmsKey{}, err
 	}
@@ -2232,11 +2267,11 @@ func (s *dbStore) EnsureBootstrap(ctx context.Context, k kmsKey) error {
 		return fmt.Errorf("wrap bootstrap key material: %w", err)
 	}
 	const upsertKey = `
-INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, created_at)
-VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, $10)
+INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, created_at, account_id)
+VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (id) DO NOTHING
 `
-	if _, err := s.db.ExecContext(ctx, upsertKey, k.ID, k.ARN, wrappedB64, nonceB64, base64.StdEncoding.EncodeToString(k.PublicKeyRaw), k.KeyUsage, k.KeySpec, k.Description, k.Enabled, k.CreatedAt); err != nil {
+	if _, err := s.db.ExecContext(ctx, upsertKey, k.ID, k.ARN, wrappedB64, nonceB64, base64.StdEncoding.EncodeToString(k.PublicKeyRaw), k.KeyUsage, k.KeySpec, k.Description, k.Enabled, k.CreatedAt, s.accountForContext(ctx)); err != nil {
 		return fmt.Errorf("bootstrap key row: %w", err)
 	}
 
@@ -2259,7 +2294,7 @@ func (s *dbStore) CreateKey(ctx context.Context, description, keyUsage, keySpec 
 	id := randomHex(12)
 	k := kmsKey{
 		ID:           id,
-		ARN:          s.keyARN(id),
+		ARN:          s.keyARNForCtx(ctx, id),
 		MasterKeyRaw: raw,
 		PublicKeyRaw: publicRaw,
 		Description:  description,
@@ -2273,10 +2308,10 @@ func (s *dbStore) CreateKey(ctx context.Context, description, keyUsage, keySpec 
 		return kmsKey{}, err
 	}
 	const q = `
-INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at)
-VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, NULL, $10)
+INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at, account_id)
+VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11)
 `
-	if _, err := s.db.ExecContext(ctx, q, k.ID, k.ARN, wrappedB64, nonceB64, base64.StdEncoding.EncodeToString(publicRaw), k.KeyUsage, k.KeySpec, k.Description, k.Enabled, k.CreatedAt); err != nil {
+	if _, err := s.db.ExecContext(ctx, q, k.ID, k.ARN, wrappedB64, nonceB64, base64.StdEncoding.EncodeToString(publicRaw), k.KeyUsage, k.KeySpec, k.Description, k.Enabled, k.CreatedAt, s.accountForContext(ctx)); err != nil {
 		return kmsKey{}, err
 	}
 	return k, nil
@@ -2293,7 +2328,7 @@ func (s *dbStore) ImportSigningKey(ctx context.Context, description string, priv
 	id := randomHex(12)
 	k := kmsKey{
 		ID:           id,
-		ARN:          s.keyARN(id),
+		ARN:          s.keyARNForCtx(ctx, id),
 		MasterKeyRaw: privPKCS8DER,
 		PublicKeyRaw: pubPKIXDER,
 		Description:  description,
@@ -2307,22 +2342,25 @@ func (s *dbStore) ImportSigningKey(ctx context.Context, description string, priv
 		return kmsKey{}, err
 	}
 	const q = `
-INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at)
-VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, NULL, $10)
+INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at, account_id)
+VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11)
 `
-	if _, err := s.db.ExecContext(ctx, q, k.ID, k.ARN, wrappedB64, nonceB64, base64.StdEncoding.EncodeToString(pubPKIXDER), k.KeyUsage, k.KeySpec, k.Description, k.Enabled, k.CreatedAt); err != nil {
+	if _, err := s.db.ExecContext(ctx, q, k.ID, k.ARN, wrappedB64, nonceB64, base64.StdEncoding.EncodeToString(pubPKIXDER), k.KeyUsage, k.KeySpec, k.Description, k.Enabled, k.CreatedAt, s.accountForContext(ctx)); err != nil {
 		return kmsKey{}, err
 	}
 	return k, nil
 }
 
 func (s *dbStore) ListKeys(ctx context.Context) ([]kmsKey, error) {
-	const q = `
+	q := `
 	SELECT id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at
-FROM kms_keys
-ORDER BY created_at ASC
-`
-	rows, err := s.db.QueryContext(ctx, q)
+FROM kms_keys`
+	cond, args := accountFilter(ctx, "account_id", 1)
+	if cond != "" {
+		q += "\nWHERE " + cond
+	}
+	q += "\nORDER BY created_at ASC"
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2416,10 +2454,10 @@ DO UPDATE SET policy_document = EXCLUDED.policy_document, updated_at = NOW()
 
 func (s *dbStore) CreateAlias(ctx context.Context, aliasName, keyID string) error {
 	const q = `
-INSERT INTO kms_aliases (alias_name, target_key_id)
-VALUES ($1, $2)
+INSERT INTO kms_aliases (alias_name, target_key_id, account_id)
+VALUES ($1, $2, $3)
 `
-	_, err := s.db.ExecContext(ctx, q, aliasName, keyID)
+	_, err := s.db.ExecContext(ctx, q, aliasName, keyID, s.accountForContext(ctx))
 	return err
 }
 
@@ -2444,12 +2482,15 @@ WHERE alias_name = $1
 }
 
 func (s *dbStore) ListAliases(ctx context.Context) ([]kmsAlias, error) {
-	const q = `
+	q := `
 SELECT alias_name, target_key_id
-FROM kms_aliases
-ORDER BY alias_name ASC
-`
-	rows, err := s.db.QueryContext(ctx, q)
+FROM kms_aliases`
+	cond, args := accountFilter(ctx, "account_id", 1)
+	if cond != "" {
+		q += "\nWHERE " + cond
+	}
+	q += "\nORDER BY alias_name ASC"
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

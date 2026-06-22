@@ -56,6 +56,12 @@ func (s *server) handleKMSWithDBBackedAuth(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Never trust client-supplied identity headers: the authenticated caller
+	// identity is derived solely from a verified SigV4 signature below and
+	// propagated through the request context, not headers.
+	r.Header.Del("X-KMS-Username")
+	r.Header.Del("X-KMS-Account-ID")
+
 	// Use DB-backed verification if enabled and store supports it
 	if s.cfg.strictSigV4 && s.isDBBacked() {
 		if err := validateSigV4Request(r); err != nil {
@@ -77,9 +83,11 @@ func (s *server) handleKMSWithDBBackedAuth(w http.ResponseWriter, r *http.Reques
 			return
 		}
 
-		// Store username/accountID in request context for downstream handlers
+		// Propagate the authenticated caller identity through the request
+		// context so downstream store queries can scope resources to the
+		// caller's account. The username header remains for audit/logging.
 		r.Header.Set("X-KMS-Username", username)
-		r.Header.Set("X-KMS-Account-ID", accountID)
+		r = r.WithContext(withCallerAccount(r.Context(), accountID))
 	}
 
 	// Fall back to normal handleKMS

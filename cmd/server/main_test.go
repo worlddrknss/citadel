@@ -823,7 +823,7 @@ func TestAuditExplorerRenders(t *testing.T) {
 
 func TestAdminUIAuthenticationFlow(t *testing.T) {
 	key := sampleKey(1)
-	s := &server{cfg: config{uiUsers: map[string]uiUserConfig{"admin": {Username: "admin", Password: "secret", Role: "admin", DisplayName: "Admin"}}}, store: &inMemoryStore{k: key}}
+	s := &server{cfg: config{uiUsers: map[string]uiUserConfig{"admin": {Username: "admin", Password: "secret", Role: "admin", DisplayName: "Admin", Accounts: []string{"123456789012"}}}}, store: &inMemoryStore{k: key}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/admin", s.handleAdmin)
 	mux.HandleFunc("/login", s.handleAdminLogin)
@@ -838,7 +838,7 @@ func TestAdminUIAuthenticationFlow(t *testing.T) {
 		t.Fatalf("expected login redirect, got %q", location)
 	}
 
-	loginReq := httptest.NewRequest(http.MethodPost, "/login?next=/admin", strings.NewReader("username=admin&password=secret"))
+	loginReq := httptest.NewRequest(http.MethodPost, "/login?next=/admin", strings.NewReader("account_id=123456789012&username=admin&password=secret"))
 	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	loginRec := httptest.NewRecorder()
 	mux.ServeHTTP(loginRec, loginReq)

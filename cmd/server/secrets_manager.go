@@ -510,7 +510,7 @@ func (s *dbStore) CreateSecret(ctx context.Context, req createSecretRequest) (se
 	}
 	now := time.Now().UTC()
 	meta := secretMetadataRecord{
-		ARN:               s.secretARNFor(name),
+		ARN:               s.secretARNForCtx(ctx, name),
 		Name:              name,
 		Description:       strings.TrimSpace(req.Description),
 		KMSKeyID:          kmsKeyID,
@@ -526,10 +526,10 @@ func (s *dbStore) CreateSecret(ctx context.Context, req createSecretRequest) (se
 	}
 	defer tx.Rollback()
 	const insertSecret = `
-INSERT INTO sm_secrets (name, arn, description, kms_key_id, current_version_id, previous_version_id, deleted_date, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, '', NULL, $6, $7)
+INSERT INTO sm_secrets (name, arn, description, kms_key_id, current_version_id, previous_version_id, deleted_date, created_at, updated_at, account_id)
+VALUES ($1, $2, $3, $4, $5, '', NULL, $6, $7, $8)
 `
-	if _, err := tx.ExecContext(ctx, insertSecret, meta.Name, meta.ARN, meta.Description, meta.KMSKeyID, meta.CurrentVersionID, meta.CreatedAt, meta.LastChangedDate); err != nil {
+	if _, err := tx.ExecContext(ctx, insertSecret, meta.Name, meta.ARN, meta.Description, meta.KMSKeyID, meta.CurrentVersionID, meta.CreatedAt, meta.LastChangedDate, s.accountForContext(ctx)); err != nil {
 		return secretMetadataRecord{}, secretValueRecord{}, mapSecretDBError(err)
 	}
 	const insertVersion = `
@@ -750,12 +750,15 @@ func (s *dbStore) RestoreSecret(ctx context.Context, secretID string) (secretMet
 }
 
 func (s *dbStore) ListSecrets(ctx context.Context) ([]secretMetadataRecord, error) {
-	const q = `
+	q := `
 SELECT name, arn, description, kms_key_id, current_version_id, previous_version_id, rotation_enabled, rotation_lambda_arn, rotation_days, next_rotation_date, deleted_date, created_at, updated_at
-FROM sm_secrets
-ORDER BY created_at ASC
-`
-	rows, err := s.db.QueryContext(ctx, q)
+FROM sm_secrets`
+	cond, args := accountFilter(ctx, "account_id", 1)
+	if cond != "" {
+		q += "\nWHERE " + cond
+	}
+	q += "\nORDER BY created_at ASC"
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -783,18 +786,22 @@ ORDER BY created_at ASC
 }
 
 func (s *dbStore) loadSecretMetadata(ctx context.Context, secretID string) (secretMetadataRecord, error) {
-	const q = `
+	q := `
 SELECT name, arn, description, kms_key_id, current_version_id, previous_version_id, rotation_enabled, rotation_lambda_arn, rotation_days, next_rotation_date, deleted_date, created_at, updated_at
 FROM sm_secrets
-WHERE name = $1 OR arn = $1
-LIMIT 1
-`
+WHERE (name = $1 OR arn = $1)`
+	args := []any{strings.TrimSpace(secretID)}
+	if cond, extra := accountFilter(ctx, "account_id", 2); cond != "" {
+		q += " AND " + cond
+		args = append(args, extra...)
+	}
+	q += "\nLIMIT 1"
 	var (
 		item        secretMetadataRecord
 		nextRotate  sql.NullTime
 		deletedDate sql.NullTime
 	)
-	err := s.db.QueryRowContext(ctx, q, strings.TrimSpace(secretID)).Scan(&item.Name, &item.ARN, &item.Description, &item.KMSKeyID, &item.CurrentVersionID, &item.PreviousVersionID, &item.RotationEnabled, &item.RotationLambdaARN, &item.RotationDays, &nextRotate, &deletedDate, &item.CreatedAt, &item.LastChangedDate)
+	err := s.db.QueryRowContext(ctx, q, args...).Scan(&item.Name, &item.ARN, &item.Description, &item.KMSKeyID, &item.CurrentVersionID, &item.PreviousVersionID, &item.RotationEnabled, &item.RotationLambdaARN, &item.RotationDays, &nextRotate, &deletedDate, &item.CreatedAt, &item.LastChangedDate)
 	if err != nil {
 		return secretMetadataRecord{}, err
 	}

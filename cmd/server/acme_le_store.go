@@ -118,12 +118,12 @@ func (s *dbStore) CreateACMELECertificate(ctx context.Context, cert acmeLECertif
 	const q = `
 INSERT INTO acme_le_certificates (
 	cert_id, directory_url, domains, serial, cert_b64, chain_b64,
-	key_wrapped_b64, key_nonce_b64, status, not_before, not_after, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+	key_wrapped_b64, key_nonce_b64, status, not_before, not_after, created_at, updated_at, account_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW(), $12)
 `
 	if _, err := s.db.ExecContext(ctx, q,
 		cert.CertID, cert.DirectoryURL, cert.Domains, cert.Serial, cert.CertB64, cert.ChainB64,
-		wrappedB64, nonceB64, cert.Status, cert.NotBefore, cert.NotAfter,
+		wrappedB64, nonceB64, cert.Status, cert.NotBefore, cert.NotAfter, s.accountForContext(ctx),
 	); err != nil {
 		return fmt.Errorf("insert acme certificate: %w", err)
 	}

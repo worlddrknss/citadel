@@ -11,15 +11,15 @@ func (s *dbStore) CreateCertificateAuthority(ctx context.Context, ca pcaCertific
 	query := `
 		INSERT INTO pca_certificate_authorities (
 			ca_id, urn, type, kms_key_id, subject_dn, state, ca_cert_b64,
-			path_length, not_before, not_after, description, account, created_at, updated_at
+			path_length, not_before, not_after, description, account, created_at, updated_at, account_id
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10, $11, $12, $13, $14
+			$8, $9, $10, $11, $12, $13, $14, $15
 		)
 	`
 	_, err := s.db.ExecContext(ctx, query,
 		ca.CAID, ca.ARN, ca.Type, ca.KMSKeyID, ca.SubjectDN, ca.State, ca.CACertB64,
-		ca.PathLength, ca.NotBefore, ca.NotAfter, ca.Description, ca.Account, ca.CreatedAt, ca.UpdatedAt,
+		ca.PathLength, ca.NotBefore, ca.NotAfter, ca.Description, ca.Account, ca.CreatedAt, ca.UpdatedAt, s.accountForContext(ctx),
 	)
 	if err != nil {
 		return fmt.Errorf("insert CA: %w", err)
@@ -94,15 +94,15 @@ func (s *dbStore) CreateCertificate(ctx context.Context, cert pcaCertificate) er
 	query := `
 		INSERT INTO pca_certificates (
 			cert_id, ca_id, serial, csr_b64, cert_b64, status,
-			not_before, not_after, revoked_at, revocation_reason, template, created_at, updated_at
+			not_before, not_after, revoked_at, revocation_reason, template, created_at, updated_at, account_id
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10, $11, $12, $13
+			$7, $8, $9, $10, $11, $12, $13, $14
 		)
 	`
 	_, err := s.db.ExecContext(ctx, query,
 		cert.CertID, cert.CAID, cert.Serial, cert.CSRB64, cert.CertB64, cert.Status,
-		cert.NotBefore, cert.NotAfter, cert.RevokedAt, cert.RevocationReason, cert.Template, cert.CreatedAt, cert.UpdatedAt,
+		cert.NotBefore, cert.NotAfter, cert.RevokedAt, cert.RevocationReason, cert.Template, cert.CreatedAt, cert.UpdatedAt, s.accountForContext(ctx),
 	)
 	if err != nil {
 		return fmt.Errorf("insert certificate: %w", err)
