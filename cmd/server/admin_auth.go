@@ -56,9 +56,10 @@ func (u uiUserConfig) storedCredential() string {
 type uiSession struct {
 	SessionID   string
 	Username    string
+	AccountID   string // Current account context for this session
 	Role        string
 	DisplayName string
-	Accounts    []string
+	Accounts    []string // All accounts the user belongs to
 	CreatedAt   time.Time
 	LastSeenAt  time.Time
 }
@@ -161,24 +162,60 @@ func (s *server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	accountID := strings.TrimSpace(r.FormValue("account_id"))
 	username := strings.TrimSpace(r.FormValue("username"))
 	password := r.FormValue("password")
+
+	if accountID == "" || username == "" {
+		s.renderAdminLogin(w, adminLoginView{NextPath: nextPath, Error: "Account ID and username are required"})
+		return
+	}
+
 	runtime.mu.Lock()
 	user, ok := runtime.users[username]
 	runtime.mu.Unlock()
-	// Always run a verification to keep timing roughly constant whether or not
-	// the username exists, mitigating user enumeration.
+
+	// Always run a verification to keep timing roughly constant
 	stored := dummyArgon2Hash
 	if ok {
 		stored = user.storedCredential()
 	}
 	if !verifyPassword(stored, password) || !ok {
-		s.renderAdminLogin(w, adminLoginView{NextPath: nextPath, Error: "Invalid username or password"})
+		s.renderAdminLogin(w, adminLoginView{NextPath: nextPath, Error: "Invalid credentials"})
 		return
 	}
+
+	// Check if user belongs to the account
+	userAccounts, err := s.store.ListUserAccounts(r.Context(), username)
+	if err != nil || len(userAccounts) == 0 {
+		s.renderAdminLogin(w, adminLoginView{NextPath: nextPath, Error: "Invalid credentials or account access denied"})
+		return
+	}
+
+	found := false
+	for _, ua := range userAccounts {
+		if ua.AccountID == accountID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.renderAdminLogin(w, adminLoginView{NextPath: nextPath, Error: "Invalid credentials or account access denied"})
+		return
+	}
+
 	sessionID := randomHex(24)
 	now := time.Now().UTC()
-	session := uiSession{SessionID: sessionID, Username: user.Username, Role: user.Role, DisplayName: user.DisplayName, Accounts: append([]string(nil), user.Accounts...), CreatedAt: now, LastSeenAt: now}
+	session := uiSession{
+		SessionID:   sessionID,
+		Username:    user.Username,
+		AccountID:   accountID,
+		Role:        user.Role,
+		DisplayName: user.DisplayName,
+		Accounts:    append([]string(nil), user.Accounts...),
+		CreatedAt:   now,
+		LastSeenAt:  now,
+	}
 	runtime.mu.Lock()
 	runtime.sessions[sessionID] = session
 	runtime.mu.Unlock()

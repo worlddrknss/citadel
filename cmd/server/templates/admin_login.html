@@ -42,8 +42,12 @@
       {{if .Error}}<div class="err-banner">⚠ {{.Error}}</div>{{end}}
       <form method="post" action="/login?next={{.NextPath}}">
         <div class="f-row">
+          <label for="account_id">Account ID</label>
+          <input id="account_id" type="text" name="account_id" placeholder="e.g., 123456789012" autofocus required>
+        </div>
+        <div class="f-row">
           <label for="username">Username</label>
-          <input id="username" type="text" name="username" autocomplete="username" autofocus required>
+          <input id="username" type="text" name="username" autocomplete="username" required>
         </div>
         <div class="f-row">
           <label for="password">Password</label>

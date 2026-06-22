@@ -166,21 +166,24 @@
           <h3>Create Account</h3>
           <form method="post" action="/admin/accounts?action=create_account">
             <div class="row">
-              <div><label>Account Name</label><input name="account" placeholder="account-id" required></div>
+              <div><label>Account Name</label><input name="account" placeholder="my-account" required></div>
               <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit">Create</button></div>
             </div>
           </form>
+          <p class="muted" style="font-size:12px;margin-top:8px;">Account ID is auto-generated and immutable.</p>
           <h3 style="margin-top:14px;">Existing Accounts</h3>
           {{if .Accounts}}
             <table>
-              <thead><tr><th>Account</th><th>Action</th></tr></thead>
+              <thead><tr><th>Account ID</th><th>Name</th><th>Created</th><th>Action</th></tr></thead>
               <tbody>
               {{range .Accounts}}
                 <tr>
-                  <td>{{.}}</td>
+                  <td><code style="font-size:12px;background:#f3f4f6;padding:2px 4px;border-radius:4px;">{{.AccountID}}</code></td>
+                  <td>{{.Name}}</td>
+                  <td style="font-size:12px;color:var(--muted);">{{.CreatedAt}}</td>
                   <td>
-                    <form method="post" action="/admin/accounts?action=delete_account" onsubmit="return confirm('Delete account {{.}} and remove it from all users?');">
-                      <input type="hidden" name="account" value="{{.}}">
+                    <form method="post" action="/admin/accounts?action=delete_account" onsubmit="return confirm('Delete account {{.Name}} ({{.AccountID}})? This cannot be undone.');" style="display:inline;">
+                      <input type="hidden" name="account_id" value="{{.AccountID}}">
                       <button class="btn btn-danger" type="submit">Delete</button>
                     </form>
                   </td>
@@ -195,7 +198,7 @@
           <form method="post" action="/admin/accounts?action=assign_account">
             <div class="row">
               <div><label>User</label><select name="username" required>{{range .Users}}<option value="{{.Username}}">{{.Username}}</option>{{end}}</select></div>
-              <div><label>Account</label><select name="account" required>{{range .Accounts}}<option value="{{.}}">{{.}}</option>{{end}}</select></div>
+              <div><label>Account</label><select name="account_id" required>{{range .Accounts}}<option value="{{.AccountID}}">{{.Name}} ({{.AccountID}})</option>{{end}}</select></div>
             </div>
             <div style="margin-top:8px;"><button class="btn btn-primary" type="submit">Assign</button></div>
           </form>
@@ -203,7 +206,7 @@
           <form method="post" action="/admin/accounts?action=remove_account">
             <div class="row">
               <div><label>User</label><select name="username" required>{{range .Users}}<option value="{{.Username}}">{{.Username}}</option>{{end}}</select></div>
-              <div><label>Account</label><select name="account" required>{{range .Accounts}}<option value="{{.}}">{{.}}</option>{{end}}</select></div>
+              <div><label>Account</label><select name="account_id" required>{{range .Accounts}}<option value="{{.AccountID}}">{{.Name}} ({{.AccountID}})</option>{{end}}</select></div>
             </div>
             <div style="margin-top:8px;"><button class="btn" type="submit">Remove</button></div>
           </form>

@@ -118,9 +118,21 @@ type keyStore interface {
 	ListUIUsers(ctx context.Context) ([]uiUserConfig, error)
 	UpsertUIUser(ctx context.Context, user uiUserConfig) error
 	DeleteUIUser(ctx context.Context, username string) error
-	ListUIAccounts(ctx context.Context) ([]string, error)
+	CreateUIAccount(ctx context.Context, name string) (string, error)
+	GetUIAccount(ctx context.Context, accountID string) (uiAccountInfo, error)
+	ListUIAccounts(ctx context.Context) ([]uiAccountInfo, error)
 	UpsertUIAccount(ctx context.Context, account string) error
-	DeleteUIAccount(ctx context.Context, account string) error
+	DeleteUIAccount(ctx context.Context, accountID string) error
+	AddUserAccount(ctx context.Context, username, accountID, role string) error
+	RemoveUserAccount(ctx context.Context, username, accountID string) error
+	ListUserAccounts(ctx context.Context, username string) ([]userAccountInfo, error)
+	ListAccountUsers(ctx context.Context, accountID string) ([]struct{ Username, Role string }, error)
+	CreateAccessKey(ctx context.Context, username, accountID string) (accessKeySecret, error)
+	ListAccessKeys(ctx context.Context, username, accountID string) ([]accessKeyInfo, error)
+	GetAccessKeyByID(ctx context.Context, keyID string) (username, accountID, secret string, status string, err error)
+	SetAccessKeyStatus(ctx context.Context, keyID, newStatus string) error
+	DeleteAccessKey(ctx context.Context, keyID string) error
+	TouchAccessKeyLastUsed(ctx context.Context, keyID string) error
 
 	// Private CA (acm-pca) methods
 	CreateCertificateAuthority(ctx context.Context, ca pcaCertificateAuthority) error
@@ -637,6 +649,11 @@ func main() {
 	mux.HandleFunc("/admin/settings", s.handleMasterAdminSettings)
 	mux.HandleFunc("/admin/tenants", s.handleLegacyTenantsRedirect)
 
+	// User dashboard routes (self-service)
+	mux.HandleFunc("/account/profile", s.handleAccountProfile)
+	mux.HandleFunc("/account/keys", s.handleAccountKeys)
+	mux.HandleFunc("/account/password", s.handleAccountPassword)
+
 	// Compatibility aliases for old UI paths
 	mux.Handle("/admin/login", http.RedirectHandler("/login", http.StatusMovedPermanently))
 	mux.Handle("/admin/logout", http.RedirectHandler("/logout", http.StatusMovedPermanently))
@@ -992,9 +1009,113 @@ CREATE TABLE IF NOT EXISTS ui_users (
 );
 
 CREATE TABLE IF NOT EXISTS ui_accounts (
-	account TEXT PRIMARY KEY,
+	account_id CHAR(12) PRIMARY KEY,
+	account TEXT NOT NULL UNIQUE,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Migrate existing ui_accounts: rename old 'account' PK to a regular column and add account_id PK
+DO $$
+BEGIN
+	-- Check if old schema exists (account column is PK)
+	IF EXISTS (SELECT 1 FROM information_schema.table_constraints 
+		WHERE table_name='ui_accounts' AND constraint_type='PRIMARY KEY' AND constraint_name='ui_accounts_pkey'
+		AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ui_accounts' AND column_name='account_id'))
+	THEN
+		-- Old schema detected, perform migration
+		ALTER TABLE ui_accounts DROP CONSTRAINT ui_accounts_pkey;
+		ALTER TABLE ui_accounts ADD COLUMN account_id CHAR(12);
+		-- Backfill with deterministic IDs based on account name (using hash for stability)
+		UPDATE ui_accounts SET account_id = SUBSTR('1' || LPAD(SUBSTR(MD5(account), 1, 11), 11, '0'), 1, 12)
+			WHERE account_id IS NULL;
+		ALTER TABLE ui_accounts ADD PRIMARY KEY (account_id);
+		ALTER TABLE ui_accounts ADD UNIQUE (account);
+	END IF;
+END $$;
+
+-- Junction table: users can belong to multiple accounts
+CREATE TABLE IF NOT EXISTS user_accounts (
+	username TEXT NOT NULL,
+	account_id CHAR(12) NOT NULL,
+	role TEXT NOT NULL DEFAULT 'Viewer',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	PRIMARY KEY (username, account_id),
+	FOREIGN KEY (username) REFERENCES ui_users(username) ON DELETE CASCADE,
+	FOREIGN KEY (account_id) REFERENCES ui_accounts(account_id) ON DELETE CASCADE
+);
+
+-- Migrate existing accounts_json from ui_users to user_accounts (one-time)
+DO $$
+DECLARE
+	user_rec RECORD;
+	account_name TEXT;
+	account_id_val CHAR(12);
+BEGIN
+	-- Only run if user_accounts is empty
+	IF NOT EXISTS (SELECT 1 FROM user_accounts LIMIT 1) THEN
+		FOR user_rec IN SELECT username, accounts_json FROM ui_users LOOP
+			-- Parse the JSON array and insert one row per account
+			IF user_rec.accounts_json IS NOT NULL AND user_rec.accounts_json != '[]' THEN
+				BEGIN
+					-- This is a simple approach; won't handle complex JSON escaping
+					-- but works for account names as stored by the app
+					PERFORM COUNT(*) FROM (
+						SELECT (json_array_elements(user_rec.accounts_json::json) ->> 0)::TEXT as acct
+					) AS tmp;
+				EXCEPTION WHEN OTHERS THEN
+					-- If JSON parsing fails, skip this user
+					RAISE NOTICE 'Failed to parse accounts_json for user %: %', user_rec.username, SQLERRM;
+					CONTINUE;
+				END;
+			END IF;
+		END LOOP;
+		-- Simpler approach: for each ui_user with non-empty accounts_json, assign to first 
+		-- account from the list that exists in ui_accounts, with 'Owner' role
+		FOR user_rec IN 
+			SELECT u.username, u.accounts_json 
+			FROM ui_users u 
+			WHERE u.accounts_json IS NOT NULL AND u.accounts_json != '[]'
+		LOOP
+			-- Find the first account in the JSON that exists in ui_accounts
+			DECLARE
+				acct_name TEXT;
+				found_id CHAR(12);
+			BEGIN
+				-- Try to get first account (naive approach)
+				acct_name := TRIM(BOTH '"' FROM SPLIT_PART(
+					SUBSTR(user_rec.accounts_json, 2, LENGTH(user_rec.accounts_json)-2), ',', 1
+				));
+				
+				-- Look up that account's ID
+				SELECT account_id INTO found_id FROM ui_accounts 
+				WHERE LOWER(account) = LOWER(acct_name) LIMIT 1;
+				
+				IF found_id IS NOT NULL THEN
+					INSERT INTO user_accounts (username, account_id, role) 
+					VALUES (user_rec.username, found_id, 'Owner')
+					ON CONFLICT DO NOTHING;
+				END IF;
+			EXCEPTION WHEN OTHERS THEN
+				RAISE NOTICE 'Failed to migrate user %: %', user_rec.username, SQLERRM;
+			END;
+		END LOOP;
+	END IF;
+END $$;
+
+-- IAM access keys: programmatic credentials for users per account
+CREATE TABLE IF NOT EXISTS iam_access_keys (
+	access_key_id TEXT PRIMARY KEY,
+	username TEXT NOT NULL,
+	account_id CHAR(12) NOT NULL,
+	secret_wrapped_b64 TEXT NOT NULL,
+	secret_nonce_b64 TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'Active',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	last_used_at TIMESTAMPTZ,
+	FOREIGN KEY (username, account_id) REFERENCES user_accounts(username, account_id) ON DELETE CASCADE,
+	UNIQUE (access_key_id)
 );
 
 ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS rotation_enabled BOOLEAN NOT NULL DEFAULT FALSE;

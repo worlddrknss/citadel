@@ -26,7 +26,7 @@ type masterAdminPageView struct {
 	CanAdmin        bool
 	Users           []masterAdminUserView
 	Roles           []string
-	Accounts        []string
+	Accounts        []uiAccountInfo
 	AWSRegion       string
 	AWSAccountID    string
 	AWSRegions      []string
@@ -102,21 +102,14 @@ func (s *server) renderMasterAdminSection(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func (s *server) loadMasterAdminData(r *http.Request) ([]masterAdminUserView, []string, []string) {
+func (s *server) loadMasterAdminData(r *http.Request) ([]masterAdminUserView, []string, []uiAccountInfo) {
 	users := make([]masterAdminUserView, 0)
 	roles := map[string]struct{}{}
-	accounts := map[string]struct{}{}
 
 	runtime := s.uiRuntime()
 	runtime.mu.Lock()
 	for _, user := range runtime.users {
 		roles[user.Role] = struct{}{}
-		for _, account := range user.Accounts {
-			account = normalizeAccountName(account)
-			if account != "" {
-				accounts[account] = struct{}{}
-			}
-		}
 		users = append(users, masterAdminUserView{
 			Username:    user.Username,
 			DisplayName: user.DisplayName,
@@ -126,13 +119,10 @@ func (s *server) loadMasterAdminData(r *http.Request) ([]masterAdminUserView, []
 	}
 	runtime.mu.Unlock()
 
+	// Load accounts from the database store
+	var accounts []uiAccountInfo
 	if storedAccounts, err := s.store.ListUIAccounts(r.Context()); err == nil {
-		for _, account := range storedAccounts {
-			account = normalizeAccountName(account)
-			if account != "" {
-				accounts[account] = struct{}{}
-			}
-		}
+		accounts = storedAccounts
 	}
 
 	sort.Slice(users, func(i, j int) bool { return users[i].Username < users[j].Username })
@@ -141,12 +131,8 @@ func (s *server) loadMasterAdminData(r *http.Request) ([]masterAdminUserView, []
 		roleList = append(roleList, role)
 	}
 	sort.Strings(roleList)
-	accountList := make([]string, 0, len(accounts))
-	for account := range accounts {
-		accountList = append(accountList, account)
-	}
-	sort.Strings(accountList)
-	return users, roleList, accountList
+	sort.Slice(accounts, func(i, j int) bool { return accounts[i].Name < accounts[j].Name })
+	return users, roleList, accounts
 }
 
 func (s *server) handleMasterAdminAction(w http.ResponseWriter, r *http.Request, section string, session *uiSession, action string) {
@@ -316,91 +302,48 @@ func (s *server) masterAdminSetRole(r *http.Request) (error, string) {
 }
 
 func (s *server) masterAdminCreateAccount(r *http.Request) (error, string) {
-	account := normalizeAccountName(accountFormValue(r))
-	if account == "" {
-		return fmt.Errorf("account is required"), ""
+	accountName := normalizeAccountName(accountFormValue(r))
+	if accountName == "" {
+		return fmt.Errorf("account name is required"), ""
 	}
-	if err := s.store.UpsertUIAccount(r.Context(), account); err != nil {
-		return err, ""
-	}
-	return nil, "account created"
-}
-
-func (s *server) masterAdminDeleteAccount(r *http.Request) (error, string) {
-	account := normalizeAccountName(accountFormValue(r))
-	if account == "" {
-		return fmt.Errorf("account is required"), ""
-	}
-	if err := s.store.DeleteUIAccount(r.Context(), account); err != nil {
-		return err, ""
-	}
-	users, err := s.store.ListUIUsers(r.Context())
+	accountID, err := s.store.CreateUIAccount(r.Context(), accountName)
 	if err != nil {
 		return err, ""
 	}
-	for _, user := range users {
-		filtered := make([]string, 0, len(user.Accounts))
-		for _, a := range user.Accounts {
-			if normalizeAccountName(a) != account {
-				filtered = append(filtered, a)
-			}
-		}
-		if len(filtered) != len(user.Accounts) {
-			if err := s.store.UpsertUIUser(r.Context(), uiUserConfig{Username: user.Username, PasswordHash: user.PasswordHash, Role: user.Role, DisplayName: user.DisplayName, Accounts: filtered}); err != nil {
-				return err, ""
-			}
-		}
+	return nil, fmt.Sprintf("account created with ID %s", accountID)
+}
+
+func (s *server) masterAdminDeleteAccount(r *http.Request) (error, string) {
+	accountID := strings.TrimSpace(r.FormValue("account_id"))
+	if accountID == "" {
+		return fmt.Errorf("account_id is required"), ""
 	}
+	if err := s.store.DeleteUIAccount(r.Context(), accountID); err != nil {
+		return err, ""
+	}
+	// TODO: Phase 2 - remove user_accounts entries when junction table is added
 	return nil, "account deleted"
 }
 
 func (s *server) masterAdminAssignAccount(r *http.Request) (error, string) {
 	username := strings.TrimSpace(r.FormValue("username"))
-	account := normalizeAccountName(accountFormValue(r))
-	if username == "" || account == "" {
-		return fmt.Errorf("username and account are required"), ""
+	accountID := strings.TrimSpace(r.FormValue("account_id"))
+	if username == "" || accountID == "" {
+		return fmt.Errorf("username and account_id are required"), ""
 	}
-	users, err := s.store.ListUIUsers(r.Context())
-	if err != nil {
+	if err := s.store.AddUserAccount(r.Context(), username, accountID, "Owner"); err != nil {
 		return err, ""
 	}
-	current, ok := findUser(users, username)
-	if !ok {
-		return fmt.Errorf("user not found"), ""
-	}
-	if err := s.store.UpsertUIAccount(r.Context(), account); err != nil {
-		return err, ""
-	}
-	accounts := append([]string{}, current.Accounts...)
-	accounts = append(accounts, account)
-	accounts = normalizeAccounts(accounts)
-	if err := s.store.UpsertUIUser(r.Context(), uiUserConfig{Username: current.Username, PasswordHash: current.PasswordHash, Role: current.Role, DisplayName: current.DisplayName, Accounts: accounts}); err != nil {
-		return err, ""
-	}
-	return nil, "account assigned"
+	return nil, "account assigned to user"
 }
 
 func (s *server) masterAdminRemoveAccount(r *http.Request) (error, string) {
 	username := strings.TrimSpace(r.FormValue("username"))
-	account := normalizeAccountName(accountFormValue(r))
-	if username == "" || account == "" {
-		return fmt.Errorf("username and account are required"), ""
+	accountID := strings.TrimSpace(r.FormValue("account_id"))
+	if username == "" || accountID == "" {
+		return fmt.Errorf("username and account_id are required"), ""
 	}
-	users, err := s.store.ListUIUsers(r.Context())
-	if err != nil {
-		return err, ""
-	}
-	current, ok := findUser(users, username)
-	if !ok {
-		return fmt.Errorf("user not found"), ""
-	}
-	filtered := make([]string, 0, len(current.Accounts))
-	for _, a := range current.Accounts {
-		if normalizeAccountName(a) != account {
-			filtered = append(filtered, a)
-		}
-	}
-	if err := s.store.UpsertUIUser(r.Context(), uiUserConfig{Username: current.Username, PasswordHash: current.PasswordHash, Role: current.Role, DisplayName: current.DisplayName, Accounts: filtered}); err != nil {
+	if err := s.store.RemoveUserAccount(r.Context(), username, accountID); err != nil {
 		return err, ""
 	}
 	return nil, "account removed from user"
