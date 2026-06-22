@@ -1018,18 +1018,24 @@ CREATE TABLE IF NOT EXISTS ui_accounts (
 -- Migrate existing ui_accounts: rename old 'account' PK to a regular column and add account_id PK
 DO $$
 BEGIN
-	-- Check if old schema exists (account column is PK)
-	IF EXISTS (SELECT 1 FROM information_schema.table_constraints 
-		WHERE table_name='ui_accounts' AND constraint_type='PRIMARY KEY' AND constraint_name='ui_accounts_pkey'
-		AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ui_accounts' AND column_name='account_id'))
+	-- Ensure account_id column exists; if not, we're on old schema
+	IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ui_accounts' AND column_name='account_id')
 	THEN
-		-- Old schema detected, perform migration
-		ALTER TABLE ui_accounts DROP CONSTRAINT ui_accounts_pkey;
+		-- Drop old primary key if it exists
+		IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_name='ui_accounts' AND constraint_type='PRIMARY KEY')
+		THEN
+			ALTER TABLE ui_accounts DROP CONSTRAINT ui_accounts_pkey;
+		END IF;
+		-- Add new account_id column
 		ALTER TABLE ui_accounts ADD COLUMN account_id CHAR(12);
-		-- Backfill with deterministic IDs based on account name (using hash for stability)
+		-- Backfill with deterministic IDs based on account name
 		UPDATE ui_accounts SET account_id = SUBSTR('1' || LPAD(SUBSTR(MD5(account), 1, 11), 11, '0'), 1, 12)
 			WHERE account_id IS NULL;
+		-- Add NOT NULL constraint
+		ALTER TABLE ui_accounts ALTER COLUMN account_id SET NOT NULL;
+		-- Set as new primary key
 		ALTER TABLE ui_accounts ADD PRIMARY KEY (account_id);
+		-- Ensure account column still has unique constraint
 		ALTER TABLE ui_accounts ADD UNIQUE (account);
 	END IF;
 END $$;
