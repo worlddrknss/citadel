@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/base32"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -33,12 +34,16 @@ type accessKeySecret struct {
 }
 
 // generateAccessKeyID generates an AWS-style access key ID (AKIA + 16 chars).
+// The suffix uses the RFC 4648 base32 alphabet (A-Z, 2-7) so the ID only ever
+// contains characters that are safe inside a SigV4 "Credential=" scope, which
+// is slash-delimited. base64 (with '+' and '/') must not be used here: a '/'
+// in the access key ID corrupts Authorization-header parsing.
 func generateAccessKeyID() string {
-	b := make([]byte, 12)
+	b := make([]byte, 10)
 	if _, err := rand.Read(b); err != nil {
 		panic(err)
 	}
-	return "AKIA" + base64.RawStdEncoding.EncodeToString(b)[:16]
+	return "AKIA" + base32.StdEncoding.EncodeToString(b)
 }
 
 // generateAccessKeySecret generates a 40-character secret key.
