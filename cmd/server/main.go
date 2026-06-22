@@ -66,9 +66,10 @@ type config struct {
 }
 
 type server struct {
-	cfg   config
-	store keyStore
-	ui    *uiRuntime
+	cfg            config
+	store          keyStore
+	ui             *uiRuntime
+	acmeChallenges *acmeChallengeStore
 }
 
 type keyStore interface {
@@ -125,6 +126,13 @@ type keyStore interface {
 	GetCertificate(ctx context.Context, certID string) (pcaCertificate, error)
 	ListCertificates(ctx context.Context, caID string) ([]pcaCertificate, error)
 	RevokeCertificate(ctx context.Context, certID, reason string) error
+
+	// Let's Encrypt (ACME client) methods
+	GetACMELEAccount(ctx context.Context, directoryURL string) (acmeLEAccount, error)
+	UpsertACMELEAccount(ctx context.Context, account acmeLEAccount) error
+	CreateACMELECertificate(ctx context.Context, cert acmeLECertificate) error
+	GetACMELECertificate(ctx context.Context, certID string) (acmeLECertificate, error)
+	ListACMELECertificates(ctx context.Context) ([]acmeLECertificate, error)
 }
 
 type dbStore struct {
@@ -607,7 +615,7 @@ func main() {
 		cfg.uiUsers = mergedUsers
 	}
 
-	s := &server{cfg: cfg, store: store}
+	s := &server{cfg: cfg, store: store, acmeChallenges: newACMEChallengeStore()}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/healthz", s.handleHealth)
@@ -649,6 +657,10 @@ func main() {
 	mux.HandleFunc("POST /acme/challenge/{challenge_id}", s.handleACMEChallenge)
 	mux.HandleFunc("GET /acme/cert/{cert_id}", s.handleACMECertificate)
 	mux.HandleFunc("POST /acme/revoke-cert", s.handleACMERevokeCert)
+
+	// Public HTTP-01 validation endpoint for the Let's Encrypt ACME *client*.
+	// Must be reachable unauthenticated so the ACME CA can verify domain control.
+	mux.HandleFunc("GET /.well-known/acme-challenge/{token}", s.handleACMEChallengeToken)
 
 	// Middleware chain (outermost first): panic recovery, security headers,
 	// request logging.
@@ -1046,6 +1058,33 @@ CREATE TABLE IF NOT EXISTS pca_crl_state (
 	last_generated TIMESTAMPTZ,
 	next_update TIMESTAMPTZ,
 	crl_b64 TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS acme_le_accounts (
+	id TEXT PRIMARY KEY,
+	directory_url TEXT NOT NULL UNIQUE,
+	account_uri TEXT NOT NULL DEFAULT '',
+	contact_email TEXT NOT NULL DEFAULT '',
+	account_key_wrapped_b64 TEXT NOT NULL DEFAULT '',
+	account_key_nonce_b64 TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS acme_le_certificates (
+	cert_id TEXT PRIMARY KEY,
+	directory_url TEXT NOT NULL DEFAULT '',
+	domains TEXT NOT NULL DEFAULT '',
+	serial TEXT NOT NULL DEFAULT '',
+	cert_b64 TEXT NOT NULL DEFAULT '',
+	chain_b64 TEXT NOT NULL DEFAULT '',
+	key_wrapped_b64 TEXT NOT NULL DEFAULT '',
+	key_nonce_b64 TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'ISSUED',
+	not_before TIMESTAMPTZ NOT NULL,
+	not_after TIMESTAMPTZ NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 `
 	if _, err := db.ExecContext(ctx, ddl); err != nil {

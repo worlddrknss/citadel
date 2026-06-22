@@ -62,14 +62,30 @@ type adminCertificatesPageView struct {
 	CanAdmin        bool
 	Flash           string
 	Error           string
+
+	LEDirectoryURL string
+	LEDirectoryEnv string
+	LEContactEmail string
+	LECertificates []adminLECertView
+}
+
+type adminLECertView struct {
+	CertID    string
+	Domains   string
+	Serial    string
+	Status    string
+	Env       string
+	NotBefore string
+	NotAfter  string
+	CreatedAt string
 }
 
 func (s *server) handleCertificatesAdmin(w http.ResponseWriter, r *http.Request) {
 	requiredRole := "viewer"
 	switch strings.TrimSpace(r.URL.Query().Get("action")) {
-	case "issue_cert", "renew_cert":
+	case "issue_cert", "renew_cert", "request_le":
 		requiredRole = "editor"
-	case "create_ca", "import_ca", "revoke_cert":
+	case "create_ca", "import_ca", "revoke_cert", "save_le_settings":
 		requiredRole = "admin"
 	}
 	session, ok := s.requireUISession(w, r, requiredRole)
@@ -158,6 +174,8 @@ func (s *server) handleCertificatesAdmin(w http.ResponseWriter, r *http.Request)
 		view.SelectedCA.CertCount = len(view.Certificates)
 	}
 
+	s.populateLEView(r.Context(), &view)
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := adminCertificatesTemplate.Execute(w, view); err != nil {
 		http.Error(w, "failed to render certificates admin view", http.StatusInternalServerError)
@@ -239,6 +257,30 @@ func (s *server) handleCertificatesDownload(w http.ResponseWriter, r *http.Reque
 				filename = "cert-" + cert.CertID + ".pem"
 			}
 		}
+	case "le_cert", "le_chain", "le_key":
+		certID := strings.TrimSpace(r.URL.Query().Get("cert_id"))
+		if certID != "" {
+			cert, err := s.store.GetACMELECertificate(r.Context(), certID)
+			if err == nil {
+				switch kind {
+				case "le_cert":
+					if dec, decErr := base64.StdEncoding.DecodeString(cert.CertB64); decErr == nil {
+						pemData = string(dec)
+						filename = "le-cert-" + cert.CertID + ".pem"
+					}
+				case "le_chain":
+					if dec, decErr := base64.StdEncoding.DecodeString(cert.ChainB64); decErr == nil {
+						pemData = string(dec)
+						filename = "le-fullchain-" + cert.CertID + ".pem"
+					}
+				case "le_key":
+					if len(cert.KeyDER) > 0 {
+						pemData = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: cert.KeyDER}))
+						filename = "le-key-" + cert.CertID + ".pem"
+					}
+				}
+			}
+		}
 	}
 	if pemData == "" {
 		http.Error(w, "certificate not found", http.StatusNotFound)
@@ -286,6 +328,12 @@ func (s *server) handleCertificatesAdminAction(w http.ResponseWriter, r *http.Re
 	case "revoke_cert":
 		err = s.adminRevokeCert(r)
 		ok = "certificate revoked"
+	case "request_le":
+		err = s.adminRequestLECert(r)
+		ok = "let's encrypt certificate requested"
+	case "save_le_settings":
+		err = s.adminSaveLESettings(r)
+		ok = "let's encrypt settings saved"
 	default:
 		err = fmt.Errorf("unknown action")
 	}
@@ -686,6 +734,88 @@ func (s *server) adminRevokeCert(r *http.Request) error {
 		reason = "Unspecified"
 	}
 	return s.store.RevokeCertificate(r.Context(), certID, reason)
+}
+
+// populateLEView fills the Let's Encrypt section of the certificates page.
+func (s *server) populateLEView(ctx context.Context, view *adminCertificatesPageView) {
+	view.LEDirectoryURL = s.acmeLEDirectoryURL(ctx)
+	view.LEDirectoryEnv = leDirectoryEnvLabel(view.LEDirectoryURL)
+	view.LEContactEmail = s.acmeLEContactEmail(ctx)
+
+	certs, err := s.store.ListACMELECertificates(ctx)
+	if err != nil {
+		return
+	}
+	for _, c := range certs {
+		view.LECertificates = append(view.LECertificates, adminLECertView{
+			CertID:    c.CertID,
+			Domains:   c.Domains,
+			Serial:    c.Serial,
+			Status:    c.Status,
+			Env:       leDirectoryEnvLabel(c.DirectoryURL),
+			NotBefore: c.NotBefore.UTC().Format(uiTimeFormat),
+			NotAfter:  c.NotAfter.UTC().Format(uiTimeFormat),
+			CreatedAt: c.CreatedAt.UTC().Format(uiTimeFormat),
+		})
+	}
+}
+
+// leDirectoryEnvLabel maps an ACME directory URL to a short environment label.
+func leDirectoryEnvLabel(directoryURL string) string {
+	switch strings.TrimSpace(directoryURL) {
+	case leProdDirectoryURL:
+		return "production"
+	case leStagingDirectoryURL, "":
+		return "staging"
+	default:
+		return "custom"
+	}
+}
+
+// adminRequestLECert issues a publicly-trusted certificate from Let's Encrypt
+// for the submitted domains using the HTTP-01 challenge.
+func (s *server) adminRequestLECert(r *http.Request) error {
+	domains := normalizeDomains([]string{r.FormValue("le_domains")})
+	if len(domains) == 0 {
+		return fmt.Errorf("at least one domain is required")
+	}
+	if _, err := s.store.ListACMELECertificates(r.Context()); err != nil {
+		return fmt.Errorf("let's encrypt issuance requires a database-backed store")
+	}
+	_, err := s.issueLetsEncryptCertificate(r.Context(), domains)
+	return err
+}
+
+// adminSaveLESettings persists the ACME directory selection and contact email.
+func (s *server) adminSaveLESettings(r *http.Request) error {
+	db := s.storeDB()
+	if db == nil {
+		return fmt.Errorf("settings require a database-backed store")
+	}
+	env := strings.TrimSpace(r.FormValue("le_environment"))
+	directoryURL := leStagingDirectoryURL
+	switch env {
+	case "production":
+		directoryURL = leProdDirectoryURL
+	case "staging", "":
+		directoryURL = leStagingDirectoryURL
+	case "custom":
+		custom := strings.TrimSpace(r.FormValue("le_directory_url"))
+		if custom == "" {
+			return fmt.Errorf("custom directory URL is required")
+		}
+		if !strings.HasPrefix(custom, "https://") {
+			return fmt.Errorf("directory URL must use https")
+		}
+		directoryURL = custom
+	default:
+		return fmt.Errorf("unsupported environment")
+	}
+	if err := putSetting(r.Context(), db, settingACMELEDirectoryURL, directoryURL); err != nil {
+		return err
+	}
+	email := strings.TrimSpace(r.FormValue("le_contact_email"))
+	return putSetting(r.Context(), db, settingACMELEContactEmail, email)
 }
 
 func (s *server) redirectCertificatesOK(w http.ResponseWriter, r *http.Request, msg string) {
