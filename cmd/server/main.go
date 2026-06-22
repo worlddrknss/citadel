@@ -17,6 +17,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"sort"
@@ -696,6 +697,30 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	// Optional diagnostic profiling server. Disabled unless KMS_PPROF_ADDR is
+	// set, and intended to be bound to loopback only (e.g. 127.0.0.1:6060) so
+	// the sensitive pprof endpoints are reachable solely via `kubectl
+	// port-forward`, never exposed on the service network.
+	if pprofAddr := strings.TrimSpace(os.Getenv("KMS_PPROF_ADDR")); pprofAddr != "" {
+		pprofMux := http.NewServeMux()
+		pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
+		pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		pprofServer := &http.Server{
+			Addr:              pprofAddr,
+			Handler:           pprofMux,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			log.Printf("%s pprof diagnostics listening on %s", appName, pprofAddr)
+			if err := pprofServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("pprof server exited: %v", err)
+			}
+		}()
+	}
+
 	serveErr := make(chan error, 1)
 	go func() {
 		if cfg.tlsCertFile != "" && cfg.tlsKeyFile != "" {
@@ -830,6 +855,14 @@ func buildStore(cfg config) (keyStore, func(), error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("open postgres connection: %w", err)
 	}
+	// Bound the connection pool so idle connections are recycled rather than
+	// living for the lifetime of the process. lib/pq keeps per-connection
+	// buffers and server-side prepared statements, so unbounded long-lived
+	// connections let process memory creep upward over time.
+	db.SetMaxOpenConns(20)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	db.SetConnMaxIdleTime(5 * time.Minute)
 	cleanup := func() {
 		_ = db.Close()
 	}
