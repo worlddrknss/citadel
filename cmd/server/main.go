@@ -1017,13 +1017,21 @@ CREATE TABLE IF NOT EXISTS ui_accounts (
 
 -- Migrate existing ui_accounts: rename old 'account' PK to a regular column and add account_id PK
 DO $$
+DECLARE
+	pk_constraint TEXT;
 BEGIN
 	-- Ensure account_id column exists; if not, we're on old schema
 	IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ui_accounts' AND column_name='account_id')
 	THEN
-		-- Try to drop any existing primary key (do not care if it doesn't exist)
+		-- Drop existing primary key constraint if present.
 		BEGIN
-			ALTER TABLE ui_accounts DROP CONSTRAINT (SELECT constraint_name FROM information_schema.table_constraints WHERE table_name='ui_accounts' AND constraint_type='PRIMARY KEY' LIMIT 1);
+			SELECT constraint_name INTO pk_constraint
+			FROM information_schema.table_constraints
+			WHERE table_name='ui_accounts' AND constraint_type='PRIMARY KEY'
+			LIMIT 1;
+			IF pk_constraint IS NOT NULL THEN
+				EXECUTE 'ALTER TABLE ui_accounts DROP CONSTRAINT ' || quote_ident(pk_constraint);
+			END IF;
 		EXCEPTION WHEN UNDEFINED_OBJECT THEN
 			NULL;
 		END;
