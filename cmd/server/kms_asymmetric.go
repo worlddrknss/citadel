@@ -173,6 +173,43 @@ func keyUsageAndSpecForMetadata(key kmsKey) (string, string) {
 	return usage, spec
 }
 
+// keySpecForPublicKey maps an imported public key to the matching KMS key spec.
+func keySpecForPublicKey(pub crypto.PublicKey) (string, error) {
+	switch p := pub.(type) {
+	case *rsa.PublicKey:
+		switch p.N.BitLen() {
+		case 2048:
+			return keySpecRSA2048, nil
+		case 3072:
+			return keySpecRSA3072, nil
+		case 4096:
+			return keySpecRSA4096, nil
+		default:
+			return "", fmt.Errorf("unsupported RSA key size %d bits (want 2048, 3072 or 4096)", p.N.BitLen())
+		}
+	case *ecdsa.PublicKey:
+		switch p.Curve {
+		case elliptic.P256():
+			return keySpecECCP256, nil
+		case elliptic.P384():
+			return keySpecECCP384, nil
+		default:
+			return "", fmt.Errorf("unsupported EC curve (want P-256 or P-384)")
+		}
+	default:
+		return "", fmt.Errorf("unsupported public key type %T (want RSA or ECDSA)", pub)
+	}
+}
+
+// defaultSigningAlgorithmForKey returns the canonical KMS signing-algorithm name
+// for a SIGN_VERIFY key based on its key spec.
+func defaultSigningAlgorithmForKey(key kmsKey) string {
+	if algs := keySigningAlgorithms(key); len(algs) > 0 {
+		return algs[0]
+	}
+	return defaultSignAlgRSA
+}
+
 func keySigningAlgorithms(key kmsKey) []string {
 	usage, spec := keyUsageAndSpecForMetadata(key)
 	if usage != keyUsageSignVerify {

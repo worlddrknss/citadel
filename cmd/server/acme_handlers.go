@@ -305,7 +305,7 @@ func (s *server) handleACMEFinalize(w http.ResponseWriter, r *http.Request) {
 
 	// Issue certificate
 	validity := validitySpec{Type: "DAYS", Value: 90}
-	_, certDER, err := buildLeafCertificateWithSigner(csr, ca, validity, signer, caPubKey)
+	_, certDER, err := buildLeafCertificateWithSigner(csr, ca, validity, signer, caPubKey, "RSASSA_PKCS1_V1_5_SHA_256", nil)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusInternalServerError, "InternalServerError", fmt.Sprintf("failed to issue certificate: %v", err))
 		return

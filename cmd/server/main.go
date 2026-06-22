@@ -77,6 +77,7 @@ type keyStore interface {
 	EnsureBootstrap(ctx context.Context, k kmsKey) error
 	DeploymentIdentity() (region, accountID string)
 	CreateKey(ctx context.Context, description, keyUsage, keySpec string) (kmsKey, error)
+	ImportSigningKey(ctx context.Context, description string, privPKCS8DER, pubPKIXDER []byte, keySpec string) (kmsKey, error)
 	ListKeys(ctx context.Context) ([]kmsKey, error)
 	GetKeyPolicy(ctx context.Context, keyID, policyName string) (string, error)
 	PutKeyPolicy(ctx context.Context, keyID, policyName, policyDocument string) error
@@ -2102,6 +2103,40 @@ VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, NULL, $10)
 	return k, nil
 }
 
+// ImportSigningKey persists externally supplied asymmetric key material as a
+// SIGN_VERIFY key. The private key must be PKCS#8 DER and the public key PKIX
+// DER; both are stored using the same wrapping path as generated keys.
+func (s *dbStore) ImportSigningKey(ctx context.Context, description string, privPKCS8DER, pubPKIXDER []byte, keySpec string) (kmsKey, error) {
+	normalizedSpec, err := normalizeKeySpec(keyUsageSignVerify, keySpec)
+	if err != nil {
+		return kmsKey{}, err
+	}
+	id := randomHex(12)
+	k := kmsKey{
+		ID:           id,
+		ARN:          s.keyARN(id),
+		MasterKeyRaw: privPKCS8DER,
+		PublicKeyRaw: pubPKIXDER,
+		Description:  description,
+		Enabled:      true,
+		CreatedAt:    time.Now().UTC(),
+		KeyUsage:     keyUsageSignVerify,
+		KeySpec:      normalizedSpec,
+	}
+	wrappedB64, nonceB64, err := s.wrapKeyMaterial(k.ID, k.MasterKeyRaw)
+	if err != nil {
+		return kmsKey{}, err
+	}
+	const q = `
+INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at)
+VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, NULL, $10)
+`
+	if _, err := s.db.ExecContext(ctx, q, k.ID, k.ARN, wrappedB64, nonceB64, base64.StdEncoding.EncodeToString(pubPKIXDER), k.KeyUsage, k.KeySpec, k.Description, k.Enabled, k.CreatedAt); err != nil {
+		return kmsKey{}, err
+	}
+	return k, nil
+}
+
 func (s *dbStore) ListKeys(ctx context.Context) ([]kmsKey, error) {
 	const q = `
 	SELECT id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at
@@ -2484,6 +2519,10 @@ func (s *inMemoryStore) EnsureBootstrap(_ context.Context, _ kmsKey) error {
 }
 
 func (s *inMemoryStore) CreateKey(_ context.Context, _ string, _ string, _ string) (kmsKey, error) {
+	return kmsKey{}, errUnsupported
+}
+
+func (s *inMemoryStore) ImportSigningKey(_ context.Context, _ string, _, _ []byte, _ string) (kmsKey, error) {
 	return kmsKey{}, errUnsupported
 }
 

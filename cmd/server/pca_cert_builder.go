@@ -4,14 +4,18 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"math/big"
+	"net"
+	"strings"
 	"time"
 )
 
@@ -276,11 +280,33 @@ func buildLeafCertificate(csr *x509.CertificateRequest, ca pcaCertificateAuthori
 	return nil, fmt.Errorf("buildLeafCertificate requires KMS integration for signing")
 }
 
+// leafOverrides carries optional issuer-supplied subject and SAN values that
+// augment whatever the CSR already requests when issuing a leaf certificate.
+type leafOverrides struct {
+	CommonName     string
+	DNSNames       []string
+	IPAddresses    []net.IP
+	EmailAddresses []string
+}
+
 // buildLeafCertificateWithSigner creates a leaf certificate from a CSR, signed by the provided CA signer
-func buildLeafCertificateWithSigner(csr *x509.CertificateRequest, ca pcaCertificateAuthority, validity validitySpec, caSigner crypto.Signer, caPubKey crypto.PublicKey) (certPEM, certDER []byte, err error) {
-	// Validate CSR subject
-	if csr.Subject.String() == "" {
-		return nil, nil, fmt.Errorf("CSR must have subject")
+func buildLeafCertificateWithSigner(csr *x509.CertificateRequest, ca pcaCertificateAuthority, validity validitySpec, caSigner crypto.Signer, caPubKey crypto.PublicKey, signingAlgorithm string, overrides *leafOverrides) (certPEM, certDER []byte, err error) {
+	subject := csr.Subject
+	if overrides != nil && overrides.CommonName != "" {
+		subject.CommonName = overrides.CommonName
+	}
+
+	// A certificate must carry at least one identifier (CN or SAN).
+	dnsNames := append([]string(nil), csr.DNSNames...)
+	ipAddresses := append([]net.IP(nil), csr.IPAddresses...)
+	emailAddresses := append([]string(nil), csr.EmailAddresses...)
+	if overrides != nil {
+		dnsNames = appendUniqueStrings(dnsNames, overrides.DNSNames...)
+		emailAddresses = appendUniqueStrings(emailAddresses, overrides.EmailAddresses...)
+		ipAddresses = appendUniqueIPs(ipAddresses, overrides.IPAddresses...)
+	}
+	if subject.CommonName == "" && len(dnsNames) == 0 && len(ipAddresses) == 0 && len(emailAddresses) == 0 {
+		return nil, nil, fmt.Errorf("certificate must have a common name or at least one subject alternative name")
 	}
 
 	// Generate serial number
@@ -305,47 +331,48 @@ func buildLeafCertificateWithSigner(csr *x509.CertificateRequest, ca pcaCertific
 		return nil, nil, fmt.Errorf("invalid validity type: %s", validity.Type)
 	}
 
-	// Parse CA subject for issuer field
-	caSubject, err := parseDistinguishedName(ca.SubjectDN)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse CA subject DN: %w", err)
-	}
+	// The signature algorithm is determined by the CA's signing key, not the
+	// subject key in the CSR.
+	sigAlg := x509SignatureAlgorithm(signingAlgorithm, caPubKey)
 
-	// Build leaf template
+	// Build leaf template. Subject alternative names are set via the typed
+	// fields rather than copied as raw extensions to avoid duplicating the SAN
+	// extension or honouring unsafe attributes (e.g. CA:TRUE) from the CSR.
 	template := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               csr.Subject,
-		Issuer:                caSubject,
+		Subject:               subject,
 		NotBefore:             notBefore,
 		NotAfter:              notAfter,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  false,
-		PublicKey:             csr.PublicKey,
-		PublicKeyAlgorithm:    csr.PublicKeyAlgorithm,
-		SignatureAlgorithm:    x509.SHA256WithRSA,
+		DNSNames:              dnsNames,
+		IPAddresses:           ipAddresses,
+		EmailAddresses:        emailAddresses,
+		SignatureAlgorithm:    sigAlg,
 	}
 
-	// Copy extensions from CSR if present
-	template.ExtraExtensions = csr.Extensions
-
-	// Set signature algorithm based on key type
-	if _, ok := csr.PublicKey.(*rsa.PublicKey); ok {
-		template.SignatureAlgorithm = x509.SHA256WithRSA
+	// Use the real issuing CA certificate as the parent so the issuer DN and
+	// authority key identifier exactly match the trusted chain. Fall back to a
+	// synthetic parent only if CA certificate material is unavailable.
+	parent, perr := parseCertificateB64(ca.CACertB64)
+	if perr != nil || parent == nil {
+		caSubject, dnErr := parseDistinguishedName(ca.SubjectDN)
+		if dnErr != nil {
+			return nil, nil, fmt.Errorf("parse CA subject DN: %w", dnErr)
+		}
+		parent = &x509.Certificate{
+			SerialNumber: big.NewInt(1),
+			Subject:      caSubject,
+			IsCA:         true,
+			PublicKey:    caPubKey,
+		}
 	}
-	if _, ok := csr.PublicKey.(*ecdsa.PublicKey); ok {
-		template.SignatureAlgorithm = x509.ECDSAWithSHA256
-	}
 
-	// Create the certificate signed by the CA
-	certDER, err = x509.CreateCertificate(rand.Reader, template, &x509.Certificate{
-		SerialNumber:       big.NewInt(1), // Placeholder for CA cert
-		Subject:            caSubject,
-		IsCA:               true,
-		PublicKey:          caPubKey,
-		SignatureAlgorithm: template.SignatureAlgorithm,
-	}, caPubKey, caSigner)
+	// Create the certificate signed by the CA. The subject public key embedded
+	// in the leaf is the CSR's public key.
+	certDER, err = x509.CreateCertificate(rand.Reader, template, parent, csr.PublicKey, caSigner)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create leaf cert: %w", err)
 	}
@@ -356,14 +383,123 @@ func buildLeafCertificateWithSigner(csr *x509.CertificateRequest, ca pcaCertific
 	return certPEM, certDER, nil
 }
 
+// parseCertificateB64 decodes base64-encoded DER certificate bytes.
+func parseCertificateB64(b64 string) (*x509.Certificate, error) {
+	if strings.TrimSpace(b64) == "" {
+		return nil, fmt.Errorf("no certificate material")
+	}
+	der, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, fmt.Errorf("decode certificate: %w", err)
+	}
+	return x509.ParseCertificate(der)
+}
+
+// x509SignatureAlgorithm resolves the x509 signature algorithm to use when
+// signing with a CA key. It honours an explicit KMS algorithm name when given
+// and otherwise derives a sane default from the CA public key type.
+func x509SignatureAlgorithm(kmsAlg string, caPubKey crypto.PublicKey) x509.SignatureAlgorithm {
+	switch strings.ToUpper(strings.TrimSpace(kmsAlg)) {
+	case "RSASSA_PKCS1_V1_5_SHA_256":
+		return x509.SHA256WithRSA
+	case "RSASSA_PKCS1_V1_5_SHA_384":
+		return x509.SHA384WithRSA
+	case "RSASSA_PKCS1_V1_5_SHA_512":
+		return x509.SHA512WithRSA
+	case "ECDSA_SHA_256":
+		return x509.ECDSAWithSHA256
+	case "ECDSA_SHA_384":
+		return x509.ECDSAWithSHA384
+	case "ECDSA_SHA_512":
+		return x509.ECDSAWithSHA512
+	}
+	switch p := caPubKey.(type) {
+	case *rsa.PublicKey:
+		return x509.SHA256WithRSA
+	case *ecdsa.PublicKey:
+		if p.Curve == elliptic.P384() {
+			return x509.ECDSAWithSHA384
+		}
+		return x509.ECDSAWithSHA256
+	default:
+		return x509.SHA256WithRSA
+	}
+}
+
+func appendUniqueStrings(existing []string, extra ...string) []string {
+	seen := make(map[string]struct{}, len(existing))
+	for _, v := range existing {
+		seen[strings.ToLower(v)] = struct{}{}
+	}
+	for _, v := range extra {
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[strings.ToLower(v)]; ok {
+			continue
+		}
+		seen[strings.ToLower(v)] = struct{}{}
+		existing = append(existing, v)
+	}
+	return existing
+}
+
+func appendUniqueIPs(existing []net.IP, extra ...net.IP) []net.IP {
+	seen := make(map[string]struct{}, len(existing))
+	for _, v := range existing {
+		seen[v.String()] = struct{}{}
+	}
+	for _, v := range extra {
+		if v == nil {
+			continue
+		}
+		if _, ok := seen[v.String()]; ok {
+			continue
+		}
+		seen[v.String()] = struct{}{}
+		existing = append(existing, v)
+	}
+	return existing
+}
+
 // parseDistinguishedName parses an X.500 DN string into pkix.Name
 // Format: C=country,ST=state,L=locality,O=organization,OU=org_unit,CN=common_name
 func parseDistinguishedName(dn string) (pkix.Name, error) {
 	var name pkix.Name
-	// TODO: Implement proper DN parsing
-	// For now, just set CommonName
-	// Real implementation would use x509.ParseDistinguishedName or similar
-	name.CommonName = dn
+	if strings.TrimSpace(dn) == "" {
+		return name, fmt.Errorf("empty distinguished name")
+	}
+	for _, part := range strings.Split(dn, ",") {
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		key := strings.ToUpper(strings.TrimSpace(kv[0]))
+		val := strings.TrimSpace(kv[1])
+		if val == "" {
+			continue
+		}
+		switch key {
+		case "CN":
+			name.CommonName = val
+		case "C":
+			name.Country = append(name.Country, val)
+		case "ST":
+			name.Province = append(name.Province, val)
+		case "L":
+			name.Locality = append(name.Locality, val)
+		case "O":
+			name.Organization = append(name.Organization, val)
+		case "OU":
+			name.OrganizationalUnit = append(name.OrganizationalUnit, val)
+		}
+	}
+	// If nothing recognisable was parsed, fall back to treating the whole
+	// string as the common name so callers still get a usable subject.
+	if name.CommonName == "" && len(name.Organization) == 0 && len(name.Country) == 0 &&
+		len(name.Province) == 0 && len(name.Locality) == 0 && len(name.OrganizationalUnit) == 0 {
+		name.CommonName = dn
+	}
 	return name, nil
 }
 

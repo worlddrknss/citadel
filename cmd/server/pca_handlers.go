@@ -203,10 +203,10 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Get signing algorithm (or use default)
+	// Get signing algorithm (or use default based on the CA key type)
 	signingAlgorithm := req.SigningAlgorithm
 	if signingAlgorithm == "" {
-		signingAlgorithm = "RSASSA_PKCS1_V1_5_SHA_256" // AWS default
+		signingAlgorithm = defaultSigningAlgorithmForKey(caKey)
 	}
 
 	// Create KMS signer for the CA key
@@ -226,7 +226,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Build and sign the leaf certificate
-	_, certDER, err := buildLeafCertificateWithSigner(csr, ca, req.Validity, signer, caPubKey)
+	_, certDER, err := buildLeafCertificateWithSigner(csr, ca, req.Validity, signer, caPubKey, signingAlgorithm, nil)
 	if err != nil {
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", fmt.Sprintf("failed to build certificate: %v", err))

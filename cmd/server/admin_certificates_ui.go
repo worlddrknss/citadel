@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html/template"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -66,9 +67,9 @@ type adminCertificatesPageView struct {
 func (s *server) handleCertificatesAdmin(w http.ResponseWriter, r *http.Request) {
 	requiredRole := "viewer"
 	switch strings.TrimSpace(r.URL.Query().Get("action")) {
-	case "issue_cert":
+	case "issue_cert", "renew_cert":
 		requiredRole = "editor"
-	case "create_ca", "revoke_cert":
+	case "create_ca", "import_ca", "revoke_cert":
 		requiredRole = "admin"
 	}
 	session, ok := s.requireUISession(w, r, requiredRole)
@@ -266,9 +267,22 @@ func (s *server) handleCertificatesAdminAction(w http.ResponseWriter, r *http.Re
 			http.Redirect(w, r, "/certificates?"+v.Encode(), http.StatusSeeOther)
 			return
 		}
+	case "import_ca":
+		var caID string
+		caID, err = s.adminImportCA(r)
+		if err == nil {
+			v := url.Values{}
+			v.Set("ok", "certificate authority imported")
+			v.Set("ca_id", caID)
+			http.Redirect(w, r, "/certificates?"+v.Encode(), http.StatusSeeOther)
+			return
+		}
 	case "issue_cert":
 		err = s.adminIssueCert(r)
 		ok = "certificate issued"
+	case "renew_cert":
+		err = s.adminRenewCert(r)
+		ok = "certificate renewed"
 	case "revoke_cert":
 		err = s.adminRevokeCert(r)
 		ok = "certificate revoked"
@@ -412,10 +426,6 @@ func (s *server) adminIssueCert(r *http.Request) error {
 		}
 		validityDays = int64(n)
 	}
-	signingAlgorithm := strings.TrimSpace(r.FormValue("signing_algorithm"))
-	if signingAlgorithm == "" {
-		signingAlgorithm = "RSASSA_PKCS1_V1_5_SHA_256"
-	}
 
 	ca, err := s.store.DescribeCertificateAuthority(r.Context(), caARN)
 	if err != nil {
@@ -425,6 +435,12 @@ func (s *server) adminIssueCert(r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	signingAlgorithm := strings.TrimSpace(r.FormValue("signing_algorithm"))
+	if signingAlgorithm == "" {
+		signingAlgorithm = defaultSigningAlgorithmForKey(caKey)
+	}
+	overrides := parseLeafOverrides(r.FormValue("override_cn"), r.FormValue("san_names"))
+
 	csr, err := parseCSR([]byte(csrPEM))
 	if err != nil {
 		return err
@@ -437,7 +453,7 @@ func (s *server) adminIssueCert(r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	_, certDER, err := buildLeafCertificateWithSigner(csr, ca, validitySpec{Value: validityDays, Type: "DAYS"}, signer, caPubKey)
+	_, certDER, err := buildLeafCertificateWithSigner(csr, ca, validitySpec{Value: validityDays, Type: "DAYS"}, signer, caPubKey, signingAlgorithm, overrides)
 	if err != nil {
 		return err
 	}
@@ -462,6 +478,202 @@ func (s *server) adminIssueCert(r *http.Request) error {
 		return err
 	}
 	return nil
+}
+
+// parseLeafOverrides builds optional subject/SAN overrides from issue-form input.
+// SAN tokens may be separated by commas, semicolons or whitespace and are
+// classified as IP addresses, email addresses or DNS names.
+func parseLeafOverrides(commonName, sanInput string) *leafOverrides {
+	commonName = strings.TrimSpace(commonName)
+	sanInput = strings.TrimSpace(sanInput)
+	if commonName == "" && sanInput == "" {
+		return nil
+	}
+	ov := &leafOverrides{CommonName: commonName}
+	tokens := strings.FieldsFunc(sanInput, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+	for _, tok := range tokens {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		switch {
+		case net.ParseIP(tok) != nil:
+			ov.IPAddresses = append(ov.IPAddresses, net.ParseIP(tok))
+		case strings.Contains(tok, "@"):
+			ov.EmailAddresses = append(ov.EmailAddresses, tok)
+		default:
+			ov.DNSNames = append(ov.DNSNames, tok)
+		}
+	}
+	return ov
+}
+
+// adminImportCA imports an externally generated CA certificate and its matching
+// private key so the authority can issue certificates through Citadel.
+func (s *server) adminImportCA(r *http.Request) (string, error) {
+	certPEM := strings.TrimSpace(r.FormValue("ca_cert_pem"))
+	keyPEM := strings.TrimSpace(r.FormValue("ca_key_pem"))
+	description := strings.TrimSpace(r.FormValue("description"))
+	if certPEM == "" || keyPEM == "" {
+		return "", fmt.Errorf("CA certificate and private key are both required")
+	}
+
+	caCert, err := parseCertificatePEM([]byte(certPEM))
+	if err != nil {
+		return "", fmt.Errorf("invalid CA certificate: %w", err)
+	}
+	if !caCert.IsCA || !caCert.BasicConstraintsValid {
+		return "", fmt.Errorf("the supplied certificate is not a CA (basic constraint CA:TRUE is required)")
+	}
+
+	signer, pubKey, err := parsePrivateKeyPEM([]byte(keyPEM))
+	if err != nil {
+		return "", fmt.Errorf("invalid private key: %w", err)
+	}
+	if !publicKeysEqual(caCert.PublicKey, pubKey) {
+		return "", fmt.Errorf("the private key does not match the CA certificate's public key")
+	}
+
+	keySpec, err := keySpecForPublicKey(pubKey)
+	if err != nil {
+		return "", err
+	}
+	privDER, err := x509.MarshalPKCS8PrivateKey(signer)
+	if err != nil {
+		return "", fmt.Errorf("encode private key: %w", err)
+	}
+	pubDER, err := x509.MarshalPKIXPublicKey(pubKey)
+	if err != nil {
+		return "", fmt.Errorf("encode public key: %w", err)
+	}
+
+	keyDescription := description
+	if keyDescription == "" {
+		keyDescription = "Imported CA key"
+	}
+	key, err := s.store.ImportSigningKey(r.Context(), keyDescription, privDER, pubDER, keySpec)
+	if err != nil {
+		return "", err
+	}
+
+	caType := "SUBORDINATE"
+	if certIsSelfSigned(caCert) {
+		caType = "ROOT"
+	}
+	caID := randomHex(12)
+	ca := pcaCertificateAuthority{
+		CAID:        caID,
+		ARN:         s.serverARN("acm-pca", "certificate-authority/"+caID),
+		Type:        caType,
+		KMSKeyID:    key.ID,
+		SubjectDN:   caCert.Subject.String(),
+		State:       "ACTIVE",
+		CACertB64:   base64.StdEncoding.EncodeToString(caCert.Raw),
+		PathLength:  caPathLength(caCert),
+		NotBefore:   caCert.NotBefore.UTC(),
+		NotAfter:    caCert.NotAfter.UTC(),
+		Description: description,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	if err := s.store.CreateCertificateAuthority(r.Context(), ca); err != nil {
+		return "", err
+	}
+	s.assignCAKeyAlias(r.Context(), key.ID, caCert.Subject.CommonName, caID)
+	return caID, nil
+}
+
+// adminRenewCert re-signs the stored CSR of an existing certificate with a fresh
+// validity window and serial number, producing a new certificate from the same
+// issuing CA. This is the "renew/re-issue" flow.
+func (s *server) adminRenewCert(r *http.Request) error {
+	certID := strings.TrimSpace(r.FormValue("cert_id"))
+	if certID == "" {
+		return fmt.Errorf("cert_id is required")
+	}
+	validityDays := int64(365)
+	if raw := strings.TrimSpace(r.FormValue("validity_days")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 3650 {
+			return fmt.Errorf("validity days must be between 1 and 3650")
+		}
+		validityDays = int64(n)
+	}
+
+	prev, err := s.store.GetCertificate(r.Context(), certID)
+	if err != nil {
+		return err
+	}
+	if prev.Status == "REVOKED" {
+		return fmt.Errorf("cannot renew a revoked certificate")
+	}
+	if strings.TrimSpace(prev.CSRB64) == "" {
+		return fmt.Errorf("no stored CSR is available to renew this certificate")
+	}
+	csrPEM, err := base64.StdEncoding.DecodeString(prev.CSRB64)
+	if err != nil {
+		return fmt.Errorf("decode stored CSR: %w", err)
+	}
+	csr, err := parseCSR(csrPEM)
+	if err != nil {
+		return fmt.Errorf("stored CSR is invalid: %w", err)
+	}
+
+	ca, err := s.findCAByID(r.Context(), prev.CAID)
+	if err != nil {
+		return err
+	}
+	caKey, err := s.store.ResolveByID(r.Context(), ca.KMSKeyID)
+	if err != nil {
+		return err
+	}
+	signingAlgorithm := defaultSigningAlgorithmForKey(caKey)
+	signer, err := newKMSSigner(r.Context(), s.store, caKey, signingAlgorithm)
+	if err != nil {
+		return err
+	}
+	caPubKey, err := x509.ParsePKIXPublicKey(caKey.PublicKeyRaw)
+	if err != nil {
+		return err
+	}
+	_, certDER, err := buildLeafCertificateWithSigner(csr, ca, validitySpec{Value: validityDays, Type: "DAYS"}, signer, caPubKey, signingAlgorithm, nil)
+	if err != nil {
+		return err
+	}
+	parsedCert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		return err
+	}
+	cert := pcaCertificate{
+		CertID:    randomHex(12),
+		CAID:      ca.CAID,
+		Serial:    parsedCert.SerialNumber.String(),
+		CSRB64:    prev.CSRB64,
+		CertB64:   base64.StdEncoding.EncodeToString(certDER),
+		Status:    "ISSUED",
+		NotBefore: parsedCert.NotBefore,
+		NotAfter:  parsedCert.NotAfter,
+		Template:  "EndEntityCertificate",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	return s.store.CreateCertificate(r.Context(), cert)
+}
+
+// findCAByID resolves a certificate authority by its CA ID.
+func (s *server) findCAByID(ctx context.Context, caID string) (pcaCertificateAuthority, error) {
+	cas, err := s.store.ListCertificateAuthorities(ctx)
+	if err != nil {
+		return pcaCertificateAuthority{}, err
+	}
+	for _, c := range cas {
+		if c.CAID == caID {
+			return c, nil
+		}
+	}
+	return pcaCertificateAuthority{}, fmt.Errorf("issuing certificate authority not found")
 }
 
 func (s *server) adminRevokeCert(r *http.Request) error {

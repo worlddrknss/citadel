@@ -243,6 +243,10 @@
                 <div><label>Validity days</label><input name="validity_days" type="number" value="365" min="1" max="3650"></div>
                 <div><label>Signing algorithm</label><select name="signing_algorithm"><option value="">Auto</option><option value="RSASSA_PKCS1_V1_5_SHA_256">RSASSA_PKCS1_V1_5_SHA_256</option><option value="ECDSA_SHA_256">ECDSA_SHA_256</option><option value="ECDSA_SHA_384">ECDSA_SHA_384</option></select></div>
               </div>
+              <div class="row" style="margin-top:10px;">
+                <div><label>Common name override <span class="muted sm">(optional)</span></label><input name="override_cn" placeholder="Leave blank to use the CSR subject"></div>
+              </div>
+              <div class="f-row" style="margin-top:10px;"><label>Additional subject alternative names <span class="muted sm">(optional)</span></label><textarea name="san_names" style="min-height:64px;" placeholder="api.example.com, 10.0.0.5, admin@example.com"></textarea><span class="muted sm">Comma, space or newline separated. DNS names, IP addresses and emails are detected automatically and merged with the CSR's own SANs.</span></div>
               <div class="f-row" style="margin-top:10px;"><label>Certificate signing request (PEM)</label><textarea name="csr_pem" placeholder="-----BEGIN CERTIFICATE REQUEST-----" required></textarea></div>
               <div class="f-actions"><button class="btn btn-p" type="submit">Issue certificate</button></div>
             </form>
@@ -269,6 +273,15 @@
                   <td style="text-align:right;">
                     <div class="row" style="justify-content:flex-end;gap:6px;">
                       <a class="btn btn-s btn-sm" href="/certificates?download=cert&amp;cert_id={{.CertID}}">⬇ PEM</a>
+                      {{if and $.CanEdit (ne .Status "REVOKED")}}
+                      <form method="post" action="/certificates?action=renew_cert" style="display:flex;gap:6px;align-items:center;" onsubmit="return confirm('Renew certificate {{.CertID}}? A new certificate will be issued from the stored CSR.');">
+                        <input type="hidden" name="ca_id" value="{{$.SelectedCA.CAID}}">
+                        <input type="hidden" name="cert_id" value="{{.CertID}}">
+                        <input type="hidden" name="return_tab" value="certificates">
+                        <input name="validity_days" type="number" value="365" min="1" max="3650" title="Validity (days)" style="width:78px">
+                        <button class="btn btn-s btn-sm" type="submit">Renew</button>
+                      </form>
+                      {{end}}
                       {{if and $.CanAdmin (ne .Status "REVOKED")}}
                       <form method="post" action="/certificates?action=revoke_cert" style="display:flex;gap:6px;align-items:center;" onsubmit="return confirm('Revoke certificate {{.CertID}}? This cannot be undone.');">
                         <input type="hidden" name="ca_id" value="{{$.SelectedCA.CAID}}">
@@ -319,6 +332,16 @@
             <div><label>Common name</label><input name="common_name" placeholder="Citadel Root CA" required></div>
           </div>
           <div class="f-actions"><button class="btn btn-p" type="submit">+ Create CA</button></div>
+        </form>
+      </details>
+      <details class="fc" style="margin-bottom:16px;">
+        <summary style="cursor:pointer;font-size:14px;font-weight:700;list-style:none;">↥ Import certificate authority</summary>
+        <form method="post" action="/certificates?action=import_ca" style="margin-top:16px;">
+          <div class="f-row"><label>Description <span class="muted sm">(optional)</span></label><input name="description" placeholder="Imported intermediate CA"></div>
+          <div class="f-row"><label>CA certificate (PEM)</label><textarea name="ca_cert_pem" placeholder="-----BEGIN CERTIFICATE-----" required></textarea></div>
+          <div class="f-row"><label>CA private key (PEM)</label><textarea name="ca_key_pem" placeholder="-----BEGIN PRIVATE KEY-----" required></textarea></div>
+          <p class="muted sm">The private key is wrapped and stored alongside Citadel's KMS keys and never leaves the server. Accepts RSA (2048/3072/4096) and EC (P-256/P-384) keys in PKCS#8, PKCS#1 or SEC1 PEM format. Decrypt passphrase-protected keys before importing.</p>
+          <div class="f-actions"><button class="btn btn-p" type="submit">↥ Import CA</button></div>
         </form>
       </details>
       {{end}}

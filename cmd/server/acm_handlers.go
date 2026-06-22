@@ -86,7 +86,7 @@ func (s *server) handleACMRequestCertificate(w http.ResponseWriter, r *http.Requ
 
 	// Issue certificate for 1 year
 	validity := validitySpec{Type: "DAYS", Value: 365}
-	_, certDER, err := buildLeafCertificateWithSigner(csr, ca, validity, signer, caPubKey)
+	_, certDER, err := buildLeafCertificateWithSigner(csr, ca, validity, signer, caPubKey, "RSASSA_PKCS1_V1_5_SHA_256", nil)
 	if err != nil {
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", fmt.Sprintf("failed to build certificate: %v", err))
