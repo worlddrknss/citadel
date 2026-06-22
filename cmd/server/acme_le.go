@@ -159,6 +159,7 @@ func (s *server) loadOrCreateACMEClient(ctx context.Context, directoryURL, conta
 			return nil, fmt.Errorf("marshal account key: %w", mErr)
 		}
 		account = acmeLEAccount{
+			ID:            randomHex(12),
 			DirectoryURL:  directoryURL,
 			ContactEmail:  contactEmail,
 			AccountKeyDER: der,
@@ -175,6 +176,9 @@ func (s *server) loadOrCreateACMEClient(ctx context.Context, directoryURL, conta
 	}
 
 	client := &acme.Client{Key: key, DirectoryURL: directoryURL}
+	if s.acmeHTTPClient != nil {
+		client.HTTPClient = s.acmeHTTPClient
+	}
 
 	if strings.TrimSpace(account.AccountURI) == "" {
 		acct := &acme.Account{}
@@ -221,6 +225,7 @@ func (s *server) issueLetsEncryptCertificate(ctx context.Context, domains []stri
 	if err != nil {
 		return acmeLECertificate{}, fmt.Errorf("create order: %w", err)
 	}
+	orderURL := order.URI
 
 	var presented []string
 	defer func() {
@@ -266,6 +271,12 @@ func (s *server) issueLetsEncryptCertificate(ctx context.Context, domains []stri
 		}
 	}
 
+	// Wait for the order to become ready for finalization once all
+	// authorizations are valid.
+	if _, err := client.WaitOrder(ctx, orderURL); err != nil {
+		return acmeLECertificate{}, fmt.Errorf("wait for order to be ready: %w", err)
+	}
+
 	// Generate the leaf key pair and CSR.
 	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -279,9 +290,9 @@ func (s *server) issueLetsEncryptCertificate(ctx context.Context, domains []stri
 		return acmeLECertificate{}, fmt.Errorf("create csr: %w", err)
 	}
 
-	derChain, _, err := client.CreateOrderCert(ctx, order.FinalizeURL, csrDER, true)
+	derChain, err := finalizeOrderCert(ctx, client, orderURL, order.FinalizeURL, csrDER)
 	if err != nil {
-		return acmeLECertificate{}, fmt.Errorf("finalize order: %w", err)
+		return acmeLECertificate{}, err
 	}
 	if len(derChain) == 0 {
 		return acmeLECertificate{}, fmt.Errorf("acme returned no certificates")
@@ -304,6 +315,7 @@ func (s *server) issueLetsEncryptCertificate(ctx context.Context, domains []stri
 	}
 
 	cert := acmeLECertificate{
+		CertID:       randomHex(12),
 		DirectoryURL: directoryURL,
 		Domains:      strings.Join(domains, ","),
 		Serial:       leaf.SerialNumber.String(),
@@ -318,6 +330,32 @@ func (s *server) issueLetsEncryptCertificate(ctx context.Context, domains []stri
 		return acmeLECertificate{}, fmt.Errorf("store certificate: %w", err)
 	}
 	return cert, nil
+}
+
+// finalizeOrderCert submits the CSR to finalize the order and returns the issued
+// certificate chain (DER). It prefers acme.Client.CreateOrderCert, but recovers
+// from ACME servers that omit the Location header on the finalize response
+// (which breaks CreateOrderCert's internal polling) by polling the known order
+// URL and fetching the certificate directly. The CSR has already been submitted
+// when the recovery path runs, so it only retrieves the issued certificate.
+func finalizeOrderCert(ctx context.Context, client *acme.Client, orderURL, finalizeURL string, csrDER []byte) ([][]byte, error) {
+	derChain, _, err := client.CreateOrderCert(ctx, finalizeURL, csrDER, true)
+	if err == nil {
+		return derChain, nil
+	}
+
+	order, werr := client.WaitOrder(ctx, orderURL)
+	if werr != nil {
+		return nil, fmt.Errorf("finalize order: %w (order poll: %v)", err, werr)
+	}
+	if order.CertURL == "" {
+		return nil, fmt.Errorf("finalize order: %w", err)
+	}
+	derChain, ferr := client.FetchCert(ctx, order.CertURL, true)
+	if ferr != nil {
+		return nil, fmt.Errorf("fetch certificate: %w", ferr)
+	}
+	return derChain, nil
 }
 
 // normalizeDomains splits, trims, lowercases, and de-duplicates a set of domain

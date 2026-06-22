@@ -70,6 +70,10 @@ type server struct {
 	store          keyStore
 	ui             *uiRuntime
 	acmeChallenges *acmeChallengeStore
+	// acmeHTTPClient, when set, is used by the Let's Encrypt ACME client. It
+	// allows trusting a private or test ACME CA (e.g. Pebble). When nil the
+	// default HTTP client (public trust store) is used.
+	acmeHTTPClient *http.Client
 }
 
 type keyStore interface {

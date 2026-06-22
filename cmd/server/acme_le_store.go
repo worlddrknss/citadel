@@ -89,6 +89,7 @@ INSERT INTO acme_le_accounts (
 	account_key_wrapped_b64, account_key_nonce_b64, created_at, updated_at
 ) VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
 ON CONFLICT (directory_url) DO UPDATE SET
+	id = EXCLUDED.id,
 	account_uri = EXCLUDED.account_uri,
 	contact_email = EXCLUDED.contact_email,
 	account_key_wrapped_b64 = EXCLUDED.account_key_wrapped_b64,
