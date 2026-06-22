@@ -8,9 +8,36 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// awsTimestamp marshals a time.Time as an AWS JSON 1.1 protocol epoch-seconds
+// number (e.g. 1.50927752e9). AWS SDK clients (including External Secrets
+// Operator) deserialize Secrets Manager timestamp fields as JSON numbers and
+// reject the RFC3339 string that time.Time's default marshaler emits
+// ("expected ... to be a JSON Number, got string instead").
+type awsTimestamp time.Time
+
+func (t awsTimestamp) MarshalJSON() ([]byte, error) {
+	tt := time.Time(t)
+	if tt.IsZero() {
+		return []byte("null"), nil
+	}
+	secs := float64(tt.UnixNano()) / float64(time.Second)
+	return []byte(strconv.FormatFloat(secs, 'f', -1, 64)), nil
+}
+
+// awsTimePtr converts an optional time.Time into an optional awsTimestamp,
+// preserving nil so omitempty fields stay absent.
+func awsTimePtr(t *time.Time) *awsTimestamp {
+	if t == nil {
+		return nil
+	}
+	v := awsTimestamp(*t)
+	return &v
+}
 
 const (
 	defaultSecretListLimit = 100
@@ -43,12 +70,12 @@ type describeSecretResponse struct {
 	Name               string              `json:"Name"`
 	Description        string              `json:"Description,omitempty"`
 	KMSKeyID           string              `json:"KmsKeyId,omitempty"`
-	CreatedDate        time.Time           `json:"CreatedDate"`
-	LastChangedDate    time.Time           `json:"LastChangedDate"`
-	DeletedDate        *time.Time          `json:"DeletedDate,omitempty"`
+	CreatedDate        awsTimestamp        `json:"CreatedDate"`
+	LastChangedDate    awsTimestamp        `json:"LastChangedDate"`
+	DeletedDate        *awsTimestamp       `json:"DeletedDate,omitempty"`
 	RotationEnabled    bool                `json:"RotationEnabled,omitempty"`
 	RotationLambdaARN  string              `json:"RotationLambdaARN,omitempty"`
-	NextRotationDate   *time.Time          `json:"NextRotationDate,omitempty"`
+	NextRotationDate   *awsTimestamp       `json:"NextRotationDate,omitempty"`
 	VersionIDsToStages map[string][]string `json:"VersionIdsToStages"`
 }
 
@@ -62,10 +89,10 @@ type getSecretValueResponse struct {
 	ARN           string    `json:"ARN"`
 	Name          string    `json:"Name"`
 	VersionID     string    `json:"VersionId"`
-	SecretString  string    `json:"SecretString,omitempty"`
-	SecretBinary  string    `json:"SecretBinary,omitempty"`
-	VersionStages []string  `json:"VersionStages"`
-	CreatedDate   time.Time `json:"CreatedDate"`
+	SecretString  string       `json:"SecretString,omitempty"`
+	SecretBinary  string       `json:"SecretBinary,omitempty"`
+	VersionStages []string     `json:"VersionStages"`
+	CreatedDate   awsTimestamp `json:"CreatedDate"`
 }
 
 type putSecretValueRequest struct {
@@ -106,8 +133,8 @@ type deleteSecretRequest struct {
 
 type deleteSecretResponse struct {
 	ARN          string     `json:"ARN"`
-	Name         string     `json:"Name"`
-	DeletionDate *time.Time `json:"DeletionDate,omitempty"`
+	Name         string        `json:"Name"`
+	DeletionDate *awsTimestamp `json:"DeletionDate,omitempty"`
 }
 
 type restoreSecretRequest struct {
@@ -132,12 +159,12 @@ type listSecretsResponse struct {
 type secretListEntry struct {
 	ARN             string     `json:"ARN"`
 	Name            string     `json:"Name"`
-	Description     string     `json:"Description,omitempty"`
-	KMSKeyID        string     `json:"KmsKeyId,omitempty"`
-	CreatedDate     time.Time  `json:"CreatedDate"`
-	LastChangedDate time.Time  `json:"LastChangedDate"`
-	DeletedDate     *time.Time `json:"DeletedDate,omitempty"`
-	PrimaryRegion   string     `json:"PrimaryRegion,omitempty"`
+	Description     string        `json:"Description,omitempty"`
+	KMSKeyID        string        `json:"KmsKeyId,omitempty"`
+	CreatedDate     awsTimestamp  `json:"CreatedDate"`
+	LastChangedDate awsTimestamp  `json:"LastChangedDate"`
+	DeletedDate     *awsTimestamp `json:"DeletedDate,omitempty"`
+	PrimaryRegion   string        `json:"PrimaryRegion,omitempty"`
 }
 
 type secretMetadataRecord struct {
@@ -247,12 +274,12 @@ func (s *server) handleDescribeSecret(w http.ResponseWriter, r *http.Request) {
 		Name:               meta.Name,
 		Description:        meta.Description,
 		KMSKeyID:           meta.KMSKeyID,
-		CreatedDate:        meta.CreatedAt,
-		LastChangedDate:    meta.LastChangedDate,
-		DeletedDate:        meta.DeletedDate,
+		CreatedDate:        awsTimestamp(meta.CreatedAt),
+		LastChangedDate:    awsTimestamp(meta.LastChangedDate),
+		DeletedDate:        awsTimePtr(meta.DeletedDate),
 		RotationEnabled:    meta.RotationEnabled,
 		RotationLambdaARN:  meta.RotationLambdaARN,
-		NextRotationDate:   meta.NextRotationDate,
+		NextRotationDate:   awsTimePtr(meta.NextRotationDate),
 		VersionIDsToStages: secretVersionStagesMap(meta),
 	})
 }
@@ -292,7 +319,7 @@ func (s *server) handleGetSecretValue(w http.ResponseWriter, r *http.Request) {
 		Name:          value.Name,
 		VersionID:     value.VersionID,
 		VersionStages: value.VersionStages,
-		CreatedDate:   value.CreatedAt,
+		CreatedDate:   awsTimestamp(value.CreatedAt),
 	}
 	if value.SecretString != nil {
 		resp.SecretString = *value.SecretString
@@ -419,7 +446,7 @@ func (s *server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
-	writeJSON(w, http.StatusOK, deleteSecretResponse{ARN: meta.ARN, Name: meta.Name, DeletionDate: meta.DeletedDate})
+	writeJSON(w, http.StatusOK, deleteSecretResponse{ARN: meta.ARN, Name: meta.Name, DeletionDate: awsTimePtr(meta.DeletedDate)})
 }
 
 func (s *server) handleRestoreSecret(w http.ResponseWriter, r *http.Request) {
@@ -483,9 +510,9 @@ func (s *server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 			Name:            item.Name,
 			Description:     item.Description,
 			KMSKeyID:        item.KMSKeyID,
-			CreatedDate:     item.CreatedAt,
-			LastChangedDate: item.LastChangedDate,
-			DeletedDate:     item.DeletedDate,
+			CreatedDate:     awsTimestamp(item.CreatedAt),
+			LastChangedDate: awsTimestamp(item.LastChangedDate),
+			DeletedDate:     awsTimePtr(item.DeletedDate),
 		})
 	}
 	entries, nextToken, _, err := paginateList(entries, req.NextToken, limit, func(item secretListEntry) string { return item.Name })

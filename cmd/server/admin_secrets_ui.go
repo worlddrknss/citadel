@@ -217,7 +217,7 @@ func (s *server) handleSecretsAdmin(w http.ResponseWriter, r *http.Request) {
 				versions, err := s.store.ListSecretVersionIDs(r.Context(), meta.Name)
 				if err == nil {
 					for _, version := range versions {
-						selected.VersionRows = append(selected.VersionRows, adminSecretVersionView{VersionID: version.VersionID, Stages: strings.Join(version.VersionStages, ", "), CreatedAt: version.CreatedDate.UTC().Format("2006-01-02 15:04:05 MST")})
+						selected.VersionRows = append(selected.VersionRows, adminSecretVersionView{VersionID: version.VersionID, Stages: strings.Join(version.VersionStages, ", "), CreatedAt: time.Time(version.CreatedDate).UTC().Format("2006-01-02 15:04:05 MST")})
 					}
 				} else {
 					stageMap := secretVersionStagesMap(meta)

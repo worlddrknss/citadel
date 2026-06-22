@@ -32,11 +32,11 @@ type listSecretVersionIDsResponse struct {
 }
 
 type secretVersionListEntry struct {
-	VersionID      string     `json:"VersionId"`
-	VersionStages  []string   `json:"VersionStages"`
-	CreatedDate    time.Time  `json:"CreatedDate"`
-	KMSKeyIDs      []string   `json:"KmsKeyIds,omitempty"`
-	LastAccessedAt *time.Time `json:"LastAccessedDate,omitempty"`
+	VersionID      string        `json:"VersionId"`
+	VersionStages  []string      `json:"VersionStages"`
+	CreatedDate    awsTimestamp  `json:"CreatedDate"`
+	KMSKeyIDs      []string      `json:"KmsKeyIds,omitempty"`
+	LastAccessedAt *awsTimestamp `json:"LastAccessedDate,omitempty"`
 }
 
 type tagSecretRequest struct {
@@ -378,9 +378,11 @@ ORDER BY version_created_at ASC
 	out := make([]secretVersionListEntry, 0)
 	for rows.Next() {
 		var entry secretVersionListEntry
-		if err := rows.Scan(&entry.VersionID, &entry.CreatedDate); err != nil {
+		var createdAt time.Time
+		if err := rows.Scan(&entry.VersionID, &createdAt); err != nil {
 			return nil, err
 		}
+		entry.CreatedDate = awsTimestamp(createdAt)
 		entry.VersionStages = secretStagesForVersion(meta, entry.VersionID)
 		entry.KMSKeyIDs = []string{meta.KMSKeyID}
 		out = append(out, entry)
@@ -630,9 +632,11 @@ func (s *inMemoryStore) ListSecretVersionIDs(_ context.Context, secretID string)
 	}
 	entries := make([]secretVersionListEntry, 0, len(secret.versions))
 	for _, version := range secret.versions {
-		entries = append(entries, secretVersionListEntry{VersionID: version.VersionID, VersionStages: secretStagesForVersion(secret.metadata, version.VersionID), CreatedDate: version.CreatedAt, KMSKeyIDs: []string{secret.metadata.KMSKeyID}})
+		entries = append(entries, secretVersionListEntry{VersionID: version.VersionID, VersionStages: secretStagesForVersion(secret.metadata, version.VersionID), CreatedDate: awsTimestamp(version.CreatedAt), KMSKeyIDs: []string{secret.metadata.KMSKeyID}})
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].CreatedDate.Before(entries[j].CreatedDate) })
+	sort.Slice(entries, func(i, j int) bool {
+		return time.Time(entries[i].CreatedDate).Before(time.Time(entries[j].CreatedDate))
+	})
 	return entries, nil
 }
 
