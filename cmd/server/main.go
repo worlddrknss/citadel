@@ -1021,11 +1021,12 @@ BEGIN
 	-- Ensure account_id column exists; if not, we're on old schema
 	IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ui_accounts' AND column_name='account_id')
 	THEN
-		-- Drop old primary key if it exists
-		IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_name='ui_accounts' AND constraint_type='PRIMARY KEY')
-		THEN
-			ALTER TABLE ui_accounts DROP CONSTRAINT ui_accounts_pkey;
-		END IF;
+		-- Try to drop any existing primary key (do not care if it doesn't exist)
+		BEGIN
+			ALTER TABLE ui_accounts DROP CONSTRAINT (SELECT constraint_name FROM information_schema.table_constraints WHERE table_name='ui_accounts' AND constraint_type='PRIMARY KEY' LIMIT 1);
+		EXCEPTION WHEN UNDEFINED_OBJECT THEN
+			NULL;
+		END;
 		-- Add new account_id column
 		ALTER TABLE ui_accounts ADD COLUMN account_id CHAR(12);
 		-- Backfill with deterministic IDs based on account name
