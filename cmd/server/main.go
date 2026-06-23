@@ -665,6 +665,20 @@ func main() {
 	// API endpoint remains available for AWS JSON-RPC clients
 	mux.HandleFunc("/api", s.handleKMS)
 
+	// Native Citadel API (/v1): protocol-clean JSON consumed by the Svelte
+	// control plane and native SDKs. Projects an Infisical-style hierarchy onto
+	// the AWS-compatible secrets store.
+	mux.HandleFunc("GET /v1/me", s.handleV1Me)
+	mux.HandleFunc("GET /v1/projects", s.handleV1Projects)
+	mux.HandleFunc("GET /v1/secrets", s.handleV1ListSecrets)
+	mux.HandleFunc("POST /v1/secrets", s.handleV1PutSecret)
+	mux.HandleFunc("DELETE /v1/secrets", s.handleV1DeleteSecret)
+	mux.HandleFunc("GET /v1/secrets/value", s.handleV1RevealSecret)
+
+	// Modern Svelte single-page control plane, embedded into the binary.
+	mux.Handle("/app/", http.HandlerFunc(s.handleApp))
+	mux.Handle("/app", http.RedirectHandler("/app/", http.StatusMovedPermanently))
+
 	// ACME endpoints (RFC 8555)
 	mux.HandleFunc("GET /acme/directory", s.handleACMEDirectory)
 	mux.HandleFunc("GET /acme/new-nonce", s.handleACMENewNonce)

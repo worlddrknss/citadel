@@ -1,2 +1,12 @@
 # Compiled server binary (build artifact)
 /server
+
+# Node / SvelteKit (web control plane)
+web/node_modules/
+web/.svelte-kit/
+web/build/
+web/.vite/
+
+# Note: cmd/server/webdist/ (the embedded SPA build output) is committed so the
+# Go binary builds and runs without requiring Node. Regenerate it with
+# scripts/build-web.sh whenever web/ sources change.
