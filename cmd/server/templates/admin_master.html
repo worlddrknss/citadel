@@ -326,8 +326,8 @@
       {{if eq .Section "settings"}}
       <div class="fc">
         <h3>AWS deployment identity</h3>
-        <div class="fc-sub">Region and account ID embedded in resource ARNs (KMS keys, secrets, certificate authorities). Updating these rewrites the ARNs of existing resources.</div>
-        <form method="post" action="/admin/settings?action=update_aws_settings" onsubmit="return confirm('Update region/account ID and rewrite existing resource ARNs?');">
+        <div class="fc-sub">Region embedded in resource ARNs (KMS keys, secrets, certificate authorities). Updating the region rewrites the ARNs of existing resources. The account ID is fixed at deployment and cannot be changed.</div>
+        <form method="post" action="/admin/settings?action=update_aws_settings" onsubmit="return confirm('Update region and rewrite existing resource ARNs?');">
           <div class="row">
             <div class="f-row">
               <label>Region</label>
@@ -336,7 +336,7 @@
                 {{range .AWSRegions}}<option value="{{.}}" {{if eq . $region}}selected{{end}}>{{.}}</option>{{end}}
               </select>
             </div>
-            <div class="f-row"><label>Account ID (12 digits)</label><input name="aws_account_id" value="{{.AWSAccountID}}" pattern="[0-9]{12}" maxlength="12" required></div>
+            <div class="f-row"><label>Account ID</label><input value="{{.AWSAccountID}}" class="mono" readonly disabled></div>
             <div class="row-actions"><button class="btn btn-p" type="submit">Save</button></div>
           </div>
         </form>

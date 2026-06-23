@@ -358,21 +358,15 @@ func (s *server) masterAdminUpdateAWSSettings(r *http.Request) (error, string) {
 		return fmt.Errorf("AWS settings require a database-backed deployment"), ""
 	}
 	region := strings.TrimSpace(r.FormValue("aws_region"))
-	accountID := strings.TrimSpace(r.FormValue("aws_account_id"))
 	if !isValidRegion(region) {
 		return fmt.Errorf("invalid region"), ""
 	}
-	if !isValidAccountID(accountID) {
-		return fmt.Errorf("account ID must be 12 digits"), ""
-	}
+	// The account ID is fixed at deployment and is intentionally not editable
+	// from the UI; ignore any submitted value and keep the existing identity.
 	if err := putSetting(r.Context(), dbStoreImpl.db, settingAWSRegion, region); err != nil {
 		return err, ""
 	}
-	if err := putSetting(r.Context(), dbStoreImpl.db, settingAWSAccountID, accountID); err != nil {
-		return err, ""
-	}
 	dbStoreImpl.region = region
-	dbStoreImpl.accountID = accountID
 	if err := dbStoreImpl.migrateResourceARNs(r.Context()); err != nil {
 		return err, ""
 	}
