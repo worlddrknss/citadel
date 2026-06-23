@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Citadel — Access Keys</title>
+  <style>
+    :root{--c-bg:#f0f2f5;--c-surface:#fff;--c-border:#dde1e9;--c-border-lo:#eaecf0;--c-text:#111827;--c-muted:#6b7280;--c-blue:#0070c4;--c-blue-lo:#e8f2fb;--c-blue-h:#0059a0;--c-green:#16a34a;--c-green-lo:#dcfce7;--c-red:#dc2626;--c-red-lo:#fee2e2;--c-warn:#d97706;--c-warn-lo:#fef3c7;--c-side:#1e2433;--c-side-hi:#2c3347;--c-side-txt:#c9d1e0;--c-side-mut:#7a839a;--c-side-act:#38bdf8;--r-sm:6px;--r:10px;--sh-sm:0 1px 3px rgba(0,0,0,.08);--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;--mono:"SF Mono","Fira Code",Consolas,monospace;--sw:232px;--th:56px}
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:var(--font);font-size:14px;color:var(--c-text);background:var(--c-bg)}
+    a{color:var(--c-blue);text-decoration:none}a:hover{text-decoration:underline}
+    .shell{display:flex;min-height:100vh}
+    .sidebar{width:var(--sw);min-width:var(--sw);background:var(--c-side);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:100;overflow-y:auto}
+    .sb-brand{padding:18px 16px 14px;border-bottom:1px solid rgba(255,255,255,.07)}
+    .sb-logo{display:flex;align-items:center;gap:10px}
+    .sb-icon{width:32px;height:32px;background:linear-gradient(135deg,var(--c-blue),#38bdf8);border-radius:var(--r-sm);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:#fff;flex-shrink:0}
+    .sb-name{font-size:15px;font-weight:700;color:#fff;line-height:1.1}
+    .sb-ver{font-size:11px;color:var(--c-side-mut);margin-top:2px}
+    .sb-section{padding:12px 8px 4px}
+    .sb-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--c-side-mut);padding:0 8px;margin-bottom:4px}
+    .sb-nav{list-style:none}.sb-nav li{margin-bottom:1px}
+    .sb-link{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:var(--r-sm);color:var(--c-side-txt);font-size:13px;font-weight:500;transition:background .12s,color .12s;text-decoration:none}
+    .sb-link:hover{background:var(--c-side-hi);color:#fff;text-decoration:none}
+    .sb-link.active{background:rgba(56,189,248,.18);color:var(--c-side-act);font-weight:700}
+    .sb-link .ico{font-size:15px;width:18px;text-align:center;flex-shrink:0}
+    .sb-link.logout{color:#f87171}.sb-link.logout:hover{background:rgba(248,113,113,.12)}
+    .sb-footer{margin-top:auto;padding:12px 8px;border-top:1px solid rgba(255,255,255,.07)}
+    .u-chip{display:flex;align-items:center;gap:8px;padding:8px 10px}
+    .u-av{width:28px;height:28px;background:var(--c-blue);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff;flex-shrink:0}
+    .u-name{font-size:12px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .u-role{font-size:11px;color:var(--c-side-mut)}
+    .main{margin-left:var(--sw);flex:1;display:flex;flex-direction:column;min-height:100vh}
+    .topbar{height:var(--th);background:var(--c-surface);border-bottom:1px solid var(--c-border);display:flex;align-items:center;padding:0 24px;gap:12px;position:sticky;top:0;z-index:50}
+    .bc{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--c-muted);flex:1;min-width:0}
+    .bc a{color:var(--c-muted)}.bc a:hover{color:var(--c-blue);text-decoration:none}
+    .bc-sep{color:var(--c-border);user-select:none}
+    .bc-cur{color:var(--c-text);font-weight:600}
+    .alerts{padding:16px 24px 0;display:flex;flex-direction:column;gap:8px}
+    .flash{display:flex;align-items:flex-start;gap:10px;padding:11px 14px;border-radius:var(--r);font-size:13px;border:1px solid}
+    .flash.ok{background:var(--c-green-lo);border-color:#86efac;color:#15803d}
+    .flash.err{background:var(--c-red-lo);border-color:#fca5a5;color:#b91c1c}
+    .ph{padding:24px 24px 0;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+    .ph-title{font-size:22px;font-weight:700;letter-spacing:-.02em;line-height:1.2}
+    .ph-sub{margin-top:4px;font-size:13px;color:var(--c-muted)}
+    .ph-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+    .content{padding:20px 24px 48px;flex:1}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 16px;border-radius:var(--r-sm);font:inherit;font-size:13px;font-weight:600;cursor:pointer;border:1px solid transparent;white-space:nowrap;transition:background .12s;text-decoration:none}
+    .btn-p{background:var(--c-blue);color:#fff;border-color:var(--c-blue-h)}.btn-p:hover{background:var(--c-blue-h);text-decoration:none}
+    .btn-s{background:var(--c-surface);color:var(--c-text);border-color:var(--c-border)}.btn-s:hover{background:#f5f6fa;text-decoration:none}
+    .btn-d{background:var(--c-red);color:#fff;border-color:#b91c1c}.btn-d:hover{background:#b91c1c;text-decoration:none}
+    .btn-sm{padding:5px 10px;font-size:12px}
+    .tabs-bar{display:flex;gap:2px;border-bottom:2px solid var(--c-border-lo);margin-bottom:20px;overflow-x:auto}
+    .tab-lnk{display:inline-flex;align-items:center;gap:6px;padding:10px 16px;font-size:13px;font-weight:600;color:var(--c-muted);border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;text-decoration:none;transition:color .12s,border-color .12s}
+    .tab-lnk:hover{color:var(--c-blue);text-decoration:none}
+    .tab-lnk.active{color:var(--c-blue);border-bottom-color:var(--c-blue)}
+    .t-card{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh-sm)}
+    .t-head{padding:14px 16px;border-bottom:1px solid var(--c-border-lo);display:flex;align-items:center;justify-content:space-between;gap:10px;background:#fafbfc}
+    .t-head h2{font-size:14px;font-weight:700}
+    .t-head .cnt{font-size:12px;color:var(--c-muted)}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    thead th{text-align:left;padding:10px 14px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-muted);background:#fafbfc;border-bottom:1px solid var(--c-border-lo);white-space:nowrap}
+    tbody td{padding:12px 14px;border-bottom:1px solid var(--c-border-lo);vertical-align:middle}
+    tbody tr:last-child td{border-bottom:none}
+    tbody tr:hover td{background:#f8f9fb}
+    .empty-row td{text-align:center;padding:32px;color:var(--c-muted)}
+    .badge{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid transparent}
+    .badge::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor}
+    .badge-active{background:var(--c-green-lo);color:var(--c-green);border-color:#86efac}
+    .badge-inactive{background:#f1f2f4;color:var(--c-muted);border-color:var(--c-border)}
+    .mono{font-family:var(--mono);font-size:12px;word-break:break-all}
+    .muted{color:var(--c-muted)}.sm{font-size:12px}
+    .reveal{background:var(--c-warn-lo);border:1px solid #fde68a;border-radius:var(--r);padding:16px 18px;margin-bottom:20px}
+    .reveal h3{font-size:14px;font-weight:700;color:#92400e;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+    .reveal .cred-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#92400e;margin-bottom:4px}
+    .reveal code{display:block;background:#fff;border:1px solid #fde68a;border-radius:var(--r-sm);padding:9px 12px;font-family:var(--mono);font-size:12px;word-break:break-all;margin-bottom:12px}
+    .reveal .note{font-size:12px;color:#92400e}
+    .info{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r);padding:16px 18px;margin-bottom:18px;box-shadow:var(--sh-sm);display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+    .info .txt{font-size:13px;color:var(--c-muted)}
+  </style>
+</head>
+<body>
+<div class="shell">
+  <nav class="sidebar">
+    <div class="sb-brand">
+      <div class="sb-logo">
+        <div class="sb-icon">C</div>
+        <div><div class="sb-name">Citadel</div><div class="sb-ver">Control Plane</div></div>
+      </div>
+    </div>
+    <div class="sb-section">
+      <div class="sb-label">Services</div>
+      <ul class="sb-nav">
+        <li><a class="sb-link" href="/"><span class="ico">🔑</span> Key Management</a></li>
+        <li><a class="sb-link" href="/secrets"><span class="ico">🔒</span> Secrets Manager</a></li>
+        <li><a class="sb-link" href="/certificates"><span class="ico">📜</span> Certificate Management</a></li>
+      </ul>
+    </div>
+    <div class="sb-section">
+      <div class="sb-label">Operations</div>
+      <ul class="sb-nav">
+        <li><a class="sb-link" href="/audit"><span class="ico">📋</span> Audit Explorer</a></li>
+      </ul>
+    </div>
+    <div class="sb-section">
+      <div class="sb-label">Account</div>
+      <ul class="sb-nav">
+        <li><a class="sb-link" href="/account/profile"><span class="ico">👤</span> Profile</a></li>
+        <li><a class="sb-link active" href="/account/keys"><span class="ico">🪪</span> Access Keys</a></li>
+        <li><a class="sb-link" href="/account/password"><span class="ico">🔐</span> Password</a></li>
+      </ul>
+    </div>
+    <div class="sb-section">
+      <div class="sb-label">Administration</div>
+      <ul class="sb-nav">
+        <li><a class="sb-link" href="/admin"><span class="ico">🛠</span> Overview</a></li>
+        <li><a class="sb-link" href="/admin/users"><span class="ico">👥</span> Users</a></li>
+        <li><a class="sb-link" href="/admin/rbac"><span class="ico">🛡</span> Roles &amp; Access</a></li>
+        <li><a class="sb-link" href="/admin/accounts"><span class="ico">🏦</span> Accounts</a></li>
+        <li><a class="sb-link" href="/admin/settings"><span class="ico">⚙</span> AWS Settings</a></li>
+      </ul>
+    </div>
+    <div class="sb-footer">
+      <div class="u-chip">
+        <div class="u-av">{{if .CurrentUserName}}{{slice .CurrentUserName 0 1}}{{else}}A{{end}}</div>
+        <div><div class="u-name">{{if .CurrentUserName}}{{.CurrentUserName}}{{else}}Local Admin{{end}}</div><div class="u-role">{{if .CurrentUserRole}}{{.CurrentUserRole}}{{else}}admin{{end}}</div></div>
+      </div>
+      <ul class="sb-nav"><li><a class="sb-link logout" href="/logout"><span class="ico">↩</span> Sign out</a></li></ul>
+    </div>
+  </nav>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="bc">
+        <a href="/account/profile">Account</a>
+        <span class="bc-sep">/</span>
+        <span class="bc-cur">Access Keys</span>
+      </div>
+    </header>
+
+    {{if .DeletedKeyID}}<div class="alerts"><div class="flash ok">✓ Access key {{.DeletedKeyID}} deleted.</div></div>{{end}}
+    {{if .DeactivatedID}}<div class="alerts"><div class="flash ok">✓ Access key {{.DeactivatedID}} deactivated.</div></div>{{end}}
+    {{if .ErrorMsg}}<div class="alerts"><div class="flash err">⚠ {{.ErrorMsg}}</div></div>{{end}}
+
+    <div class="ph">
+      <div>
+        <h1 class="ph-title">Access Keys</h1>
+        <p class="ph-sub">Programmatic credentials for SigV4-signed API access. Up to 2 active keys per account.</p>
+      </div>
+      <div class="ph-actions">
+        <form method="post" action="/account/keys">
+          <input type="hidden" name="action" value="create">
+          <button type="submit" class="btn btn-p">+ Create access key</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="tabs-bar">
+        <a class="tab-lnk" href="/account/profile">Profile</a>
+        <a class="tab-lnk active" href="/account/keys">Access Keys</a>
+        <a class="tab-lnk" href="/account/password">Password</a>
+      </div>
+
+      {{if .CreatedKeyID}}
+      <div class="reveal">
+        <h3>⚠️ New access key created — shown only once</h3>
+        <div class="cred-lbl">Access Key ID</div>
+        <code>{{.CreatedKeyID}}</code>
+        <div class="cred-lbl">Secret Access Key</div>
+        <code>{{.CreatedSecret}}</code>
+        <div class="note">Store these credentials securely now. The secret key cannot be retrieved again.</div>
+      </div>
+      {{end}}
+
+      <div class="t-card">
+        <div class="t-head"><h2>Your access keys</h2><span class="cnt">{{len .Keys}} key{{if ne (len .Keys) 1}}s{{end}}</span></div>
+        <table>
+          <thead>
+            <tr><th>Access Key ID</th><th>Status</th><th>Created</th><th>Last used</th><th></th></tr>
+          </thead>
+          <tbody>
+            {{if .Keys}}{{range .Keys}}
+            <tr>
+              <td class="mono">{{.AccessKeyID}}</td>
+              <td>
+                {{if eq .Status "Active"}}<span class="badge badge-active">Active</span>
+                {{else}}<span class="badge badge-inactive">{{.Status}}</span>{{end}}
+              </td>
+              <td class="sm muted">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+              <td class="sm muted">{{if .LastUsedAt}}{{.LastUsedAt.Format "2006-01-02 15:04"}}{{else}}Never{{end}}</td>
+              <td>
+                <div class="flex" style="display:flex;gap:6px;justify-content:flex-end;">
+                  {{if eq .Status "Active"}}
+                  <form method="post" action="/account/keys" onsubmit="return confirm('Deactivate this key?');">
+                    <input type="hidden" name="action" value="deactivate">
+                    <input type="hidden" name="key_id" value="{{.AccessKeyID}}">
+                    <button type="submit" class="btn btn-s btn-sm">Deactivate</button>
+                  </form>
+                  {{end}}
+                  <form method="post" action="/account/keys" onsubmit="return confirm('Delete this key? This cannot be undone.');">
+                    <input type="hidden" name="action" value="delete">
+                    <input type="hidden" name="key_id" value="{{.AccessKeyID}}">
+                    <button type="submit" class="btn btn-d btn-sm">Delete</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {{end}}{{else}}
+            <tr class="empty-row"><td colspan="5">No access keys yet. Create one to get started.</td></tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

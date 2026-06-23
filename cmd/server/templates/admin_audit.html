@@ -84,6 +84,9 @@
     .mono{font-family:var(--mono);font-size:12px;word-break:break-all}
     .muted{color:var(--c-muted)}.sm{font-size:12px}
     .flex{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .pager{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;flex-wrap:wrap}
+    .pager-info{font-size:12px;color:var(--c-muted)}
+    .pager-btns{display:flex;gap:8px}
   </style>
 </head>
 <body>
@@ -107,6 +110,32 @@
       <div class="sb-label">Operations</div>
       <ul class="sb-nav">
         <li><a class="sb-link active" href="/audit"><span class="ico">📋</span> Audit Explorer</a></li>
+      </ul>
+    </div>
+    <div class="sb-section">
+      <div class="sb-label">Account</div>
+      <ul class="sb-nav">
+        <li><a class="sb-link" href="/account/profile"><span class="ico">👤</span> Profile</a></li>
+        <li><a class="sb-link" href="/account/keys"><span class="ico">🪪</span> Access Keys</a></li>
+        <li><a class="sb-link" href="/account/password"><span class="ico">🔐</span> Password</a></li>
+      </ul>
+    </div>
+    <div class="sb-section">
+      <div class="sb-label">Administration</div>
+      <ul class="sb-nav">
+        <li><a class="sb-link" href="/admin"><span class="ico">🛠</span> Overview</a></li>
+        <li><a class="sb-link" href="/admin/users"><span class="ico">👥</span> Users</a></li>
+        <li><a class="sb-link" href="/admin/rbac"><span class="ico">🛡</span> Roles &amp; Access</a></li>
+        <li><a class="sb-link" href="/admin/accounts"><span class="ico">🏦</span> Accounts</a></li>
+        <li><a class="sb-link" href="/admin/settings"><span class="ico">⚙</span> AWS Settings</a></li>
+      </ul>
+    </div>
+    <div class="sb-section">
+      <div class="sb-label">Account</div>
+      <ul class="sb-nav">
+        <li><a class="sb-link" href="/account/profile"><span class="ico">👤</span> Profile</a></li>
+        <li><a class="sb-link" href="/account/keys"><span class="ico">🗝</span> Access Keys</a></li>
+        <li><a class="sb-link" href="/account/password"><span class="ico">🛡</span> Password</a></li>
       </ul>
     </div>
     <div class="sb-footer">
@@ -163,14 +192,14 @@
       </form>
 
       <div class="stats-row">
-        <div class="stat-card"><div class="stat-label">Visible</div><div class="stat-val">{{.VisibleCount}}</div></div>
+        <div class="stat-card"><div class="stat-label">Matches</div><div class="stat-val">{{.FilteredCount}}</div></div>
         <div class="stat-card"><div class="stat-label">Total loaded</div><div class="stat-val">{{.TotalCount}}</div></div>
         <div class="stat-card"><div class="stat-label">KMS / Secrets</div><div class="stat-val">{{.KMSCount}} / {{.SecretsCount}}</div></div>
         <div class="stat-card"><div class="stat-label">Ok / Errors</div><div class="stat-val" style="{{if gt .ErrorCount 0}}color:var(--c-red){{end}}">{{.OkCount}} / {{.ErrorCount}}</div></div>
       </div>
 
       <div class="t-card">
-        <div class="t-head"><h2>Events</h2><span class="cnt">Showing {{.VisibleCount}} of {{.TotalCount}}</span></div>
+        <div class="t-head"><h2>Events</h2><span class="cnt">Showing {{.RangeStart}}–{{.RangeEnd}} of {{.FilteredCount}}</span></div>
         <table>
           <thead>
             <tr><th>Time</th><th>Service</th><th>Action</th><th>Resource</th><th>Result</th><th>Error type</th><th>Actor</th><th>Hash</th><th></th></tr>
@@ -190,7 +219,7 @@
               <td class="sm">{{if .ErrorType}}{{.ErrorType}}{{else}}<span class="muted">—</span>{{end}}</td>
               <td class="mono sm muted">{{if .Actor}}{{.Actor}}{{else}}—{{end}}</td>
               <td class="mono sm muted" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;">{{if .EventHash}}{{slice .EventHash 0 12}}…{{end}}</td>
-              <td><a href="/audit?service={{$.SelectedServer}}&q={{$.Query}}&actor={{$.ActorFilter}}&event={{.ID}}" class="sm">Open</a></td>
+              <td><a href="/audit?service={{$.SelectedServer}}&q={{$.Query}}&actor={{$.ActorFilter}}&page={{$.Page}}&event={{.ID}}" class="sm">Open</a></td>
             </tr>
             {{end}}{{else}}
             <tr class="empty-row"><td colspan="9">No events matched the current filters.</td></tr>
@@ -198,6 +227,16 @@
           </tbody>
         </table>
       </div>
+
+      {{if gt .TotalPages 1}}
+      <div class="pager">
+        <div class="pager-info">Page {{.Page}} of {{.TotalPages}} · {{.FilteredCount}} event{{if ne .FilteredCount 1}}s{{end}}</div>
+        <div class="pager-btns">
+          {{if .HasPrev}}<a class="btn btn-s btn-sm" href="/audit?service={{.SelectedServer}}&q={{.Query}}&actor={{.ActorFilter}}&page={{.PrevPage}}">‹ Prev</a>{{else}}<span class="btn btn-s btn-sm" style="opacity:.45;pointer-events:none;">‹ Prev</span>{{end}}
+          {{if .HasNext}}<a class="btn btn-s btn-sm" href="/audit?service={{.SelectedServer}}&q={{.Query}}&actor={{.ActorFilter}}&page={{.NextPage}}">Next ›</a>{{else}}<span class="btn btn-s btn-sm" style="opacity:.45;pointer-events:none;">Next ›</span>{{end}}
+        </div>
+      </div>
+      {{end}}
 
       {{if .SelectedEvent}}
       <div class="detail-panel">

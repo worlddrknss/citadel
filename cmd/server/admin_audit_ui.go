@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -31,6 +32,16 @@ type auditExplorerView struct {
 	SelectedEvent   *auditExplorerRow
 	TotalCount      int
 	VisibleCount    int
+	FilteredCount   int
+	Page            int
+	PageSize        int
+	TotalPages      int
+	RangeStart      int
+	RangeEnd        int
+	HasPrev         bool
+	HasNext         bool
+	PrevPage        int
+	NextPage        int
 	KMSCount        int
 	SecretsCount    int
 	ErrorCount      int
@@ -51,7 +62,7 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records, err := s.store.ListAuditEvents(r.Context(), 400)
+	records, err := s.store.ListAuditEvents(r.Context(), 2000)
 	if err != nil {
 		http.Error(w, "failed to list audit events", http.StatusInternalServerError)
 		return
@@ -115,7 +126,44 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 			view.SelectedEvent = &selected
 		}
 	}
+	filtered := view.Rows
+	view.FilteredCount = len(filtered)
+	const auditPageSize = 50
+	view.PageSize = auditPageSize
+	page := 1
+	if p := strings.TrimSpace(r.URL.Query().Get("page")); p != "" {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
+			page = n
+		}
+	}
+	view.TotalPages = (view.FilteredCount + auditPageSize - 1) / auditPageSize
+	if view.TotalPages < 1 {
+		view.TotalPages = 1
+	}
+	if page > view.TotalPages {
+		page = view.TotalPages
+	}
+	view.Page = page
+	start := (page - 1) * auditPageSize
+	end := start + auditPageSize
+	if start > view.FilteredCount {
+		start = view.FilteredCount
+	}
+	if end > view.FilteredCount {
+		end = view.FilteredCount
+	}
+	view.Rows = filtered[start:end]
 	view.VisibleCount = len(view.Rows)
+	if view.FilteredCount == 0 {
+		view.RangeStart = 0
+	} else {
+		view.RangeStart = start + 1
+	}
+	view.RangeEnd = end
+	view.HasPrev = page > 1
+	view.HasNext = page < view.TotalPages
+	view.PrevPage = page - 1
+	view.NextPage = page + 1
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := auditTemplate.Execute(w, view); err != nil {
