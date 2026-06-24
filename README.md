@@ -1,61 +1,59 @@
 # Citadel
 
-Citadel is a lightweight AWS KMS + Secrets Manager JSON API-compatible service
-intended for Vault auto-unseal and secret storage.
+Citadel is an open-source control plane for cryptographic keys, secrets, certificates, and parameters.
+It provides AWS-compatible APIs (KMS, Secrets Manager, ACM/ACM PCA, and SSM Parameter Store) and a modern web console for day-to-day operations.
 
-> Naming: the product is **Citadel**. The Go module path
-> (`github.com/worlddrknss/go-kms`), container image, Kubernetes manifests, and
-> `KMS_*` environment variables retain the historical `go-kms` / `KMS_`
-> identifiers for backward compatibility with existing deployments.
+![Citadel dashboard](assets/image.png)
 
-## Supported AWS KMS actions
+## Why Citadel
 
-- `TrentService.Encrypt`
-- `TrentService.Decrypt`
-- `TrentService.DescribeKey`
-- `TrentService.CreateKey` (DB mode)
-- `TrentService.ListKeys`
-- `TrentService.CreateAlias`
-- `TrentService.UpdateAlias`
-- `TrentService.ListAliases`
-- `TrentService.EnableKey`
-- `TrentService.DisableKey`
-- `TrentService.ScheduleKeyDeletion`
-- `TrentService.CancelKeyDeletion`
+- AWS API compatibility for existing clients and integrations
+- Single service for keys, secrets, PKI, and parameters
+- Account-aware isolation and RBAC for multi-tenant deployments
+- Native operator UI built with Svelte
+- PostgreSQL-backed persistence with in-memory mode for local/dev workflows
 
-Additional endpoints:
+## Core capabilities
 
-- `GET /admin` for management overview of keys and aliases.
+- KMS-compatible encryption, decryption, key lifecycle, aliases, and signing
+- Secrets Manager-compatible secret/version workflows
+- ACM/ACM PCA-compatible private CA and certificate issuance/revocation
+- SSM-compatible Parameter Store with versions, labels, tags, and SecureString encryption
+- Native control-plane endpoints under `/v1/*` used by the web UI
+- Audit logging and account-scoped access control
 
-Current implementation status:
+## Compatibility scope
 
-- Phase 1 foundation in progress: PostgreSQL-backed key metadata with env bootstrap fallback.
-- Legacy ciphertexts are still decryptable after enabling DB mode.
+Citadel is designed for practical interoperability with AWS clients and tooling.
+It is not a drop-in reimplementation of every AWS feature or edge behavior.
 
-## Run locally
+## Quick start
+
+### Prerequisites
+
+- Go 1.25+
+- Optional: PostgreSQL (recommended for persistent environments)
+
+### Local run (in-memory)
 
 ```bash
 export KMS_MASTER_KEY_B64="$(openssl rand -base64 32)"
 export KMS_KEY_ID="go-kms-default-key"
-# Optional: enforce access key ID presence in SigV4 Authorization header
-# export KMS_ACCESS_KEY_ID="vault"
 
 go run ./cmd/server
 ```
 
-Run with PostgreSQL (recommended for migration and future phases):
+### Local run (PostgreSQL)
 
 ```bash
 export KMS_DB_URL="postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
-
-# Optional bootstrap/fallback values during migration from env-only mode.
 export KMS_MASTER_KEY_B64="$(openssl rand -base64 32)"
 export KMS_KEY_ID="go-kms-default-key"
 
 go run ./cmd/server
 ```
 
-Health check:
+### Health check
 
 ```bash
 curl -s http://127.0.0.1:8080/healthz
@@ -71,36 +69,44 @@ seal "awskms" {
 }
 ```
 
-## Notes
+## Project layout
 
-- This service targets protocol compatibility for Vault unseal flows and is not a full AWS KMS implementation.
-- Security model, trust boundaries, and a production hardening checklist are documented in `docs/SECURITY.md`.
-- Production deployments should enable strict SigV4 verification (`KMS_SIGV4_STRICT=true` with `KMS_SECRET_ACCESS_KEY`), default-deny policies, HMAC audit chaining, TLS, and Argon2id-hashed admin users. See `docs/SECURITY.md`.
-- Full phased implementation details are in `docs/PHASES.md`.
-- Phase A compatibility status is tracked in `docs/COMPATIBILITY_MATRIX.md`.
-- AWS Secrets Manager supplemental planning is tracked in `docs/SECRETS_MANAGER_PHASES.md`.
-- The admin console now includes an audit explorer shared across KMS and Secrets Manager.
+- `cmd/server`: main Citadel service (AWS-compatible and native APIs)
+- `web`: Svelte frontend for the operator console
+- `sdk`: client libraries
+- `docs`: architecture and implementation notes
 
-## Build Roadmap (5 phases)
+## Security
 
-1. Phase 1: PostgreSQL-backed key/config storage, default key resolution, migration-safe env fallback.
-2. Phase 2: Lifecycle APIs (`CreateKey`, `ListKeys`, aliases, enable/disable, deletion windows).
-3. Phase 3: AuthZ model (grants/policies), stronger SigV4 validation, tenant boundaries.
-4. Phase 4: Management UI (key inventory, policy/grant management, audit explorer, operator workflows).
-5. Phase 5: Hardening and operations (HA, backups, key wrapping root, SLOs, security tests).
+Citadel handles sensitive workloads; run it with production controls enabled.
 
-## Release image on tag
+- Use TLS in all non-local environments
+- Use strict SigV4 validation where applicable
+- Keep bootstrap credentials out of source control
+- Run with least-privilege database and network policies
+- Rotate keys, access keys, and session credentials regularly
 
-GitHub Actions publishes a multi-arch image to GHCR when pushing a semver tag.
+For coordinated vulnerability disclosure, open a private security report in your forge of choice or contact maintainers directly before public disclosure.
 
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+## Open source readiness note
 
-Published tags include:
+This repository has been reviewed for obvious committed plaintext secrets and direct token/key literals in tracked source files.
+As with any cryptographic or control-plane service, you should still run your own secret scanning and history checks in CI before broad publication.
 
-- `1.0.0`
-- `1.0`
-- `1`
-- `sha-<commit>`
+## License
+
+This project is licensed under the GNU Affero General Public License v3.0 (or later).
+See the `LICENSE` file for details.
+
+SPDX: `AGPL-3.0-or-later`
+
+## Contributing
+
+Contributions are welcome.
+
+- Open an issue for bugs and feature proposals
+- Keep changes focused and well-tested
+- Include tests for behavior changes where possible
+- Follow existing coding and API conventions
+
+By contributing, you agree that your contributions are licensed under AGPL-3.0-or-later.
