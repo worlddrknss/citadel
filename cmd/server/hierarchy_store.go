@@ -156,6 +156,74 @@ func (s *inMemoryStore) CreateFolder(ctx context.Context, project, env string, f
 	return nil
 }
 
+// RenameProject updates a project's display name.
+func (s *inMemoryStore) RenameProject(ctx context.Context, slug, newName string) error {
+	account := s.accountForContext(ctx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p, ok := s.hierProjectsLocked()[fmtHierarchyKey(account, slug)]; ok {
+		p.name = newName
+	}
+	return nil
+}
+
+// RenameEnvironment updates an environment's display name.
+func (s *inMemoryStore) RenameEnvironment(ctx context.Context, project, slug, newName string) error {
+	account := s.accountForContext(ctx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p, ok := s.hierProjectsLocked()[fmtHierarchyKey(account, project)]; ok {
+		if _, ok := p.envs[slug]; ok {
+			p.envs[slug] = newName
+		}
+	}
+	return nil
+}
+
+// DeleteProject removes a structure-only project and all of its nested
+// environments and folders.
+func (s *inMemoryStore) DeleteProject(ctx context.Context, slug string) error {
+	account := s.accountForContext(ctx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.hierProjectsLocked(), fmtHierarchyKey(account, slug))
+	return nil
+}
+
+// DeleteEnvironment removes a structure-only environment and its folders.
+func (s *inMemoryStore) DeleteEnvironment(ctx context.Context, project, slug string) error {
+	account := s.accountForContext(ctx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p, ok := s.hierProjectsLocked()[fmtHierarchyKey(account, project)]; ok {
+		delete(p.envs, slug)
+		delete(p.folders, slug)
+	}
+	return nil
+}
+
+// DeleteFolder removes a structure-only folder and any nested folders.
+func (s *inMemoryStore) DeleteFolder(ctx context.Context, project, env string, folder []string) error {
+	account := s.accountForContext(ctx)
+	prefix := folderPath(folder)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.hierProjectsLocked()[fmtHierarchyKey(account, project)]
+	if !ok {
+		return nil
+	}
+	paths, ok := p.folders[env]
+	if !ok {
+		return nil
+	}
+	for path := range paths {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			delete(paths, path)
+		}
+	}
+	return nil
+}
+
 // immediateChild reports the immediate child folder name of full when full is a
 // strict descendant of prefix. prefix and full are normalized folder paths from
 // folderPath (e.g. "/" or "/a/b").
@@ -309,4 +377,63 @@ func (s *dbStore) CreateFolder(ctx context.Context, project, env string, folder 
 		}
 	}
 	return nil
+}
+
+// RenameProject updates a project's display name.
+func (s *dbStore) RenameProject(ctx context.Context, slug, newName string) error {
+	account := s.accountForContext(ctx)
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sm_projects SET name=$3 WHERE account_id=$1 AND slug=$2`,
+		account, slug, newName)
+	return err
+}
+
+// RenameEnvironment updates an environment's display name.
+func (s *dbStore) RenameEnvironment(ctx context.Context, project, slug, newName string) error {
+	account := s.accountForContext(ctx)
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sm_environments SET name=$4 WHERE account_id=$1 AND project_slug=$2 AND slug=$3`,
+		account, project, slug, newName)
+	return err
+}
+
+// DeleteProject removes a structure-only project and its environments/folders.
+func (s *dbStore) DeleteProject(ctx context.Context, slug string) error {
+	account := s.accountForContext(ctx)
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM sm_folders WHERE account_id=$1 AND project_slug=$2`, account, slug); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM sm_environments WHERE account_id=$1 AND project_slug=$2`, account, slug); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM sm_projects WHERE account_id=$1 AND slug=$2`, account, slug)
+	return err
+}
+
+// DeleteEnvironment removes a structure-only environment and its folders.
+func (s *dbStore) DeleteEnvironment(ctx context.Context, project, slug string) error {
+	account := s.accountForContext(ctx)
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM sm_folders WHERE account_id=$1 AND project_slug=$2 AND env_slug=$3`,
+		account, project, slug); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM sm_environments WHERE account_id=$1 AND project_slug=$2 AND slug=$3`,
+		account, project, slug)
+	return err
+}
+
+// DeleteFolder removes a structure-only folder and any nested folders.
+func (s *dbStore) DeleteFolder(ctx context.Context, project, env string, folder []string) error {
+	account := s.accountForContext(ctx)
+	prefix := folderPath(folder)
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM sm_folders WHERE account_id=$1 AND project_slug=$2 AND env_slug=$3
+		 AND (folder_path=$4 OR folder_path LIKE $5)`,
+		account, project, env, prefix, prefix+"/%")
+	return err
 }

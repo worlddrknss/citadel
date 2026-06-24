@@ -106,6 +106,33 @@ export interface KMSKey {
   deletionDate?: string;
 }
 
+export interface KMSGrant {
+  grantId: string;
+  granteePrincipal: string;
+  retiringPrincipal?: string;
+  operations: string[];
+  name?: string;
+  createdAt: string;
+}
+
+export interface KMSKeyDetail {
+  keyId: string;
+  arn: string;
+  description: string;
+  enabled: boolean;
+  keyUsage: string;
+  keySpec: string;
+  keyState: string;
+  createdAt: string;
+  deletionDate?: string;
+  encryptionAlgorithms?: string[];
+  signingAlgorithms?: string[];
+  policyDocument: string;
+  aliases: string[];
+  grants: KMSGrant[];
+  publicKeyPem?: string;
+}
+
 export interface Certificate {
   source: string;
   id: string;
@@ -113,6 +140,29 @@ export interface Certificate {
   status: string;
   notBefore?: string;
   notAfter?: string;
+}
+
+export interface CertificateDetail {
+  source: string;
+  id: string;
+  status: string;
+  subject: string;
+  issuer: string;
+  serial: string;
+  notBefore?: string;
+  notAfter?: string;
+  keyAlgorithm?: string;
+  signatureAlgorithm?: string;
+  sans?: string[];
+  isCA: boolean;
+  caType?: string;
+  template?: string;
+  kmsKeyId?: string;
+  domains?: string;
+  revokedAt?: string;
+  revocationReason?: string;
+  pem?: string;
+  chainPem?: string;
 }
 
 export interface AuditEvent {
@@ -275,9 +325,39 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ project, env, path })
     }),
+  renameProject: (slug: string, name: string) =>
+    req<{ slug: string; renamed: boolean }>('/v1/projects/rename', {
+      method: 'POST',
+      body: JSON.stringify({ slug, name })
+    }),
+  deleteProject: (project: string) =>
+    req<{ slug: string; deleted: boolean }>(`/v1/projects?${qs({ project })}`, {
+      method: 'DELETE'
+    }),
+  renameEnvironment: (project: string, slug: string, name: string) =>
+    req<{ project: string; slug: string; renamed: boolean }>('/v1/environments/rename', {
+      method: 'POST',
+      body: JSON.stringify({ project, slug, name })
+    }),
+  deleteEnvironment: (project: string, env: string) =>
+    req<{ project: string; env: string; deleted: boolean }>(
+      `/v1/environments?${qs({ project, env })}`,
+      { method: 'DELETE' }
+    ),
+  deleteFolder: (project: string, env: string, path: string) =>
+    req<{ project: string; env: string; path: string; deleted: boolean }>(
+      `/v1/folders?${qs({ project, env, path })}`,
+      { method: 'DELETE' }
+    ),
 
   // KMS
   kmsKeys: () => req<{ keys: KMSKey[] }>('/v1/kms/keys'),
+  kmsKeyDetail: (keyId: string) => req<KMSKeyDetail>(`/v1/kms/keys/detail?${qs({ keyId })}`),
+  putKmsKeyPolicy: (keyId: string, policyDocument: string) =>
+    req<{ keyId: string; saved: boolean }>('/v1/kms/keys/policy', {
+      method: 'POST',
+      body: JSON.stringify({ keyId, policyDocument })
+    }),
   createKmsKey: (body: { description: string; keyUsage: string; keySpec: string }) =>
     req<{ keyId: string; arn: string; created: boolean }>('/v1/kms/keys', {
       method: 'POST',
@@ -301,6 +381,8 @@ export const api = {
 
   // Certificates
   certificates: () => req<{ certificates: Certificate[] }>('/v1/certificates'),
+  certificateDetail: (source: string, id: string) =>
+    req<CertificateDetail>(`/v1/certificates/detail?${qs({ source, id })}`),
   createCA: (body: {
     caType: string;
     keyAlgorithm: string;

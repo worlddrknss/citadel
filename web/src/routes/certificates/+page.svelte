@@ -1,11 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, ApiError, type Certificate } from '$lib/api';
+  import { api, ApiError, type Certificate, type CertificateDetail } from '$lib/api';
 
   let certs: Certificate[] = $state([]);
   let loading = $state(true);
   let flash = $state('');
   let flashOk = $state(true);
+
+  // Detail drawer
+  let detail: CertificateDetail | null = $state(null);
+  let detailTab = $state('overview');
 
   const sourceLabel: Record<string, string> = {
     'pca-ca': 'Private CA',
@@ -103,6 +107,44 @@
     }
   }
 
+  // ---- detail drawer -------------------------------------------------------
+  async function openDetail(c: Certificate) {
+    detailTab = 'overview';
+    detail = null;
+    try {
+      detail = await api.certificateDetail(c.source, c.id);
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message, false);
+    }
+  }
+
+  function closeDetail() {
+    detail = null;
+  }
+
+  async function copyText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      notify('Copied to clipboard');
+    } catch {
+      notify('Copy failed', false);
+    }
+  }
+
+  function downloadText(filename: string, text: string) {
+    const blob = new Blob([text], { type: 'application/x-pem-file' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function fmtDate(s?: string): string {
+    return s ? s.replace('T', ' ').replace('Z', '') : '—';
+  }
+
   onMount(load);
 </script>
 
@@ -135,9 +177,11 @@
       </thead>
       <tbody>
         {#each certs as c}
-          <tr>
+          <tr class:rowsel={detail?.id === c.id}>
             <td>{sourceLabel[c.source] ?? c.source}</td>
-            <td class="mono">{c.id}</td>
+            <td class="mono">
+              <button class="linklike" onclick={() => openDetail(c)}>{c.id}</button>
+            </td>
             <td>{c.subject || '—'}</td>
             <td><span class="badge">{c.status || '—'}</span></td>
             <td class="muted">{c.notAfter ? new Date(c.notAfter).toLocaleDateString() : '—'}</td>
@@ -229,10 +273,225 @@
   </div>
 </div>
 
+<!-- detail drawer -->
+{#if detail}
+  <div
+    class="drawer-scrim"
+    role="button"
+    tabindex="0"
+    aria-label="Close details"
+    onclick={closeDetail}
+    onkeydown={(e) => e.key === 'Escape' && closeDetail()}
+  ></div>
+  <aside class="drawer">
+    <div class="drawer-head">
+      <div>
+        <div class="mono drawer-title">{detail.subject || detail.id}</div>
+        <div class="muted small">{sourceLabel[detail.source] ?? detail.source}</div>
+      </div>
+      <button class="btn btn-sm" onclick={closeDetail}>✕</button>
+    </div>
+
+    <div class="tabs">
+      <button class="tab" class:active={detailTab === 'overview'} onclick={() => (detailTab = 'overview')}
+        >Overview</button
+      >
+      {#if detail.pem}
+        <button class="tab" class:active={detailTab === 'pem'} onclick={() => (detailTab = 'pem')}
+          >PEM</button
+        >
+      {/if}
+      {#if detail.chainPem}
+        <button class="tab" class:active={detailTab === 'chain'} onclick={() => (detailTab = 'chain')}
+          >Chain</button
+        >
+      {/if}
+    </div>
+
+    {#if detailTab === 'overview'}
+      <div class="tab-body">
+        <div class="kv">
+          <div class="kv-row"><span class="kv-l">ID</span><span class="kv-v mono small">{detail.id}</span></div>
+          <div class="kv-row">
+            <span class="kv-l">Status</span>
+            <span class="kv-v"><span class="badge">{detail.status || '—'}</span></span>
+          </div>
+          <div class="kv-row"><span class="kv-l">Subject</span><span class="kv-v small">{detail.subject || '—'}</span></div>
+          <div class="kv-row"><span class="kv-l">Issuer</span><span class="kv-v small">{detail.issuer || '—'}</span></div>
+          <div class="kv-row"><span class="kv-l">Serial</span><span class="kv-v mono small">{detail.serial || '—'}</span></div>
+          <div class="kv-row"><span class="kv-l">Not before</span><span class="kv-v small">{fmtDate(detail.notBefore)}</span></div>
+          <div class="kv-row"><span class="kv-l">Not after</span><span class="kv-v small">{fmtDate(detail.notAfter)}</span></div>
+          {#if detail.keyAlgorithm}
+            <div class="kv-row"><span class="kv-l">Key alg</span><span class="kv-v small">{detail.keyAlgorithm}</span></div>
+          {/if}
+          {#if detail.signatureAlgorithm}
+            <div class="kv-row"><span class="kv-l">Sig alg</span><span class="kv-v small">{detail.signatureAlgorithm}</span></div>
+          {/if}
+          <div class="kv-row"><span class="kv-l">CA</span><span class="kv-v small">{detail.isCA ? 'yes' : 'no'}</span></div>
+          {#if detail.caType}
+            <div class="kv-row"><span class="kv-l">CA type</span><span class="kv-v small">{detail.caType}</span></div>
+          {/if}
+          {#if detail.template}
+            <div class="kv-row"><span class="kv-l">Template</span><span class="kv-v small">{detail.template}</span></div>
+          {/if}
+          {#if detail.kmsKeyId}
+            <div class="kv-row"><span class="kv-l">KMS key</span><span class="kv-v mono small">{detail.kmsKeyId}</span></div>
+          {/if}
+          {#if detail.domains}
+            <div class="kv-row"><span class="kv-l">Domains</span><span class="kv-v small">{detail.domains}</span></div>
+          {/if}
+          {#if detail.sans && detail.sans.length}
+            <div class="kv-row"><span class="kv-l">SANs</span><span class="kv-v small">{detail.sans.join(', ')}</span></div>
+          {/if}
+          {#if detail.revokedAt}
+            <div class="kv-row"><span class="kv-l">Revoked</span><span class="kv-v small">{fmtDate(detail.revokedAt)}</span></div>
+          {/if}
+          {#if detail.revocationReason}
+            <div class="kv-row"><span class="kv-l">Reason</span><span class="kv-v small">{detail.revocationReason}</span></div>
+          {/if}
+        </div>
+      </div>
+    {:else if detailTab === 'pem' && detail.pem}
+      <div class="tab-body">
+        <pre class="pem">{detail.pem}</pre>
+        <div class="row-act">
+          <button class="btn btn-sm" onclick={() => copyText(detail!.pem!)}>Copy</button>
+          <button class="btn btn-sm" onclick={() => downloadText(`${detail!.id}.pem`, detail!.pem!)}
+            >Download .pem</button
+          >
+        </div>
+      </div>
+    {:else if detailTab === 'chain' && detail.chainPem}
+      <div class="tab-body">
+        <pre class="pem">{detail.chainPem}</pre>
+        <div class="row-act">
+          <button class="btn btn-sm" onclick={() => copyText(detail!.chainPem!)}>Copy</button>
+          <button
+            class="btn btn-sm"
+            onclick={() => downloadText(`${detail!.id}-chain.pem`, detail!.chainPem!)}
+            >Download chain</button
+          >
+        </div>
+      </div>
+    {/if}
+  </aside>
+{/if}
+
 <style>
   textarea {
     width: 100%;
     box-sizing: border-box;
     resize: vertical;
+  }
+  .linklike {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--c-blue);
+    cursor: pointer;
+    font: inherit;
+  }
+  .rowsel {
+    background: rgba(43, 108, 176, 0.06);
+  }
+  .small {
+    font-size: 0.82rem;
+  }
+  .drawer-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 20, 30, 0.35);
+    z-index: 40;
+    border: none;
+  }
+  .drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100vh;
+    width: min(560px, 92vw);
+    background: var(--c-surface);
+    border-left: 1px solid var(--c-border);
+    box-shadow: -8px 0 24px rgba(15, 20, 30, 0.12);
+    z-index: 41;
+    padding: 1.25rem;
+    overflow-y: auto;
+  }
+  .drawer-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1rem;
+  }
+  .drawer-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+  }
+  .kv {
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.75rem;
+  }
+  .kv-row {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--c-border);
+  }
+  .kv-row:last-child {
+    border-bottom: none;
+  }
+  .kv-l {
+    width: 110px;
+    color: var(--c-muted);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+  }
+  .kv-v {
+    word-break: break-all;
+    flex: 1;
+  }
+  .tabs {
+    display: flex;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--c-border);
+    margin: 1rem 0 0.75rem;
+    flex-wrap: wrap;
+  }
+  .tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 0.5rem 0.7rem;
+    cursor: pointer;
+    color: var(--c-muted);
+    font: inherit;
+  }
+  .tab.active {
+    color: var(--c-text);
+    border-bottom-color: var(--c-blue);
+    font-weight: 600;
+  }
+  .tab-body {
+    padding-top: 0.25rem;
+  }
+  .row-act {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .pem {
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius);
+    padding: 0.6rem;
+    font-size: 0.74rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 360px;
+    overflow-y: auto;
+    margin: 0 0 0.6rem;
   }
 </style>

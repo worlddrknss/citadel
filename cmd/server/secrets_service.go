@@ -435,6 +435,11 @@ type hierarchyStore interface {
 	CreateProject(ctx context.Context, slug, name string) error
 	CreateEnvironment(ctx context.Context, project, slug, name string) error
 	CreateFolder(ctx context.Context, project, env string, folder []string) error
+	RenameProject(ctx context.Context, slug, newName string) error
+	RenameEnvironment(ctx context.Context, project, slug, newName string) error
+	DeleteProject(ctx context.Context, slug string) error
+	DeleteEnvironment(ctx context.Context, project, slug string) error
+	DeleteFolder(ctx context.Context, project, env string, folder []string) error
 }
 
 type hierarchyProject struct {
@@ -493,7 +498,131 @@ func (svc *secretsService) CreateFolder(ctx context.Context, project, env string
 	return svc.hierarchy.CreateFolder(ctx, project, env, folder)
 }
 
-// DescribeItem returns the full metadata projection for a single item.
+// errContainerNotEmpty is returned when a structure delete is attempted on a
+// project/environment/folder that still holds secret items.
+var errContainerNotEmpty = errors.New("container still holds secrets; delete the secrets first")
+
+// countSecrets counts backing secret items under a project, optionally scoped
+// to an environment and a folder prefix.
+func (svc *secretsService) countSecrets(ctx context.Context, project, env string, folder []string) (int, error) {
+	secrets, err := svc.store.ListSecrets(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, sec := range secrets {
+		pi, ok := parseSecretName(sec.Name)
+		if !ok || pi.Project != project {
+			continue
+		}
+		if env != "" && pi.Env != env {
+			continue
+		}
+		if len(folder) > 0 && !folderHasPrefix(pi.Folder, folder) {
+			continue
+		}
+		n++
+	}
+	return n, nil
+}
+
+// RenameProject updates a project's display name (the slug is immutable because
+// it forms part of every backing secret name).
+func (svc *secretsService) RenameProject(ctx context.Context, slug, newName string) error {
+	if err := validateSegment("project", slug); err != nil {
+		return err
+	}
+	if svc.hierarchy == nil {
+		return errNoHierarchyStore
+	}
+	return svc.hierarchy.RenameProject(ctx, slug, strings.TrimSpace(newName))
+}
+
+// RenameEnvironment updates an environment's display name.
+func (svc *secretsService) RenameEnvironment(ctx context.Context, project, slug, newName string) error {
+	if err := validateSegment("project", project); err != nil {
+		return err
+	}
+	if err := validateSegment("env", slug); err != nil {
+		return err
+	}
+	if svc.hierarchy == nil {
+		return errNoHierarchyStore
+	}
+	return svc.hierarchy.RenameEnvironment(ctx, project, slug, strings.TrimSpace(newName))
+}
+
+// DeleteProject removes a structure-only project. It refuses while any backing
+// secret still exists under the project.
+func (svc *secretsService) DeleteProject(ctx context.Context, slug string) error {
+	if err := validateSegment("project", slug); err != nil {
+		return err
+	}
+	if svc.hierarchy == nil {
+		return errNoHierarchyStore
+	}
+	n, err := svc.countSecrets(ctx, slug, "", nil)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return errContainerNotEmpty
+	}
+	return svc.hierarchy.DeleteProject(ctx, slug)
+}
+
+// DeleteEnvironment removes a structure-only environment. It refuses while any
+// backing secret still exists under the project/environment.
+func (svc *secretsService) DeleteEnvironment(ctx context.Context, project, slug string) error {
+	if err := validateSegment("project", project); err != nil {
+		return err
+	}
+	if err := validateSegment("env", slug); err != nil {
+		return err
+	}
+	if svc.hierarchy == nil {
+		return errNoHierarchyStore
+	}
+	n, err := svc.countSecrets(ctx, project, slug, nil)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return errContainerNotEmpty
+	}
+	return svc.hierarchy.DeleteEnvironment(ctx, project, slug)
+}
+
+// DeleteFolder removes a structure-only folder (and its nested registrations).
+// It refuses while any backing secret still exists at or below the folder.
+func (svc *secretsService) DeleteFolder(ctx context.Context, project, env string, folder []string) error {
+	if err := validateSegment("project", project); err != nil {
+		return err
+	}
+	if err := validateSegment("env", env); err != nil {
+		return err
+	}
+	for _, seg := range folder {
+		if err := validateSegment("folder", seg); err != nil {
+			return err
+		}
+	}
+	if len(folder) == 0 {
+		return errors.New("folder path is required")
+	}
+	if svc.hierarchy == nil {
+		return errNoHierarchyStore
+	}
+	n, err := svc.countSecrets(ctx, project, env, folder)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return errContainerNotEmpty
+	}
+	return svc.hierarchy.DeleteFolder(ctx, project, env, folder)
+}
+
 func (svc *secretsService) DescribeItem(ctx context.Context, coord itemCoord) (itemDetail, error) {
 	if err := coord.validate(); err != nil {
 		return itemDetail{}, err

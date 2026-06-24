@@ -59,6 +59,13 @@
   let confirmDanger = $state(true);
   let confirmAction: (() => Promise<void>) | null = $state(null);
 
+  // Prompt modal (avoids native prompt per UX guidelines)
+  let promptOpen = $state(false);
+  let promptTitle = $state('');
+  let promptLabel = $state('');
+  let promptValue = $state('');
+  let promptAction: ((value: string) => Promise<void>) | null = $state(null);
+
   const envs = $derived(projects.find((p) => p.slug === project)?.environments ?? []);
   const selectedKeys = $derived(items.filter((it) => selected[it.key]).map((it) => it.key));
   const crumbSegs = $derived(path.split('/').filter(Boolean));
@@ -72,6 +79,28 @@
   function err(e: unknown) {
     if (e instanceof ApiError) notify(e.message, false);
     else notify('Unexpected error', false);
+  }
+
+  // prettyJSON pretty-prints a JSON string with 2-space indentation. If the
+  // input is not valid JSON it is returned unchanged so the user can still fix
+  // it by hand.
+  function prettyJSON(raw: string): string {
+    const trimmed = (raw ?? '').trim();
+    if (!trimmed) return '';
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2);
+    } catch {
+      return raw;
+    }
+  }
+
+  function formatPolicy() {
+    const next = prettyJSON(policyDoc);
+    if (next === policyDoc) {
+      if (policyDoc.trim()) notify('Policy is not valid JSON', false);
+      return;
+    }
+    policyDoc = next;
   }
 
   function askConfirm(opts: {
@@ -94,6 +123,27 @@
     confirmOpen = false;
     if (action) await action();
     confirmAction = null;
+  }
+
+  function askPrompt(opts: {
+    title: string;
+    label: string;
+    value?: string;
+    action: (value: string) => Promise<void>;
+  }) {
+    promptTitle = opts.title;
+    promptLabel = opts.label;
+    promptValue = opts.value ?? '';
+    promptAction = opts.action;
+    promptOpen = true;
+  }
+
+  async function runPrompt() {
+    const action = promptAction;
+    const value = promptValue;
+    promptOpen = false;
+    if (action) await action(value);
+    promptAction = null;
   }
 
   async function loadProjects() {
@@ -284,6 +334,100 @@
     }
   }
 
+  // ---- structure management ------------------------------------------------
+  function renameProject() {
+    if (!project) return;
+    askPrompt({
+      title: `Rename project "${project}"`,
+      label: 'Display name',
+      value: project,
+      action: async (name) => {
+        try {
+          await api.renameProject(project, name.trim());
+          notify(`Renamed project ${project}`);
+          await loadProjects();
+        } catch (e) {
+          err(e);
+        }
+      }
+    });
+  }
+
+  function deleteProject() {
+    if (!project) return;
+    askConfirm({
+      title: `Delete project "${project}"?`,
+      body: 'This removes the project and its empty environments/folders. It is refused while any secret still exists under it.',
+      label: 'Delete project',
+      action: async () => {
+        try {
+          await api.deleteProject(project);
+          notify(`Deleted project ${project}`);
+          project = '';
+          env = '';
+          await loadProjects();
+        } catch (e) {
+          err(e);
+        }
+      }
+    });
+  }
+
+  function renameEnvironment() {
+    if (!project || !env) return;
+    askPrompt({
+      title: `Rename environment "${env}"`,
+      label: 'Display name',
+      value: env,
+      action: async (name) => {
+        try {
+          await api.renameEnvironment(project, env, name.trim());
+          notify(`Renamed environment ${env}`);
+          await loadProjects();
+        } catch (e) {
+          err(e);
+        }
+      }
+    });
+  }
+
+  function deleteEnvironment() {
+    if (!project || !env) return;
+    askConfirm({
+      title: `Delete environment "${env}"?`,
+      body: 'This removes the environment and its empty folders. It is refused while any secret still exists under it.',
+      label: 'Delete environment',
+      action: async () => {
+        try {
+          await api.deleteEnvironment(project, env);
+          notify(`Deleted environment ${env}`);
+          env = '';
+          await loadProjects();
+        } catch (e) {
+          err(e);
+        }
+      }
+    });
+  }
+
+  function deleteFolder(name: string) {
+    const full = path === '/' ? `/${name}` : `${path}/${name}`;
+    askConfirm({
+      title: `Delete folder "${name}"?`,
+      body: 'This removes the folder and any nested empty folders. It is refused while any secret still exists at or below it.',
+      label: 'Delete folder',
+      action: async () => {
+        try {
+          await api.deleteFolder(project, env, full);
+          notify(`Deleted folder ${name}`);
+          await loadItems();
+        } catch (e) {
+          err(e);
+        }
+      }
+    });
+  }
+
   // ---- detail drawer -------------------------------------------------------
   async function openDetail(it: Item) {
     detailKey = it.key;
@@ -297,7 +441,7 @@
       detail = d;
       metaDescription = d.description;
       metaKms = d.kmsKeyId;
-      policyDoc = d.policyDocument;
+      policyDoc = prettyJSON(d.policyDocument);
       rotLambda = d.rotation.lambdaArn ?? '';
       rotDays = String(d.rotation.afterDays || 30);
       versions = [];
@@ -552,6 +696,16 @@
         {/if}
       </select>
     </div>
+    <div class="manage-act">
+      {#if project}
+        <button class="btn btn-sm" onclick={renameProject} title="Rename project">Edit project</button>
+        <button class="btn btn-sm btn-d" onclick={deleteProject} title="Delete project">Delete project</button>
+      {/if}
+      {#if project && env}
+        <button class="btn btn-sm" onclick={renameEnvironment} title="Rename environment">Edit env</button>
+        <button class="btn btn-sm btn-d" onclick={deleteEnvironment} title="Delete environment">Delete env</button>
+      {/if}
+    </div>
   </div>
 
   <!-- structure creation -->
@@ -614,7 +768,11 @@
             <td class="muted">folder</td>
             <td></td>
             <td></td>
-            <td></td>
+            <td>
+              <div class="rowact">
+                <button class="btn btn-sm btn-d" onclick={() => deleteFolder(f)}>Delete</button>
+              </div>
+            </td>
           </tr>
         {/each}
         {#each items as it}
@@ -859,9 +1017,12 @@
       <div class="tab-body">
         <div class="field block">
           <label for="pol">Resource policy (JSON)</label>
-          <textarea id="pol" class="mono" rows="10" spellcheck="false" bind:value={policyDoc}></textarea>
+          <textarea id="pol" class="mono" rows="14" spellcheck="false" bind:value={policyDoc}></textarea>
         </div>
-        <button class="btn btn-p btn-sm" onclick={savePolicy}>Save policy</button>
+        <div class="rowact">
+          <button class="btn btn-p btn-sm" onclick={savePolicy}>Save policy</button>
+          <button class="btn btn-sm" onclick={formatPolicy}>Format JSON</button>
+        </div>
       </div>
     {:else if detailTab === 'rotation'}
       <div class="tab-body">
@@ -911,6 +1072,28 @@
   </div>
 {/if}
 
+<!-- prompt modal -->
+{#if promptOpen}
+  <div class="modal-scrim" role="presentation" onclick={() => (promptOpen = false)}></div>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h3 style="margin-top:0">{promptTitle}</h3>
+    <div class="field block">
+      <label for="prompt-input">{promptLabel}</label>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input
+        id="prompt-input"
+        bind:value={promptValue}
+        autofocus
+        onkeydown={(e) => e.key === 'Enter' && runPrompt()}
+      />
+    </div>
+    <div class="modal-act">
+      <button class="btn" onclick={() => (promptOpen = false)}>Cancel</button>
+      <button class="btn btn-p" onclick={runPrompt}>Save</button>
+    </div>
+  </div>
+{/if}
+
 <style>
   .struct {
     border-top: 1px dashed var(--c-border);
@@ -920,6 +1103,13 @@
   }
   .struct .field input {
     min-width: 130px;
+  }
+  .manage-act {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin-left: auto;
   }
   .bulkbar {
     display: flex;

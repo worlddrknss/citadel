@@ -1,11 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, ApiError, type KMSKey } from '$lib/api';
+  import { api, ApiError, type KMSKey, type KMSKeyDetail } from '$lib/api';
 
   let keys: KMSKey[] = $state([]);
   let loading = $state(true);
   let flash = $state('');
   let flashOk = $state(true);
+
+  // Detail drawer
+  let detail: KMSKeyDetail | null = $state(null);
+  let detailTab = $state('overview');
+  let policyText = $state('');
+  let savingPolicy = $state(false);
 
   // Create-key form
   let description = $state('');
@@ -82,6 +88,69 @@
     }
   }
 
+  // ---- detail drawer -------------------------------------------------------
+  function prettyJSON(s: string): string {
+    if (!s) return s;
+    try {
+      return JSON.stringify(JSON.parse(s), null, 2);
+    } catch {
+      return s;
+    }
+  }
+
+  async function openDetail(k: KMSKey) {
+    detailTab = 'overview';
+    detail = null;
+    try {
+      const d = await api.kmsKeyDetail(k.keyId);
+      detail = d;
+      policyText = prettyJSON(d.policyDocument || '');
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message, false);
+    }
+  }
+
+  function closeDetail() {
+    detail = null;
+  }
+
+  function formatPolicy() {
+    policyText = prettyJSON(policyText);
+  }
+
+  async function savePolicy() {
+    if (!detail || savingPolicy) return;
+    savingPolicy = true;
+    try {
+      await api.putKmsKeyPolicy(detail.keyId, policyText);
+      notify(`Saved key policy for ${detail.keyId}`);
+      await openDetail(detail);
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message, false);
+    } finally {
+      savingPolicy = false;
+    }
+  }
+
+  async function copyText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      notify('Copied to clipboard');
+    } catch {
+      notify('Copy failed', false);
+    }
+  }
+
+  function downloadText(filename: string, text: string) {
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   onMount(load);
 </script>
 
@@ -115,8 +184,10 @@
       </thead>
       <tbody>
         {#each keys as k}
-          <tr>
-            <td class="mono">{k.keyId}</td>
+          <tr class:rowsel={detail?.keyId === k.keyId}>
+            <td class="mono">
+              <button class="linklike" onclick={() => openDetail(k)}>{k.keyId}</button>
+            </td>
             <td>{k.description || '—'}</td>
             <td>{k.keySpec || '—'}</td>
             <td>{k.keyUsage || '—'}</td>
@@ -176,3 +247,287 @@
     </div>
   </div>
 </div>
+
+<!-- detail drawer -->
+{#if detail}
+  <div
+    class="drawer-scrim"
+    role="button"
+    tabindex="0"
+    aria-label="Close details"
+    onclick={closeDetail}
+    onkeydown={(e) => e.key === 'Escape' && closeDetail()}
+  ></div>
+  <aside class="drawer">
+    <div class="drawer-head">
+      <div>
+        <div class="mono drawer-title">{detail.keyId}</div>
+        <div class="muted small">{detail.description || '—'}</div>
+      </div>
+      <button class="btn btn-sm" onclick={closeDetail}>✕</button>
+    </div>
+
+    <div class="kv">
+      <div class="kv-row"><span class="kv-l">ARN</span><span class="kv-v mono small">{detail.arn}</span></div>
+      <div class="kv-row">
+        <span class="kv-l">State</span>
+        <span class="kv-v">
+          {#if detail.deletionDate}
+            <span class="badge warn">pending deletion</span>
+            <span class="muted small">{detail.deletionDate.replace('T', ' ').replace('Z', '')}</span>
+          {:else if detail.enabled}
+            <span class="badge ok">enabled</span>
+          {:else}
+            <span class="badge">disabled</span>
+          {/if}
+          <span class="muted small"> · {detail.keyState}</span>
+        </span>
+      </div>
+      <div class="kv-row"><span class="kv-l">Usage</span><span class="kv-v">{detail.keyUsage}</span></div>
+      <div class="kv-row"><span class="kv-l">Spec</span><span class="kv-v">{detail.keySpec}</span></div>
+      <div class="kv-row">
+        <span class="kv-l">Created</span>
+        <span class="kv-v small">{detail.createdAt.replace('T', ' ').replace('Z', '')}</span>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab" class:active={detailTab === 'overview'} onclick={() => (detailTab = 'overview')}
+        >Overview</button
+      >
+      <button class="tab" class:active={detailTab === 'policy'} onclick={() => (detailTab = 'policy')}
+        >Key policy</button
+      >
+      <button class="tab" class:active={detailTab === 'grants'} onclick={() => (detailTab = 'grants')}
+        >Grants</button
+      >
+      <button class="tab" class:active={detailTab === 'aliases'} onclick={() => (detailTab = 'aliases')}
+        >Aliases</button
+      >
+      {#if detail.publicKeyPem}
+        <button class="tab" class:active={detailTab === 'pubkey'} onclick={() => (detailTab = 'pubkey')}
+          >Public key</button
+        >
+      {/if}
+    </div>
+
+    {#if detailTab === 'overview'}
+      <div class="tab-body">
+        <div class="kv">
+          <div class="kv-row">
+            <span class="kv-l">Encryption</span>
+            <span class="kv-v small">{(detail.encryptionAlgorithms || []).join(', ') || '—'}</span>
+          </div>
+          <div class="kv-row">
+            <span class="kv-l">Signing</span>
+            <span class="kv-v small">{(detail.signingAlgorithms || []).join(', ') || '—'}</span>
+          </div>
+          <div class="kv-row">
+            <span class="kv-l">Aliases</span>
+            <span class="kv-v small">{detail.aliases.length}</span>
+          </div>
+          <div class="kv-row">
+            <span class="kv-l">Grants</span>
+            <span class="kv-v small">{detail.grants.length}</span>
+          </div>
+        </div>
+      </div>
+    {:else if detailTab === 'policy'}
+      <div class="tab-body">
+        <div class="field block">
+          <label for="kpol">Key policy document</label>
+          <textarea id="kpol" class="mono" rows="16" bind:value={policyText}></textarea>
+        </div>
+        <div class="row-act">
+          <button class="btn btn-sm" onclick={formatPolicy}>Format JSON</button>
+          <button class="btn btn-p btn-sm" onclick={savePolicy} disabled={savingPolicy}>
+            {savingPolicy ? 'Saving…' : 'Save policy'}
+          </button>
+        </div>
+      </div>
+    {:else if detailTab === 'grants'}
+      <div class="tab-body">
+        {#if detail.grants.length === 0}
+          <div class="empty">No grants.</div>
+        {:else}
+          {#each detail.grants as g}
+            <div class="kv" style="margin-bottom:0.6rem">
+              <div class="kv-row"><span class="kv-l">Grant ID</span><span class="kv-v mono small">{g.grantId}</span></div>
+              {#if g.name}
+                <div class="kv-row"><span class="kv-l">Name</span><span class="kv-v small">{g.name}</span></div>
+              {/if}
+              <div class="kv-row"><span class="kv-l">Grantee</span><span class="kv-v mono small">{g.granteePrincipal}</span></div>
+              {#if g.retiringPrincipal}
+                <div class="kv-row"><span class="kv-l">Retiring</span><span class="kv-v mono small">{g.retiringPrincipal}</span></div>
+              {/if}
+              <div class="kv-row"><span class="kv-l">Operations</span><span class="kv-v small">{g.operations.join(', ')}</span></div>
+              <div class="kv-row"><span class="kv-l">Created</span><span class="kv-v small">{g.createdAt.replace('T', ' ').replace('Z', '')}</span></div>
+            </div>
+          {/each}
+        {/if}
+      </div>
+    {:else if detailTab === 'aliases'}
+      <div class="tab-body">
+        {#if detail.aliases.length === 0}
+          <div class="empty">No aliases.</div>
+        {:else}
+          <ul class="plain">
+            {#each detail.aliases as a}
+              <li class="mono small">{a}</li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {:else if detailTab === 'pubkey' && detail.publicKeyPem}
+      <div class="tab-body">
+        <pre class="pem">{detail.publicKeyPem}</pre>
+        <div class="row-act">
+          <button class="btn btn-sm" onclick={() => copyText(detail!.publicKeyPem!)}>Copy</button>
+          <button
+            class="btn btn-sm"
+            onclick={() => downloadText(`${detail!.keyId}-public.pem`, detail!.publicKeyPem!)}
+            >Download .pem</button
+          >
+        </div>
+      </div>
+    {/if}
+  </aside>
+{/if}
+
+<style>
+  .linklike {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--c-blue);
+    cursor: pointer;
+    font: inherit;
+  }
+  .rowsel {
+    background: rgba(43, 108, 176, 0.06);
+  }
+  .small {
+    font-size: 0.82rem;
+  }
+  .drawer-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 20, 30, 0.35);
+    z-index: 40;
+    border: none;
+  }
+  .drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100vh;
+    width: min(560px, 92vw);
+    background: var(--c-surface);
+    border-left: 1px solid var(--c-border);
+    box-shadow: -8px 0 24px rgba(15, 20, 30, 0.12);
+    z-index: 41;
+    padding: 1.25rem;
+    overflow-y: auto;
+  }
+  .drawer-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1rem;
+  }
+  .drawer-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+  }
+  .kv {
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.75rem;
+  }
+  .kv-row {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--c-border);
+  }
+  .kv-row:last-child {
+    border-bottom: none;
+  }
+  .kv-l {
+    width: 130px;
+    color: var(--c-muted);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+  }
+  .kv-v {
+    word-break: break-all;
+    flex: 1;
+  }
+  .tabs {
+    display: flex;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--c-border);
+    margin: 1rem 0 0.75rem;
+    flex-wrap: wrap;
+  }
+  .tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 0.5rem 0.7rem;
+    cursor: pointer;
+    color: var(--c-muted);
+    font: inherit;
+  }
+  .tab.active {
+    color: var(--c-text);
+    border-bottom-color: var(--c-blue);
+    font-weight: 600;
+  }
+  .tab-body {
+    padding-top: 0.25rem;
+  }
+  .field.block {
+    display: block;
+    margin-bottom: 0.75rem;
+  }
+  .field.block textarea {
+    width: 100%;
+  }
+  textarea {
+    font: inherit;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid var(--c-border);
+    border-radius: 6px;
+    width: 100%;
+    resize: vertical;
+  }
+  .row-act {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .pem {
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius);
+    padding: 0.6rem;
+    font-size: 0.74rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 320px;
+    overflow-y: auto;
+    margin: 0 0 0.6rem;
+  }
+  ul.plain {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  ul.plain li {
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--c-border);
+  }
+</style>

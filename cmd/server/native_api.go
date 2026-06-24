@@ -561,7 +561,107 @@ func (s *server) handleV1CreateFolder(w http.ResponseWriter, r *http.Request) {
 	writeNativeJSON(w, http.StatusOK, map[string]any{"project": strings.TrimSpace(req.Project), "env": strings.TrimSpace(req.Env), "path": folderPath(folder), "created": true})
 }
 
-// handleV1ListVersions returns the version history of a single item.
+type nativeRenameRequest struct {
+	Project string `json:"project"`
+	Slug    string `json:"slug"`
+	Name    string `json:"name"`
+}
+
+// handleV1RenameProject updates a project's display name.
+func (s *server) handleV1RenameProject(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	var req nativeRenameRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := s.secretsSvc().RenameProject(ctx, strings.TrimSpace(req.Slug), req.Name); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "rename_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.RenameProject", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"slug": strings.TrimSpace(req.Slug), "renamed": true})
+}
+
+// handleV1RenameEnvironment updates an environment's display name.
+func (s *server) handleV1RenameEnvironment(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	var req nativeRenameRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := s.secretsSvc().RenameEnvironment(ctx, strings.TrimSpace(req.Project), strings.TrimSpace(req.Slug), req.Name); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "rename_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.RenameEnvironment", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"project": strings.TrimSpace(req.Project), "slug": strings.TrimSpace(req.Slug), "renamed": true})
+}
+
+// handleV1DeleteProject removes a structure-only project (refuses if it still
+// holds secrets).
+func (s *server) handleV1DeleteProject(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	slug := strings.TrimSpace(r.URL.Query().Get("project"))
+	if err := s.secretsSvc().DeleteProject(ctx, slug); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "delete_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.DeleteProject", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"slug": slug, "deleted": true})
+}
+
+// handleV1DeleteEnvironment removes a structure-only environment (refuses if it
+// still holds secrets).
+func (s *server) handleV1DeleteEnvironment(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	q := r.URL.Query()
+	project := strings.TrimSpace(q.Get("project"))
+	slug := strings.TrimSpace(q.Get("env"))
+	if err := s.secretsSvc().DeleteEnvironment(ctx, project, slug); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "delete_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.DeleteEnvironment", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"project": project, "env": slug, "deleted": true})
+}
+
+// handleV1DeleteFolder removes a structure-only folder (refuses if it still
+// holds secrets).
+func (s *server) handleV1DeleteFolder(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	q := r.URL.Query()
+	project := strings.TrimSpace(q.Get("project"))
+	env := strings.TrimSpace(q.Get("env"))
+	folder, err := normalizeFolder(q.Get("path"))
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := s.secretsSvc().DeleteFolder(ctx, project, env, folder); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "delete_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.DeleteFolder", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"project": project, "env": env, "path": folderPath(folder), "deleted": true})
+}
+
 func (s *server) handleV1ListVersions(w http.ResponseWriter, r *http.Request) {
 	_, ctx, ok := s.nativeSession(w, r, "viewer")
 	if !ok {
