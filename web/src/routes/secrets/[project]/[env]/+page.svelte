@@ -509,6 +509,28 @@
     }
   }
 
+  function bulkForceDelete() {
+    const keys = selectedKeys;
+    if (!keys.length) return;
+    askConfirm({
+      title: `Force delete ${keys.length} item(s) now?`,
+      body: 'This bypasses the recovery window. The values are removed from External Secrets immediately and cannot be restored from the UI.',
+      label: 'Force delete now',
+      action: async () => {
+        try {
+          const res = await api.bulkSecrets({ project, env, path, keys, action: 'delete', force: true });
+          notify(
+            `Force deleted ${res.applied} item(s); ${res.failed.length} failed`,
+            res.failed.length === 0
+          );
+          await loadItems();
+        } catch (e) {
+          err(e);
+        }
+      }
+    });
+  }
+
   $effect(() => {
     // Reload whenever the env route changes.
     void project;
@@ -565,6 +587,7 @@
       <span class="muted">{selectedKeys.length} selected</span>
       <button class="btn btn-sm btn-d" onclick={bulkDelete}>Schedule deletion</button>
       <button class="btn btn-sm" onclick={bulkRestore}>Restore</button>
+      <button class="btn btn-sm btn-d" onclick={bulkForceDelete}>Force delete</button>
     </div>
   {/if}
 
@@ -631,8 +654,10 @@
                 <button class="btn btn-sm" onclick={() => openDetail(it)}>Details</button>
                 {#if it.deletionDate}
                   <button class="btn btn-sm" onclick={() => restore(it)}>Restore</button>
+                  <button class="btn btn-sm btn-d" onclick={() => forceDelete(it)}>Force delete</button>
                 {:else}
                   <button class="btn btn-sm btn-d" onclick={() => scheduleDelete(it)}>Delete</button>
+                  <button class="btn btn-sm btn-d" onclick={() => forceDelete(it)}>Force delete</button>
                 {/if}
               </div>
             </td>
@@ -722,11 +747,23 @@
     </div>
 
     {#if detail.deletionDate}
-      <button
-        class="btn btn-sm"
-        style="margin:0.5rem 0"
-        onclick={() => detailAsItem() && restore(detailAsItem()!)}>Restore secret</button
-      >
+      <div class="rowact" style="margin:0.5rem 0">
+        <button class="btn btn-sm" onclick={() => detailAsItem() && restore(detailAsItem()!)}
+          >Restore secret</button
+        >
+        <button class="btn btn-sm btn-d" onclick={() => detailAsItem() && forceDelete(detailAsItem()!)}
+          >Force delete</button
+        >
+      </div>
+    {:else}
+      <div class="rowact" style="margin:0.5rem 0">
+        <button class="btn btn-sm btn-d" onclick={() => detailAsItem() && scheduleDelete(detailAsItem()!)}
+          >Schedule deletion</button
+        >
+        <button class="btn btn-sm btn-d" onclick={() => detailAsItem() && forceDelete(detailAsItem()!)}
+          >Force delete</button
+        >
+      </div>
     {/if}
 
     <div class="tabs">
