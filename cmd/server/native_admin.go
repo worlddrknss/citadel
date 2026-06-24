@@ -800,3 +800,133 @@ func (s *server) handleV1RevokeCert(w http.ResponseWriter, r *http.Request) {
 	s.recordAudit(ctx, auditEvent{Action: "citadel.RevokeCertificate", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"revoked": true})
 }
+
+type nativeImportCARequest struct {
+	CACertPEM   string `json:"caCertPem"`
+	CAKeyPEM    string `json:"caKeyPem"`
+	Description string `json:"description"`
+}
+
+// handleV1ImportCA imports an externally generated CA certificate and key.
+func (s *server) handleV1ImportCA(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "admin")
+	if !ok {
+		return
+	}
+	var req nativeImportCARequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	bridged := bridgeForm(r, ctx, map[string]string{
+		"ca_cert_pem": req.CACertPEM,
+		"ca_key_pem":  req.CAKeyPEM,
+		"description": req.Description,
+	})
+	caID, err := s.adminImportCA(bridged)
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "import_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.ImportCA", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"caId": caID, "imported": true})
+}
+
+type nativeRenewCertRequest struct {
+	CertID       string `json:"certId"`
+	ValidityDays string `json:"validityDays"`
+}
+
+// handleV1RenewCert re-issues an existing certificate with a fresh validity window.
+func (s *server) handleV1RenewCert(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	var req nativeRenewCertRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	bridged := bridgeForm(r, ctx, map[string]string{
+		"cert_id":       req.CertID,
+		"validity_days": req.ValidityDays,
+	})
+	if err := s.adminRenewCert(bridged); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "renew_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.RenewCertificate", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"renewed": true})
+}
+
+// handleV1GetLESettings returns the configured ACME/Let's Encrypt directory and
+// contact email so the console can pre-populate the settings form.
+func (s *server) handleV1GetLESettings(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "viewer")
+	if !ok {
+		return
+	}
+	directoryURL := s.acmeLEDirectoryURL(ctx)
+	writeNativeJSON(w, http.StatusOK, map[string]any{
+		"environment":  leDirectoryEnvLabel(directoryURL),
+		"directoryUrl": directoryURL,
+		"contactEmail": s.acmeLEContactEmail(ctx),
+	})
+}
+
+type nativeLESettingsRequest struct {
+	Environment  string `json:"environment"`
+	DirectoryURL string `json:"directoryUrl"`
+	ContactEmail string `json:"contactEmail"`
+}
+
+// handleV1SaveLESettings persists the ACME directory selection and contact email.
+func (s *server) handleV1SaveLESettings(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "admin")
+	if !ok {
+		return
+	}
+	var req nativeLESettingsRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	bridged := bridgeForm(r, ctx, map[string]string{
+		"le_environment":   req.Environment,
+		"le_directory_url": req.DirectoryURL,
+		"le_contact_email": req.ContactEmail,
+	})
+	if err := s.adminSaveLESettings(bridged); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "save_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.SaveLESettings", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"saved": true})
+}
+
+type nativeRequestLECertRequest struct {
+	Domains string `json:"domains"`
+}
+
+// handleV1RequestLECert issues a publicly-trusted certificate from Let's Encrypt.
+func (s *server) handleV1RequestLECert(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	var req nativeRequestLECertRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	bridged := bridgeForm(r, ctx, map[string]string{
+		"le_domains": req.Domains,
+	})
+	if err := s.adminRequestLECert(bridged); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "request_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.RequestLetsEncrypt", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"requested": true})
+}

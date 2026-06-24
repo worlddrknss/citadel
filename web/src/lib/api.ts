@@ -508,6 +508,34 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ certId, reason })
     }),
+  importCA: (body: { caCertPem: string; caKeyPem: string; description?: string }) =>
+    req<{ caId: string; imported: boolean }>('/v1/certificates/authorities/import', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  renewCert: (certId: string, validityDays?: string) =>
+    req<{ renewed: boolean }>('/v1/certificates/renew', {
+      method: 'POST',
+      body: JSON.stringify({ certId, validityDays })
+    }),
+  letsEncryptSettings: () =>
+    req<{ environment: string; directoryUrl: string; contactEmail: string }>(
+      '/v1/certificates/letsencrypt/settings'
+    ),
+  saveLetsEncryptSettings: (body: {
+    environment: string;
+    directoryUrl?: string;
+    contactEmail?: string;
+  }) =>
+    req<{ saved: boolean }>('/v1/certificates/letsencrypt/settings', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  requestLetsEncryptCert: (domains: string) =>
+    req<{ requested: boolean }>('/v1/certificates/letsencrypt/request', {
+      method: 'POST',
+      body: JSON.stringify({ domains })
+    }),
   // Public CRL distribution point (served at the server root, outside /app).
   crlUrl: (caId: string) => `/crl/${encodeURIComponent(caId)}`,
 

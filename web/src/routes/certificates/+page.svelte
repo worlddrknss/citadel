@@ -32,6 +32,25 @@
   let sanNames = $state('');
   let issuing = $state(false);
 
+  // Import-CA form
+  let importCertPem = $state('');
+  let importKeyPem = $state('');
+  let importDescription = $state('');
+  let importing = $state(false);
+
+  // Let's Encrypt request + settings
+  let leDomains = $state('');
+  let leRequesting = $state(false);
+  let leEnvironment = $state('staging');
+  let leDirectoryUrl = $state('');
+  let leContactEmail = $state('');
+  let leSavingSettings = $state(false);
+
+  // Renew confirmation
+  let renewCert: Certificate | null = $state(null);
+  let renewValidityDays = $state('365');
+  let renewing = $state(false);
+
   const cas = $derived(certs.filter((c) => c.source === 'pca-ca'));
 
   // CA hierarchy: each CA grouped with the certificates it has issued.
@@ -137,6 +156,96 @@
     confirmCert = c;
   }
 
+  async function importCA() {
+    if (!importCertPem.trim() || !importKeyPem.trim()) {
+      notify('CA certificate and private key are both required', false);
+      return;
+    }
+    importing = true;
+    try {
+      const res = await api.importCA({
+        caCertPem: importCertPem.trim(),
+        caKeyPem: importKeyPem.trim(),
+        description: importDescription.trim()
+      });
+      notify(`Imported CA ${res.caId}`);
+      importCertPem = '';
+      importKeyPem = '';
+      importDescription = '';
+      await load();
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message, false);
+    } finally {
+      importing = false;
+    }
+  }
+
+  function askRenew(c: Certificate) {
+    renewValidityDays = '365';
+    renewCert = c;
+  }
+
+  async function confirmRenew() {
+    if (!renewCert) return;
+    renewing = true;
+    try {
+      await api.renewCert(renewCert.id, renewValidityDays);
+      notify(`Renewed ${renewCert.id}`);
+      renewCert = null;
+      await load();
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message, false);
+    } finally {
+      renewing = false;
+    }
+  }
+
+  async function loadLESettings() {
+    try {
+      const s = await api.letsEncryptSettings();
+      leEnvironment = s.environment || 'staging';
+      leDirectoryUrl = s.directoryUrl || '';
+      leContactEmail = s.contactEmail || '';
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message, false);
+    }
+  }
+
+  async function saveLESettings() {
+    leSavingSettings = true;
+    try {
+      await api.saveLetsEncryptSettings({
+        environment: leEnvironment,
+        directoryUrl: leDirectoryUrl.trim(),
+        contactEmail: leContactEmail.trim()
+      });
+      notify("Let's Encrypt settings saved");
+      await loadLESettings();
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message, false);
+    } finally {
+      leSavingSettings = false;
+    }
+  }
+
+  async function requestLECert() {
+    if (!leDomains.trim()) {
+      notify('at least one domain is required', false);
+      return;
+    }
+    leRequesting = true;
+    try {
+      await api.requestLetsEncryptCert(leDomains.trim());
+      notify("Let's Encrypt certificate issued");
+      leDomains = '';
+      await load();
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message, false);
+    } finally {
+      leRequesting = false;
+    }
+  }
+
   async function confirmRevoke() {
     if (!confirmCert) return;
     revoking = true;
@@ -191,6 +300,7 @@
   }
 
   onMount(load);
+  onMount(loadLESettings);
 </script>
 
 <div class="ph">
@@ -257,6 +367,7 @@
                         <td class="muted">{c.notAfter ? new Date(c.notAfter).toLocaleDateString() : '—'}</td>
                         <td>
                           {#if c.status !== 'REVOKED'}
+                            <button class="btn btn-sm" onclick={() => askRenew(c)}>Renew</button>
                             <button class="btn btn-sm btn-d" onclick={() => askRevoke(c)}>Revoke</button>
                           {/if}
                         </td>
@@ -295,6 +406,7 @@
             <td class="muted">{c.notAfter ? new Date(c.notAfter).toLocaleDateString() : '—'}</td>
             <td>
               {#if c.status !== 'REVOKED'}
+                <button class="btn btn-sm" onclick={() => askRenew(c)}>Renew</button>
                 <button class="btn btn-sm btn-d" onclick={() => askRevoke(c)}>Revoke</button>
               {/if}
             </td>
@@ -406,6 +518,104 @@
     </div>
   </div>
 </div>
+
+<div class="card" style="margin-top:1.25rem">
+  <h3 style="margin-top:0">Import certificate authority</h3>
+  <p class="muted small" style="margin-top:0">
+    Import an externally generated CA certificate and its matching private key so Citadel can issue certificates from it.
+  </p>
+  <div class="field" style="margin-bottom:0.75rem">
+    <label for="imp-desc">Description (optional)</label>
+    <input id="imp-desc" placeholder="Imported Root CA" bind:value={importDescription} />
+  </div>
+  <div class="field" style="margin-bottom:0.75rem">
+    <label for="imp-cert">CA certificate (PEM)</label>
+    <textarea id="imp-cert" class="mono" rows="6" placeholder="-----BEGIN CERTIFICATE-----" bind:value={importCertPem}></textarea>
+  </div>
+  <div class="field" style="margin-bottom:0.75rem">
+    <label for="imp-key">CA private key (PEM)</label>
+    <textarea id="imp-key" class="mono" rows="6" placeholder="-----BEGIN PRIVATE KEY-----" bind:value={importKeyPem}></textarea>
+  </div>
+  <div class="toolbar" style="margin-bottom:0">
+    <div class="field" style="align-self:flex-end">
+      <button class="btn btn-p" onclick={importCA} disabled={importing}>
+        {importing ? 'Importing…' : 'Import CA'}
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:1.25rem">
+  <h3 style="margin-top:0">Let's Encrypt</h3>
+  <p class="muted small" style="margin-top:0">
+    Issue publicly-trusted certificates via ACME (HTTP-01). The challenge endpoint
+    <span class="mono">/.well-known/acme-challenge/</span> must be reachable from the public internet for the chosen domains.
+  </p>
+  <div class="toolbar">
+    <div class="field">
+      <label for="le-env">Environment</label>
+      <select id="le-env" bind:value={leEnvironment}>
+        <option value="staging">Staging</option>
+        <option value="production">Production</option>
+        <option value="custom">Custom</option>
+      </select>
+    </div>
+    {#if leEnvironment === 'custom'}
+      <div class="field" style="flex:1">
+        <label for="le-dir">Directory URL</label>
+        <input id="le-dir" placeholder="https://acme.example.com/directory" bind:value={leDirectoryUrl} />
+      </div>
+    {/if}
+    <div class="field" style="flex:1">
+      <label for="le-email">Contact email</label>
+      <input id="le-email" placeholder="admin@example.com" bind:value={leContactEmail} />
+    </div>
+    <div class="field" style="align-self:flex-end">
+      <button class="btn" onclick={saveLESettings} disabled={leSavingSettings}>
+        {leSavingSettings ? 'Saving…' : 'Save settings'}
+      </button>
+    </div>
+  </div>
+  <div class="toolbar" style="margin-bottom:0">
+    <div class="field" style="flex:1">
+      <label for="le-domains">Domains (comma/space separated)</label>
+      <input id="le-domains" placeholder="example.com www.example.com" bind:value={leDomains} />
+    </div>
+    <div class="field" style="align-self:flex-end">
+      <button class="btn btn-p" onclick={requestLECert} disabled={leRequesting}>
+        {leRequesting ? 'Requesting…' : 'Request certificate'}
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- renew confirmation modal -->
+{#if renewCert}
+  <div
+    class="modal-scrim"
+    role="button"
+    tabindex="0"
+    aria-label="Cancel"
+    onclick={() => (renewCert = null)}
+    onkeydown={(e) => e.key === 'Escape' && (renewCert = null)}
+  ></div>
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Renew certificate">
+    <h3 style="margin-top:0">Renew certificate</h3>
+    <p class="muted small">
+      Re-issues <span class="mono">{renewCert.id}</span> from the same CA using its stored CSR with a fresh validity window and serial number.
+    </p>
+    <div class="field" style="margin-bottom:1rem">
+      <label for="rnv">Validity (days)</label>
+      <input id="rnv" bind:value={renewValidityDays} />
+    </div>
+    <div class="row-act" style="justify-content:flex-end">
+      <button class="btn btn-sm" onclick={() => (renewCert = null)} disabled={renewing}>Cancel</button>
+      <button class="btn btn-sm btn-p" onclick={confirmRenew} disabled={renewing}>
+        {renewing ? 'Renewing…' : 'Renew'}
+      </button>
+    </div>
+  </div>
+{/if}
 
 <!-- revoke confirmation modal -->
 {#if confirmCert}
