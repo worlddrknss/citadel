@@ -1,6 +1,7 @@
 <script lang="ts">
   import '$lib/styles.css';
   import { base } from '$app/paths';
+  import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import { api, type Me } from '$lib/api';
 
@@ -16,6 +17,39 @@
   });
 
   let { children } = $props();
+
+  const nav = [
+    { href: '/', label: '🔑 Secrets', section: 'Services' },
+    { href: '/kms', label: '🗝 KMS', section: 'Services' },
+    { href: '/certificates', label: '📜 Certificates', section: 'Services' },
+    { href: '/audit', label: '📋 Audit', section: 'Services' },
+    { href: '/account', label: '🪪 Account', section: 'Account' },
+    { href: '/admin', label: '⚙️ Master Admin', section: 'Administration' }
+  ];
+
+  const sections = ['Services', 'Account', 'Administration'];
+
+  const currentPath = $derived($page.url.pathname.replace(base, '') || '/');
+
+  function isActive(href: string): boolean {
+    if (href === '/') return currentPath === '/';
+    return currentPath === href || currentPath.startsWith(href + '/');
+  }
+
+  const titles: Record<string, string> = {
+    '/': 'Secrets Management',
+    '/kms': 'Key Management Service',
+    '/certificates': 'Certificate Management',
+    '/audit': 'Audit Log',
+    '/account': 'My Account',
+    '/admin': 'Master Administration'
+  };
+
+  const pageTitle = $derived(
+    titles[currentPath] ??
+      (Object.entries(titles).find(([h]) => h !== '/' && currentPath.startsWith(h))?.[1] ??
+        'Citadel')
+  );
 </script>
 
 {#if authError}
@@ -30,26 +64,20 @@
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">🏰 Citadel</div>
-      <div class="sb-section">
-        <div class="sb-label">Services</div>
-        <a class="sb-link active" href="{base}/">🔑 Secrets</a>
-        <a class="sb-link" href="/secrets">🗝 KMS</a>
-        <a class="sb-link" href="/certificates">📜 Certificates</a>
-        <a class="sb-link" href="/audit">📋 Audit</a>
-      </div>
-      <div class="sb-section">
-        <div class="sb-label">Account</div>
-        <a class="sb-link" href="/account/profile">🪪 Profile</a>
-        <a class="sb-link" href="/account/keys">🔐 Access Keys</a>
-      </div>
-      <div class="sb-section">
-        <div class="sb-label">Administration</div>
-        <a class="sb-link" href="/admin">⚙️ Master Admin</a>
-      </div>
+      {#each sections as section}
+        <div class="sb-section">
+          <div class="sb-label">{section}</div>
+          {#each nav.filter((n) => n.section === section) as n}
+            <a class="sb-link" class:active={isActive(n.href)} href="{base}{n.href === '/' ? '/' : n.href}">
+              {n.label}
+            </a>
+          {/each}
+        </div>
+      {/each}
     </aside>
     <div class="main">
       <header class="topbar">
-        <strong>Secrets Management</strong>
+        <strong>{pageTitle}</strong>
         <span class="user">
           {#if me}
             {me.displayName} · <span class="badge">{me.role}</span>
@@ -64,3 +92,4 @@
     </div>
   </div>
 {/if}
+

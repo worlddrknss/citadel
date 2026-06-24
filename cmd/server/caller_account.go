@@ -70,3 +70,21 @@ func (s *dbStore) secretARNForCtx(ctx context.Context, name string) string {
 	r, _ := s.DeploymentIdentity()
 	return arnFor("secretsmanager", r, s.accountForContext(ctx), "secret:"+name)
 }
+
+// accountForContext returns the caller's account ID when present, otherwise the
+// deployment's global account ID. The in-memory store mirrors the dbStore
+// behaviour so per-account isolation is identical across both backends.
+func (s *inMemoryStore) accountForContext(ctx context.Context) string {
+	if acct, ok := callerAccountFromContext(ctx); ok {
+		return acct
+	}
+	_, a := s.DeploymentIdentity()
+	return a
+}
+
+// secretARNForCtx builds a Secrets Manager ARN for the in-memory store using
+// the caller's account when available, falling back to the deployment account.
+func (s *inMemoryStore) secretARNForCtx(ctx context.Context, name string) string {
+	r, _ := s.DeploymentIdentity()
+	return arnFor("secretsmanager", r, s.accountForContext(ctx), "secret:"+name)
+}

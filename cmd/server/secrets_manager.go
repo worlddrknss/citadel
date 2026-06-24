@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -86,9 +87,9 @@ type getSecretValueRequest struct {
 }
 
 type getSecretValueResponse struct {
-	ARN           string    `json:"ARN"`
-	Name          string    `json:"Name"`
-	VersionID     string    `json:"VersionId"`
+	ARN           string       `json:"ARN"`
+	Name          string       `json:"Name"`
+	VersionID     string       `json:"VersionId"`
 	SecretString  string       `json:"SecretString,omitempty"`
 	SecretBinary  string       `json:"SecretBinary,omitempty"`
 	VersionStages []string     `json:"VersionStages"`
@@ -132,7 +133,7 @@ type deleteSecretRequest struct {
 }
 
 type deleteSecretResponse struct {
-	ARN          string     `json:"ARN"`
+	ARN          string        `json:"ARN"`
 	Name         string        `json:"Name"`
 	DeletionDate *awsTimestamp `json:"DeletionDate,omitempty"`
 }
@@ -157,8 +158,8 @@ type listSecretsResponse struct {
 }
 
 type secretListEntry struct {
-	ARN             string     `json:"ARN"`
-	Name            string     `json:"Name"`
+	ARN             string        `json:"ARN"`
+	Name            string        `json:"Name"`
 	Description     string        `json:"Description,omitempty"`
 	KMSKeyID        string        `json:"KmsKeyId,omitempty"`
 	CreatedDate     awsTimestamp  `json:"CreatedDate"`
@@ -203,9 +204,16 @@ type secretTag struct {
 }
 
 type inMemorySecret struct {
+	account  string
 	metadata secretMetadataRecord
 	versions map[string]inMemorySecretVersion
 	byToken  map[string]string
+}
+
+// memSecretKey builds the composite map key used by the in-memory store so two
+// different accounts can hold a secret of the same name without colliding.
+func memSecretKey(account, name string) string {
+	return account + "\x00" + name
 }
 
 type inMemorySecretVersion struct {
@@ -299,6 +307,26 @@ func (s *server) handleGetSecretValue(w http.ResponseWriter, r *http.Request) {
 	}
 	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
 	if err != nil {
+		// P4 folder-JSON projection: if no leaf secret exists by this exact
+		// name, the SecretId may name a FOLDER. Serve a JSON object of every
+		// key in that folder so AWS-compatible clients (incl. External Secrets
+		// Operator) can consume a whole folder as one secret.
+		if isSecretNotFound(err) {
+			if values, ok, ferr := s.secretsSvc().FolderJSONByName(r.Context(), req.SecretID); ferr == nil && ok {
+				blob, merr := json.Marshal(values)
+				if merr == nil {
+					resp := getSecretValueResponse{
+						ARN:          s.store.secretARNForCtx(r.Context(), req.SecretID),
+						Name:         req.SecretID,
+						SecretString: string(blob),
+						CreatedDate:  awsTimestamp(time.Now().UTC()),
+					}
+					s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+					writeJSON(w, http.StatusOK, resp)
+					return
+				}
+			}
+		}
 		secretError(w, err)
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
@@ -880,8 +908,9 @@ func (s *inMemoryStore) CreateSecret(ctx context.Context, req createSecretReques
 	if s.secrets == nil {
 		s.secrets = map[string]*inMemorySecret{}
 	}
+	account := s.accountForContext(ctx)
 	name := strings.TrimSpace(req.Name)
-	if _, ok := s.secrets[name]; ok {
+	if _, ok := s.secrets[memSecretKey(account, name)]; ok {
 		return secretMetadataRecord{}, secretValueRecord{}, errSecretExists
 	}
 	versionID := req.ClientRequestToken
@@ -894,7 +923,7 @@ func (s *inMemoryStore) CreateSecret(ctx context.Context, req createSecretReques
 	}
 	now := time.Now().UTC()
 	meta := secretMetadataRecord{
-		ARN:               s.secretARNFor(name),
+		ARN:               s.secretARNForCtx(ctx, name),
 		Name:              name,
 		Description:       strings.TrimSpace(req.Description),
 		KMSKeyID:          kmsKeyID,
@@ -905,13 +934,14 @@ func (s *inMemoryStore) CreateSecret(ctx context.Context, req createSecretReques
 		LastChangedDate:   now,
 	}
 	secret := &inMemorySecret{
+		account:  account,
 		metadata: meta,
 		versions: map[string]inMemorySecretVersion{},
 		byToken:  map[string]string{},
 	}
 	secret.versions[versionID] = inMemorySecretVersion{VersionID: versionID, ClientRequestToken: versionID, EncryptedPayloadB64: encryptedPayloadB64, IsBinary: isBinary, CreatedAt: now}
 	secret.byToken[versionID] = versionID
-	s.secrets[name] = secret
+	s.secrets[memSecretKey(account, name)] = secret
 	value, err := buildSecretValueRecord(ctx, s.ResolveByID, meta, secretVersionRow{VersionID: versionID, EncryptedPayloadB64: encryptedPayloadB64, IsBinary: isBinary, CreatedAt: now})
 	if err != nil {
 		return secretMetadataRecord{}, secretValueRecord{}, err
@@ -919,10 +949,10 @@ func (s *inMemoryStore) CreateSecret(ctx context.Context, req createSecretReques
 	return meta, value, nil
 }
 
-func (s *inMemoryStore) DescribeSecret(_ context.Context, secretID string) (secretMetadataRecord, error) {
+func (s *inMemoryStore) DescribeSecret(ctx context.Context, secretID string) (secretMetadataRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	secret, err := s.findSecret(secretID)
+	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
 		return secretMetadataRecord{}, err
 	}
@@ -937,7 +967,7 @@ func (s *inMemoryStore) GetSecretValue(ctx context.Context, secretID, versionID,
 
 // getSecretValueLocked implements GetSecretValue. The caller must hold s.mu.
 func (s *inMemoryStore) getSecretValueLocked(ctx context.Context, secretID, versionID, versionStage string) (secretValueRecord, error) {
-	secret, err := s.findSecret(secretID)
+	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
 		return secretValueRecord{}, err
 	}
@@ -963,7 +993,7 @@ func (s *inMemoryStore) PutSecretValue(ctx context.Context, req putSecretValueRe
 
 // putSecretValueLocked implements PutSecretValue. The caller must hold s.mu.
 func (s *inMemoryStore) putSecretValueLocked(ctx context.Context, req putSecretValueRequest) (secretValueRecord, error) {
-	secret, err := s.findSecret(req.SecretID)
+	secret, err := s.findSecret(ctx, req.SecretID)
 	if err != nil {
 		return secretValueRecord{}, err
 	}
@@ -994,7 +1024,7 @@ func (s *inMemoryStore) putSecretValueLocked(ctx context.Context, req putSecretV
 func (s *inMemoryStore) UpdateSecret(ctx context.Context, req updateSecretRequest) (secretMetadataRecord, *secretValueRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	secret, err := s.findSecret(req.SecretID)
+	secret, err := s.findSecret(ctx, req.SecretID)
 	if err != nil {
 		return secretMetadataRecord{}, nil, err
 	}
@@ -1024,10 +1054,10 @@ func (s *inMemoryStore) UpdateSecret(ctx context.Context, req updateSecretReques
 	return secret.metadata, value, nil
 }
 
-func (s *inMemoryStore) DeleteSecret(_ context.Context, secretID string, recoveryWindowDays int, forceDelete bool) (secretMetadataRecord, error) {
+func (s *inMemoryStore) DeleteSecret(ctx context.Context, secretID string, recoveryWindowDays int, forceDelete bool) (secretMetadataRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	secret, err := s.findSecret(secretID)
+	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
 		return secretMetadataRecord{}, err
 	}
@@ -1040,10 +1070,10 @@ func (s *inMemoryStore) DeleteSecret(_ context.Context, secretID string, recover
 	return secret.metadata, nil
 }
 
-func (s *inMemoryStore) RestoreSecret(_ context.Context, secretID string) (secretMetadataRecord, error) {
+func (s *inMemoryStore) RestoreSecret(ctx context.Context, secretID string) (secretMetadataRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	secret, err := s.findSecret(secretID)
+	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
 		return secretMetadataRecord{}, err
 	}
@@ -1052,34 +1082,42 @@ func (s *inMemoryStore) RestoreSecret(_ context.Context, secretID string) (secre
 	return secret.metadata, nil
 }
 
-func (s *inMemoryStore) ListSecrets(_ context.Context) ([]secretMetadataRecord, error) {
+func (s *inMemoryStore) ListSecrets(ctx context.Context) ([]secretMetadataRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.secrets) == 0 {
 		return nil, nil
 	}
-	names := make([]string, 0, len(s.secrets))
-	for name := range s.secrets {
-		names = append(names, name)
+	account := s.accountForContext(ctx)
+	keys := make([]string, 0, len(s.secrets))
+	for key, secret := range s.secrets {
+		if secret.account != account {
+			continue
+		}
+		keys = append(keys, key)
 	}
-	sort.Strings(names)
-	out := make([]secretMetadataRecord, 0, len(names))
-	for _, name := range names {
-		out = append(out, s.secrets[name].metadata)
+	sort.Strings(keys)
+	out := make([]secretMetadataRecord, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, s.secrets[key].metadata)
 	}
 	return out, nil
 }
 
-func (s *inMemoryStore) findSecret(secretID string) (*inMemorySecret, error) {
+// findSecret resolves a secret within the caller's account by logical name or
+// ARN. Scoping by account ensures one tenant can never resolve another's
+// secret, even when they share the same name.
+func (s *inMemoryStore) findSecret(ctx context.Context, secretID string) (*inMemorySecret, error) {
 	if len(s.secrets) == 0 {
 		return nil, sql.ErrNoRows
 	}
+	account := s.accountForContext(ctx)
 	secretID = strings.TrimSpace(secretID)
-	if secret, ok := s.secrets[secretID]; ok {
+	if secret, ok := s.secrets[memSecretKey(account, secretID)]; ok {
 		return secret, nil
 	}
 	for _, secret := range s.secrets {
-		if secret.metadata.ARN == secretID {
+		if secret.account == account && secret.metadata.ARN == secretID {
 			return secret, nil
 		}
 	}
@@ -1233,6 +1271,12 @@ func normalizeSecretListLimit(limit int) (int, error) {
 		return 0, fmt.Errorf("MaxResults must be between 1 and %d", maxSecretListLimit)
 	}
 	return limit, nil
+}
+
+// isSecretNotFound reports whether err represents a missing secret, used to
+// trigger the P4 folder-JSON projection fallback in GetSecretValue.
+func isSecretNotFound(err error) bool {
+	return classifySecretError(err) == "ResourceNotFoundException"
 }
 
 func classifySecretError(err error) string {

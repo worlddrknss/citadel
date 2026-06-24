@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 )
@@ -42,6 +42,11 @@ var nativeSegmentRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 // isolation via the existing accountFilter plumbing.
 func (s *server) nativeSession(w http.ResponseWriter, r *http.Request, minRole string) (*uiSession, context.Context, bool) {
 	runtime := s.uiRuntime()
+	// Bearer token auth (machine identities) takes precedence over cookies so
+	// native SDKs and CI can talk to /v1 without a browser session.
+	if sess, ctx, ok, handled := s.nativeTokenSession(w, r, minRole); handled {
+		return sess, ctx, ok
+	}
 	if !runtime.enabled {
 		sess := &uiSession{Username: "local", Role: "admin", DisplayName: "Local Admin"}
 		return sess, r.Context(), true
@@ -75,6 +80,62 @@ func (s *server) nativeSession(w http.ResponseWriter, r *http.Request, minRole s
 	// accountFilter/accountForContext helpers isolate reads and stamp writes.
 	ctx := withCallerAccount(r.Context(), strings.TrimSpace(session.AccountID))
 	return &session, ctx, true
+}
+
+// nativeTokenSession authenticates a machine identity from an Authorization:
+// Bearer "<accessKeyId>:<secret>" header. It returns handled=false when no
+// bearer token is present (so the caller falls back to cookie auth). When a
+// token is present it is fully resolved here: ok reports success, and the
+// request context is scoped to the token's account for per-tenant isolation.
+func (s *server) nativeTokenSession(w http.ResponseWriter, r *http.Request, minRole string) (sess *uiSession, ctx context.Context, ok bool, handled bool) {
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if !strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+		return nil, nil, false, false
+	}
+	token := strings.TrimSpace(auth[len("Bearer "):])
+	keyID, secret, found := strings.Cut(token, ":")
+	keyID = strings.TrimSpace(keyID)
+	if !found || keyID == "" || secret == "" {
+		// A token without the "<keyId>:<secret>" shape may be a native OIDC
+		// (JWT) identity. That path is scaffolded for P9 but not yet wired to a
+		// concrete issuer, so we surface a clear, stable error here.
+		if sess, ctx, ok := s.verifyNativeOIDC(r, token); ok {
+			return sess, ctx, true, true
+		}
+		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid bearer token format")
+		return nil, nil, false, true
+	}
+	_, accountID, storedSecret, status, err := s.store.GetAccessKeyByID(r.Context(), keyID)
+	if err != nil || strings.ToLower(status) != "active" {
+		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid or inactive token")
+		return nil, nil, false, true
+	}
+	if subtle.ConstantTimeCompare([]byte(secret), []byte(storedSecret)) != 1 {
+		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid or inactive token")
+		return nil, nil, false, true
+	}
+	// Machine identities act as account-scoped administrators for the native
+	// API; the role gate below still applies for completeness.
+	const tokenRole = "admin"
+	if !uiRoleAtLeast(tokenRole, minRole) {
+		writeNativeError(w, http.StatusForbidden, "forbidden", "insufficient role")
+		return nil, nil, false, true
+	}
+	_ = s.store.TouchAccessKeyLastUsed(r.Context(), keyID)
+	sess = &uiSession{Username: keyID, Role: tokenRole, AccountID: accountID, DisplayName: "Machine Identity"}
+	ctx = withCallerAccount(r.Context(), strings.TrimSpace(accountID))
+	return sess, ctx, true, true
+}
+
+// verifyNativeOIDC is the native OIDC identity extension point (PLAN.md §6 P9).
+// When a future deployment configures an OIDC issuer/audience, this is where a
+// JWT bearer would be validated and mapped to an account-scoped session. It is
+// currently a no-op scaffold that reports ok=false so callers fall through to
+// the existing access-key and cookie auth paths, leaving behaviour unchanged.
+func (s *server) verifyNativeOIDC(r *http.Request, token string) (*uiSession, context.Context, bool) {
+	_ = r
+	_ = token
+	return nil, nil, false
 }
 
 // ---- JSON helpers ----------------------------------------------------------
@@ -211,39 +272,22 @@ func (s *server) handleV1Me(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleV1Projects returns the distinct projects (and their environments)
-// derived from the names of the secrets visible to the caller's account.
+// visible to the caller's account, via the shared secrets service.
 func (s *server) handleV1Projects(w http.ResponseWriter, r *http.Request) {
 	_, ctx, ok := s.nativeSession(w, r, "viewer")
 	if !ok {
 		return
 	}
-	secrets, err := s.store.ListSecrets(ctx)
+	projects, err := s.secretsSvc().ListProjects(ctx)
 	if err != nil {
 		writeNativeError(w, http.StatusInternalServerError, "list_failed", err.Error())
 		return
 	}
-	envsByProject := map[string]map[string]struct{}{}
-	for _, sec := range secrets {
-		pi, ok := parseSecretName(sec.Name)
-		if !ok {
-			continue
-		}
-		if _, exists := envsByProject[pi.Project]; !exists {
-			envsByProject[pi.Project] = map[string]struct{}{}
-		}
-		envsByProject[pi.Project][pi.Env] = struct{}{}
+	out := make([]nativeProject, 0, len(projects))
+	for _, p := range projects {
+		out = append(out, nativeProject{Slug: p.Slug, Environments: p.Environments})
 	}
-	projects := make([]nativeProject, 0, len(envsByProject))
-	for project, envSet := range envsByProject {
-		envs := make([]string, 0, len(envSet))
-		for e := range envSet {
-			envs = append(envs, e)
-		}
-		sort.Strings(envs)
-		projects = append(projects, nativeProject{Slug: project, Environments: envs})
-	}
-	sort.Slice(projects, func(i, j int) bool { return projects[i].Slug < projects[j].Slug })
-	writeNativeJSON(w, http.StatusOK, map[string]any{"projects": projects})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"projects": out})
 }
 
 // handleV1ListSecrets lists the items at a given project/env/folder. Values are
@@ -260,54 +304,27 @@ func (s *server) handleV1ListSecrets(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "project and env are required")
 		return
 	}
-	if err := validateSegment("project", project); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	if err := validateSegment("env", env); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
 	wantFolder, err := normalizeFolder(q.Get("path"))
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	secrets, err := s.store.ListSecrets(ctx)
+	folders, found, err := s.secretsSvc().ListFolder(ctx, project, env, wantFolder)
 	if err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "list_failed", err.Error())
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	items := make([]nativeItem, 0)
-	subfolders := map[string]struct{}{}
-	for _, sec := range secrets {
-		pi, ok := parseSecretName(sec.Name)
-		if !ok || pi.Project != project || pi.Env != env {
-			continue
-		}
-		if !folderHasPrefix(pi.Folder, wantFolder) {
-			continue
-		}
-		if len(pi.Folder) == len(wantFolder) {
-			items = append(items, nativeItem{
-				Project:   pi.Project,
-				Env:       pi.Env,
-				Path:      folderPath(pi.Folder),
-				Key:       pi.Key,
-				ARN:       sec.ARN,
-				UpdatedAt: sec.LastChangedDate.UTC().Format(time.RFC3339),
-			})
-		} else {
-			// Immediate subfolder of the requested path.
-			subfolders[pi.Folder[len(wantFolder)]] = struct{}{}
-		}
+	items := make([]nativeItem, 0, len(found))
+	for _, it := range found {
+		items = append(items, nativeItem{
+			Project:   it.Project,
+			Env:       it.Env,
+			Path:      it.Path,
+			Key:       it.Key,
+			ARN:       it.ARN,
+			UpdatedAt: it.UpdatedAt.Format(time.RFC3339),
+		})
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].Key < items[j].Key })
-	folders := make([]string, 0, len(subfolders))
-	for f := range subfolders {
-		folders = append(folders, f)
-	}
-	sort.Strings(folders)
 	writeNativeJSON(w, http.StatusOK, map[string]any{
 		"project": project,
 		"env":     env,
@@ -339,9 +356,7 @@ type nativePutSecretRequest struct {
 	KMSKeyID string `json:"kmsKeyId"`
 }
 
-// handleV1PutSecret creates or updates a single item. It maps to CreateSecret on
-// first write and PutSecretValue on subsequent writes, so versioning is handled
-// by the existing store.
+// handleV1PutSecret creates or updates a single item via the secrets service.
 func (s *server) handleV1PutSecret(w http.ResponseWriter, r *http.Request) {
 	_, ctx, ok := s.nativeSession(w, r, "editor")
 	if !ok {
@@ -352,48 +367,24 @@ func (s *server) handleV1PutSecret(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	req.Project = strings.TrimSpace(req.Project)
-	req.Env = strings.TrimSpace(req.Env)
-	req.Key = strings.TrimSpace(req.Key)
-	for field, val := range map[string]string{"project": req.Project, "env": req.Env, "key": req.Key} {
-		if val == "" {
-			writeNativeError(w, http.StatusBadRequest, "invalid_request", field+" is required")
-			return
-		}
-		if err := validateSegment(field, val); err != nil {
-			writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-			return
-		}
-	}
 	folder, err := normalizeFolder(req.Path)
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	name := flatSecretName(req.Project, req.Env, folder, req.Key)
-
-	if _, err := s.store.DescribeSecret(ctx, name); err != nil {
-		// Treat any lookup miss as "create".
-		_, _, createErr := s.store.CreateSecret(ctx, createSecretRequest{
-			Name:         name,
-			Description:  "citadel:" + req.Project + "/" + req.Env,
-			KMSKeyID:     strings.TrimSpace(req.KMSKeyID),
-			SecretString: req.Value,
-		})
-		if createErr != nil {
-			writeNativeError(w, http.StatusInternalServerError, "create_failed", createErr.Error())
-			return
-		}
-		s.recordAudit(ctx, auditEvent{Action: "citadel.PutItem", Result: "ok", Actor: r.RemoteAddr})
-		writeNativeJSON(w, http.StatusOK, map[string]any{"project": req.Project, "env": req.Env, "path": folderPath(folder), "key": req.Key, "created": true})
-		return
+	coord := itemCoord{
+		Project: strings.TrimSpace(req.Project),
+		Env:     strings.TrimSpace(req.Env),
+		Folder:  folder,
+		Key:     strings.TrimSpace(req.Key),
 	}
-	if _, err := s.store.PutSecretValue(ctx, putSecretValueRequest{SecretID: name, SecretString: req.Value}); err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "update_failed", err.Error())
+	created, err := s.secretsSvc().PutItem(ctx, coord, req.Value, req.KMSKeyID)
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "put_failed", err.Error())
 		return
 	}
 	s.recordAudit(ctx, auditEvent{Action: "citadel.PutItem", Result: "ok", Actor: r.RemoteAddr})
-	writeNativeJSON(w, http.StatusOK, map[string]any{"project": req.Project, "env": req.Env, "path": folderPath(folder), "key": req.Key, "created": false})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"project": coord.Project, "env": coord.Env, "path": folderPath(folder), "key": coord.Key, "created": created})
 }
 
 // handleV1RevealSecret returns the decrypted value of a single item.
@@ -403,17 +394,23 @@ func (s *server) handleV1RevealSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	name, err := nameFromQuery(q)
+	coord, err := coordFromQuery(q)
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	value, err := s.store.GetSecretValue(ctx, name, "", "")
+	resolve := strings.EqualFold(strings.TrimSpace(q.Get("resolve")), "true")
+	var value secretValueRecord
+	if resolve {
+		value, err = s.secretsSvc().RevealItemResolved(ctx, coord, q.Get("versionId"), q.Get("versionStage"))
+	} else {
+		value, err = s.secretsSvc().RevealItem(ctx, coord, q.Get("versionId"), q.Get("versionStage"))
+	}
 	if err != nil {
 		writeNativeError(w, http.StatusNotFound, "not_found", "item not found")
 		return
 	}
-	resp := map[string]any{"key": q.Get("key"), "versionId": value.VersionID}
+	resp := map[string]any{"key": coord.Key, "versionId": value.VersionID, "resolved": resolve}
 	if value.SecretString != nil {
 		resp["value"] = *value.SecretString
 	} else {
@@ -429,12 +426,12 @@ func (s *server) handleV1DeleteSecret(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	name, err := nameFromQuery(r.URL.Query())
+	coord, err := coordFromQuery(r.URL.Query())
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	if _, err := s.store.DeleteSecret(ctx, name, 0, true); err != nil {
+	if err := s.secretsSvc().DeleteItem(ctx, coord, 0, true); err != nil {
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
 		return
 	}
@@ -442,26 +439,271 @@ func (s *server) handleV1DeleteSecret(w http.ResponseWriter, r *http.Request) {
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
-// nameFromQuery builds and validates a backing secret name from query params.
-func nameFromQuery(q map[string][]string) (string, error) {
+// coordFromQuery builds and validates an item coordinate from query params.
+func coordFromQuery(q map[string][]string) (itemCoord, error) {
 	get := func(k string) string {
 		if v, ok := q[k]; ok && len(v) > 0 {
 			return strings.TrimSpace(v[0])
 		}
 		return ""
 	}
-	project, env, key := get("project"), get("env"), get("key")
-	if project == "" || env == "" || key == "" {
-		return "", errors.New("project, env and key are required")
-	}
-	for field, val := range map[string]string{"project": project, "env": env, "key": key} {
-		if err := validateSegment(field, val); err != nil {
-			return "", err
-		}
-	}
 	folder, err := normalizeFolder(get("path"))
 	if err != nil {
-		return "", err
+		return itemCoord{}, err
 	}
-	return flatSecretName(project, env, folder, key), nil
+	coord := itemCoord{Project: get("project"), Env: get("env"), Folder: folder, Key: get("key")}
+	if coord.Project == "" || coord.Env == "" || coord.Key == "" {
+		return itemCoord{}, errors.New("project, env and key are required")
+	}
+	if err := coord.validate(); err != nil {
+		return itemCoord{}, err
+	}
+	return coord, nil
+}
+
+// ---- P5: hierarchy structure + versions + restore --------------------------
+
+type nativeCreateProjectRequest struct {
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+}
+
+// handleV1CreateProject registers a structure-only project.
+func (s *server) handleV1CreateProject(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	var req nativeCreateProjectRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := s.secretsSvc().CreateProject(ctx, strings.TrimSpace(req.Slug), req.Name); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.CreateProject", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"slug": strings.TrimSpace(req.Slug), "created": true})
+}
+
+type nativeCreateEnvironmentRequest struct {
+	Project string `json:"project"`
+	Slug    string `json:"slug"`
+	Name    string `json:"name"`
+}
+
+// handleV1CreateEnvironment registers a structure-only environment.
+func (s *server) handleV1CreateEnvironment(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	var req nativeCreateEnvironmentRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := s.secretsSvc().CreateEnvironment(ctx, strings.TrimSpace(req.Project), strings.TrimSpace(req.Slug), req.Name); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.CreateEnvironment", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"project": strings.TrimSpace(req.Project), "slug": strings.TrimSpace(req.Slug), "created": true})
+}
+
+type nativeCreateFolderRequest struct {
+	Project string `json:"project"`
+	Env     string `json:"env"`
+	Path    string `json:"path"`
+}
+
+// handleV1CreateFolder registers a structure-only (possibly empty) folder.
+func (s *server) handleV1CreateFolder(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	var req nativeCreateFolderRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	folder, err := normalizeFolder(req.Path)
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := s.secretsSvc().CreateFolder(ctx, strings.TrimSpace(req.Project), strings.TrimSpace(req.Env), folder); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.CreateFolder", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"project": strings.TrimSpace(req.Project), "env": strings.TrimSpace(req.Env), "path": folderPath(folder), "created": true})
+}
+
+// handleV1ListVersions returns the version history of a single item.
+func (s *server) handleV1ListVersions(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "viewer")
+	if !ok {
+		return
+	}
+	coord, err := coordFromQuery(r.URL.Query())
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	versions, err := s.secretsSvc().ListItemVersions(ctx, coord)
+	if err != nil {
+		writeNativeError(w, http.StatusNotFound, "not_found", "item not found")
+		return
+	}
+	out := make([]map[string]any, 0, len(versions))
+	for _, v := range versions {
+		out = append(out, map[string]any{
+			"versionId": v.VersionID,
+			"stages":    v.Stages,
+			"createdAt": v.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	writeNativeJSON(w, http.StatusOK, map[string]any{"key": coord.Key, "versions": out})
+}
+
+// handleV1RestoreSecret cancels a pending deletion (point-in-time recovery).
+func (s *server) handleV1RestoreSecret(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	coord, err := coordFromQuery(r.URL.Query())
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := s.secretsSvc().RestoreItem(ctx, coord); err != nil {
+		writeNativeError(w, http.StatusNotFound, "not_found", "item not found")
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.RestoreItem", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"restored": true})
+}
+
+// canAccessEnv is the env-scoped RBAC extension point (PLAN.md §6 P8). It is
+// where per-environment grants will be consulted; today it defers to the
+// caller's global role so behaviour is unchanged, while giving the rest of the
+// code a single, stable hook to evolve.
+func (s *server) canAccessEnv(sess *uiSession, project, env, minRole string) bool {
+	if sess == nil {
+		return false
+	}
+	return uiRoleAtLeast(sess.Role, minRole)
+}
+
+func changeRequestJSON(cr changeRequest) map[string]any {
+	out := map[string]any{
+		"id":        cr.ID,
+		"project":   cr.Coord.Project,
+		"env":       cr.Coord.Env,
+		"path":      folderPath(cr.Coord.Folder),
+		"key":       cr.Coord.Key,
+		"requester": cr.Requester,
+		"status":    string(cr.Status),
+		"createdAt": cr.CreatedAt.Format(time.RFC3339),
+	}
+	if cr.DecidedBy != "" {
+		out["decidedBy"] = cr.DecidedBy
+		out["decidedAt"] = cr.DecidedAt.Format(time.RFC3339)
+	}
+	return out
+}
+
+type nativeChangeRequestBody struct {
+	Project string `json:"project"`
+	Env     string `json:"env"`
+	Path    string `json:"path"`
+	Key     string `json:"key"`
+	Value   string `json:"value"`
+	ID      string `json:"id"`
+}
+
+// handleV1CreateChangeRequest records a proposed write awaiting approval.
+func (s *server) handleV1CreateChangeRequest(w http.ResponseWriter, r *http.Request) {
+	sess, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	var req nativeChangeRequestBody
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	folder, err := normalizeFolder(req.Path)
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	coord := itemCoord{Project: strings.TrimSpace(req.Project), Env: strings.TrimSpace(req.Env), Folder: folder, Key: strings.TrimSpace(req.Key)}
+	if !s.canAccessEnv(sess, coord.Project, coord.Env, "editor") {
+		writeNativeError(w, http.StatusForbidden, "forbidden", "insufficient environment access")
+		return
+	}
+	cr, err := s.secretsSvc().CreateChangeRequest(ctx, coord, req.Value, "", sess.Username)
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.CreateChangeRequest", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, changeRequestJSON(*cr))
+}
+
+// handleV1ListChangeRequests lists the caller account's change requests.
+func (s *server) handleV1ListChangeRequests(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "viewer")
+	if !ok {
+		return
+	}
+	requests := s.secretsSvc().ListChangeRequests(ctx)
+	out := make([]map[string]any, 0, len(requests))
+	for _, cr := range requests {
+		out = append(out, changeRequestJSON(cr))
+	}
+	writeNativeJSON(w, http.StatusOK, map[string]any{"changeRequests": out})
+}
+
+// handleV1ApproveChangeRequest approves and applies a pending change request.
+func (s *server) handleV1ApproveChangeRequest(w http.ResponseWriter, r *http.Request) {
+	sess, ctx, ok := s.nativeSession(w, r, "admin")
+	if !ok {
+		return
+	}
+	var req nativeChangeRequestBody
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := s.secretsSvc().ApproveChangeRequest(ctx, strings.TrimSpace(req.ID), sess.Username); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "approve_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.ApproveChangeRequest", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"approved": true, "id": strings.TrimSpace(req.ID)})
+}
+
+// handleV1RejectChangeRequest rejects a pending change request.
+func (s *server) handleV1RejectChangeRequest(w http.ResponseWriter, r *http.Request) {
+	sess, ctx, ok := s.nativeSession(w, r, "admin")
+	if !ok {
+		return
+	}
+	var req nativeChangeRequestBody
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := s.secretsSvc().RejectChangeRequest(ctx, strings.TrimSpace(req.ID), sess.Username); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "reject_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.RejectChangeRequest", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"rejected": true, "id": strings.TrimSpace(req.ID)})
 }

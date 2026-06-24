@@ -63,6 +63,42 @@ export interface ListResult {
   items: Item[];
 }
 
+export interface KMSKey {
+  keyId: string;
+  arn: string;
+  description: string;
+  enabled: boolean;
+  keyUsage: string;
+  keySpec: string;
+  createdAt: string;
+  deletionDate?: string;
+}
+
+export interface Certificate {
+  source: string;
+  id: string;
+  subject: string;
+  status: string;
+  notBefore?: string;
+  notAfter?: string;
+}
+
+export interface AuditEvent {
+  id: number;
+  action: string;
+  keyId?: string;
+  result: string;
+  errorType?: string;
+  actor: string;
+  createdAt: string;
+}
+
+export interface ItemVersion {
+  versionId: string;
+  stages: string[];
+  createdAt: string;
+}
+
 const qs = (params: Record<string, string>) =>
   new URLSearchParams(params).toString();
 
@@ -86,5 +122,28 @@ export const api = {
   remove: (project: string, env: string, path: string, key: string) =>
     req<{ deleted: boolean }>(`/v1/secrets?${qs({ project, env, path, key })}`, {
       method: 'DELETE'
-    })
+    }),
+  versions: (project: string, env: string, path: string, key: string) =>
+    req<{ key: string; versions: ItemVersion[] }>(
+      `/v1/secrets/versions?${qs({ project, env, path, key })}`
+    ),
+  createProject: (slug: string, name: string) =>
+    req<{ created: boolean }>('/v1/projects', {
+      method: 'POST',
+      body: JSON.stringify({ slug, name })
+    }),
+  createEnvironment: (project: string, slug: string, name: string) =>
+    req<{ created: boolean }>('/v1/environments', {
+      method: 'POST',
+      body: JSON.stringify({ project, slug, name })
+    }),
+  createFolder: (project: string, env: string, path: string) =>
+    req<{ created: boolean }>('/v1/folders', {
+      method: 'POST',
+      body: JSON.stringify({ project, env, path })
+    }),
+  kmsKeys: () => req<{ keys: KMSKey[] }>('/v1/kms/keys'),
+  certificates: () => req<{ certificates: Certificate[] }>('/v1/certificates'),
+  audit: () => req<{ events: AuditEvent[] }>('/v1/audit')
 };
+

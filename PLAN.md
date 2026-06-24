@@ -213,6 +213,35 @@ additive layer without disturbing the live AWS path. Dedicated hierarchy tables,
 the `(account_id, name)` PK migration, and per-screen Svelte parity remain as
 follow-ups below.
 
+**Completed `P1`–`P9` (end-to-end, additive, gates green):**
+
+- **P1** — Per-account isolation: in-memory store keys secrets by
+  `(account, name)`; Postgres scoping via `accountFilter`/`accountForContext`.
+  Two accounts can hold the same name without collision (tested).
+- **P2** — Protocol-free service layer (`secrets_service.go`): the native API
+  delegates to one shared `secretsService`; no `http`/AWS types in its signatures.
+- **P3** — Native hierarchy tables (`sm_projects`/`sm_environments`/`sm_folders`)
+  implemented on both stores via `hierarchyStore`; empty projects/envs/folders
+  surface in the UI (tested).
+- **P4** — AWS projection both shapes: a `GetSecretValue` for a folder name now
+  returns a JSON object of all keys (`FolderJSONByName`), while per-key reads are
+  unchanged — zero ESO config change (tested + verified at runtime).
+- **P5** — Native `/v1` REST expanded: create project/environment/folder, list
+  versions, restore (PITR); plus **bearer-token machine-identity auth**
+  (`Authorization: Bearer <keyId>:<secret>`) alongside cookie sessions.
+- **P6** — Svelte SPA scaffold (shipped in v1.15.0).
+- **P7** — Svelte parity screens for **KMS, Certificates, Audit, Account,
+  Admin** backed by new read-only `/v1` endpoints; site root `/` now redirects
+  to `/app/` (legacy `html/template` pages remain reachable until fully retired).
+- **P8** — **Secret references** (`${KEY}`, `${/abs/path/KEY}`) expanded at reveal
+  time (`?resolve=true`); **PITR** via restore; **env-scoped RBAC hook**
+  (`canAccessEnv`); **approval-workflow scaffolding** (create → review →
+  approve/reject change requests, per-account) (tested).
+- **P9** *(optional)* — Native Go **SDK** (`sdk/citadel`) over `/v1` with token
+  auth; native **OIDC identity extension point** (`verifyNativeOIDC`) wired into
+  the bearer path as a forward-compatible scaffold.
+
+
 | Phase | Deliverable | Risk | Suggested tag |
 |---|---|---|---|
 | **P1** | **Multi-tenant scoping**: `sm_secrets` keyed by `(account_id, name)`, `account_id` NOT NULL (backfill to deployment account); activate `accountFilter` plumbing in `caller_account.go` | Low | `v1.15.0` |

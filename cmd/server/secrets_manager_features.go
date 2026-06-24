@@ -623,10 +623,10 @@ func (s *dbStore) loadSecretTags(ctx context.Context, secretName string) ([]secr
 	return out, rows.Err()
 }
 
-func (s *inMemoryStore) ListSecretVersionIDs(_ context.Context, secretID string) ([]secretVersionListEntry, error) {
+func (s *inMemoryStore) ListSecretVersionIDs(ctx context.Context, secretID string) ([]secretVersionListEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	secret, err := s.findSecret(secretID)
+	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
 		return nil, err
 	}
@@ -640,10 +640,10 @@ func (s *inMemoryStore) ListSecretVersionIDs(_ context.Context, secretID string)
 	return entries, nil
 }
 
-func (s *inMemoryStore) TagSecret(_ context.Context, secretID string, tags []secretTag) error {
+func (s *inMemoryStore) TagSecret(ctx context.Context, secretID string, tags []secretTag) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	secret, err := s.findSecret(secretID)
+	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
 		return err
 	}
@@ -669,10 +669,10 @@ func (s *inMemoryStore) TagSecret(_ context.Context, secretID string, tags []sec
 	return nil
 }
 
-func (s *inMemoryStore) UntagSecret(_ context.Context, secretID string, tagKeys []string) error {
+func (s *inMemoryStore) UntagSecret(ctx context.Context, secretID string, tagKeys []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	secret, err := s.findSecret(secretID)
+	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
 		return err
 	}
@@ -690,10 +690,10 @@ func (s *inMemoryStore) UntagSecret(_ context.Context, secretID string, tagKeys 
 	return nil
 }
 
-func (s *inMemoryStore) GetSecretResourcePolicy(_ context.Context, secretID string) (string, error) {
+func (s *inMemoryStore) GetSecretResourcePolicy(ctx context.Context, secretID string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	secret, err := s.findSecret(secretID)
+	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
 		return "", err
 	}
@@ -703,10 +703,10 @@ func (s *inMemoryStore) GetSecretResourcePolicy(_ context.Context, secretID stri
 	return secret.metadata.PolicyDocument, nil
 }
 
-func (s *inMemoryStore) PutSecretResourcePolicy(_ context.Context, secretID, policyDocument string) error {
+func (s *inMemoryStore) PutSecretResourcePolicy(ctx context.Context, secretID, policyDocument string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	secret, err := s.findSecret(secretID)
+	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
 		return err
 	}
@@ -717,7 +717,7 @@ func (s *inMemoryStore) PutSecretResourcePolicy(_ context.Context, secretID, pol
 func (s *inMemoryStore) RotateSecret(ctx context.Context, secretID, rotationLambdaARN string, automaticallyAfterDays int, rotateImmediately bool, clientRequestToken string) (secretRotationResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	secret, err := s.findSecret(secretID)
+	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
 		return secretRotationResult{}, err
 	}
@@ -753,10 +753,10 @@ func (s *inMemoryStore) RotateSecret(ctx context.Context, secretID, rotationLamb
 	return secretRotationResult{Metadata: secret.metadata, VersionID: versionID}, nil
 }
 
-func (s *inMemoryStore) CancelRotateSecret(_ context.Context, secretID string) (secretMetadataRecord, error) {
+func (s *inMemoryStore) CancelRotateSecret(ctx context.Context, secretID string) (secretMetadataRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	secret, err := s.findSecret(secretID)
+	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
 		return secretMetadataRecord{}, err
 	}
@@ -768,10 +768,10 @@ func (s *inMemoryStore) CancelRotateSecret(_ context.Context, secretID string) (
 	return secret.metadata, nil
 }
 
-func (s *inMemoryStore) UpdateSecretVersionStage(_ context.Context, secretID, versionStage, moveToVersionID, removeFromVersionID string) (secretMetadataRecord, error) {
+func (s *inMemoryStore) UpdateSecretVersionStage(ctx context.Context, secretID, versionStage, moveToVersionID, removeFromVersionID string) (secretMetadataRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	secret, err := s.findSecret(secretID)
+	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
 		return secretMetadataRecord{}, err
 	}

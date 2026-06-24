@@ -75,6 +75,18 @@ type server struct {
 	// allows trusting a private or test ACME CA (e.g. Pebble). When nil the
 	// default HTTP client (public trust store) is used.
 	acmeHTTPClient *http.Client
+
+	secretsOnce sync.Once
+	secretsSvcV *secretsService
+}
+
+// secretsSvc returns the shared protocol-free secrets service, lazily binding
+// it to the server's store on first use.
+func (s *server) secretsSvc() *secretsService {
+	s.secretsOnce.Do(func() {
+		s.secretsSvcV = newSecretsService(s.store)
+	})
+	return s.secretsSvcV
 }
 
 type keyStore interface {
@@ -100,6 +112,7 @@ type keyStore interface {
 	RetireGrant(ctx context.Context, grantID, grantToken string) error
 	CreateSecret(ctx context.Context, req createSecretRequest) (secretMetadataRecord, secretValueRecord, error)
 	DescribeSecret(ctx context.Context, secretID string) (secretMetadataRecord, error)
+	secretARNForCtx(ctx context.Context, name string) string
 	GetSecretValue(ctx context.Context, secretID, versionID, versionStage string) (secretValueRecord, error)
 	PutSecretValue(ctx context.Context, req putSecretValueRequest) (secretValueRecord, error)
 	UpdateSecret(ctx context.Context, req updateSecretRequest) (secretMetadataRecord, *secretValueRecord, error)
@@ -176,6 +189,7 @@ type inMemoryStore struct {
 	uiAccounts   map[string]struct{}
 	region       string
 	accountID    string
+	hier         map[string]*memProject
 }
 
 type kmsKey struct {
@@ -670,10 +684,22 @@ func main() {
 	// the AWS-compatible secrets store.
 	mux.HandleFunc("GET /v1/me", s.handleV1Me)
 	mux.HandleFunc("GET /v1/projects", s.handleV1Projects)
+	mux.HandleFunc("POST /v1/projects", s.handleV1CreateProject)
+	mux.HandleFunc("POST /v1/environments", s.handleV1CreateEnvironment)
+	mux.HandleFunc("POST /v1/folders", s.handleV1CreateFolder)
 	mux.HandleFunc("GET /v1/secrets", s.handleV1ListSecrets)
 	mux.HandleFunc("POST /v1/secrets", s.handleV1PutSecret)
 	mux.HandleFunc("DELETE /v1/secrets", s.handleV1DeleteSecret)
 	mux.HandleFunc("GET /v1/secrets/value", s.handleV1RevealSecret)
+	mux.HandleFunc("GET /v1/secrets/versions", s.handleV1ListVersions)
+	mux.HandleFunc("POST /v1/secrets/restore", s.handleV1RestoreSecret)
+	mux.HandleFunc("GET /v1/kms/keys", s.handleV1ListKMSKeys)
+	mux.HandleFunc("GET /v1/certificates", s.handleV1ListCertificates)
+	mux.HandleFunc("GET /v1/audit", s.handleV1ListAudit)
+	mux.HandleFunc("GET /v1/change-requests", s.handleV1ListChangeRequests)
+	mux.HandleFunc("POST /v1/change-requests", s.handleV1CreateChangeRequest)
+	mux.HandleFunc("POST /v1/change-requests/approve", s.handleV1ApproveChangeRequest)
+	mux.HandleFunc("POST /v1/change-requests/reject", s.handleV1RejectChangeRequest)
 
 	// Modern Svelte single-page control plane, embedded into the binary.
 	mux.Handle("/app/", http.HandlerFunc(s.handleApp))
@@ -1043,6 +1069,32 @@ CREATE TABLE IF NOT EXISTS sm_secret_version_stages (
 	stage_label TEXT NOT NULL,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	PRIMARY KEY (secret_name, stage_label)
+);
+
+CREATE TABLE IF NOT EXISTS sm_projects (
+	account_id CHAR(12) NOT NULL DEFAULT '000000000000',
+	slug TEXT NOT NULL,
+	name TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	PRIMARY KEY (account_id, slug)
+);
+
+CREATE TABLE IF NOT EXISTS sm_environments (
+	account_id CHAR(12) NOT NULL DEFAULT '000000000000',
+	project_slug TEXT NOT NULL,
+	slug TEXT NOT NULL,
+	name TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	PRIMARY KEY (account_id, project_slug, slug)
+);
+
+CREATE TABLE IF NOT EXISTS sm_folders (
+	account_id CHAR(12) NOT NULL DEFAULT '000000000000',
+	project_slug TEXT NOT NULL,
+	env_slug TEXT NOT NULL,
+	folder_path TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	PRIMARY KEY (account_id, project_slug, env_slug, folder_path)
 );
 
 CREATE TABLE IF NOT EXISTS ui_users (
