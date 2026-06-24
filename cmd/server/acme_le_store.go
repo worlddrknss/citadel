@@ -41,6 +41,71 @@ type acmeLECertificate struct {
 	UpdatedAt time.Time
 }
 
+// acmeLEOrder is an in-flight ACME order awaiting manual DNS-01 validation. It
+// persists the order URL (and owning account) between the "begin" request that
+// returns the TXT records to publish and the "complete" request that finalizes
+// issuance once the operator has added them at their DNS provider.
+type acmeLEOrder struct {
+	OrderID      string
+	OrderURL     string
+	DirectoryURL string
+	Domains      string
+	Status       string
+	CreatedAt    time.Time
+	ExpiresAt    time.Time
+}
+
+// CreateACMELEOrder persists a pending manual DNS-01 order scoped to the caller.
+func (s *dbStore) CreateACMELEOrder(ctx context.Context, order acmeLEOrder) error {
+	if order.OrderID == "" {
+		order.OrderID = randomHex(12)
+	}
+	if order.Status == "" {
+		order.Status = "pending"
+	}
+	const q = `
+INSERT INTO acme_le_orders (
+	order_id, order_url, directory_url, domains, status, account_id, created_at, expires_at
+) VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW() + INTERVAL '7 days')
+`
+	if _, err := s.db.ExecContext(ctx, q,
+		order.OrderID, order.OrderURL, order.DirectoryURL, order.Domains, order.Status,
+		s.accountForContext(ctx),
+	); err != nil {
+		return fmt.Errorf("insert acme order: %w", err)
+	}
+	return nil
+}
+
+// GetACMELEOrder loads a pending order owned by the caller's account.
+func (s *dbStore) GetACMELEOrder(ctx context.Context, orderID string) (acmeLEOrder, error) {
+	const q = `
+SELECT order_id, order_url, directory_url, domains, status, created_at, expires_at
+FROM acme_le_orders
+WHERE order_id = $1 AND account_id = $2
+`
+	var o acmeLEOrder
+	err := s.db.QueryRowContext(ctx, q, orderID, s.accountForContext(ctx)).Scan(
+		&o.OrderID, &o.OrderURL, &o.DirectoryURL, &o.Domains, &o.Status, &o.CreatedAt, &o.ExpiresAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return acmeLEOrder{}, fmt.Errorf("acme order not found")
+		}
+		return acmeLEOrder{}, fmt.Errorf("query acme order: %w", err)
+	}
+	return o, nil
+}
+
+// DeleteACMELEOrder removes a pending order owned by the caller's account.
+func (s *dbStore) DeleteACMELEOrder(ctx context.Context, orderID string) error {
+	const q = `DELETE FROM acme_le_orders WHERE order_id = $1 AND account_id = $2`
+	if _, err := s.db.ExecContext(ctx, q, orderID, s.accountForContext(ctx)); err != nil {
+		return fmt.Errorf("delete acme order: %w", err)
+	}
+	return nil
+}
+
 // GetACMELEAccount loads the ACME account for a directory URL. It returns
 // sql.ErrNoRows-wrapped error semantics via a not-found message when absent.
 func (s *dbStore) GetACMELEAccount(ctx context.Context, directoryURL string) (acmeLEAccount, error) {
@@ -211,4 +276,16 @@ func (s *inMemoryStore) GetACMELECertificate(_ context.Context, _ string) (acmeL
 
 func (s *inMemoryStore) ListACMELECertificates(_ context.Context) ([]acmeLECertificate, error) {
 	return nil, errUnsupported
+}
+
+func (s *inMemoryStore) CreateACMELEOrder(_ context.Context, _ acmeLEOrder) error {
+	return errUnsupported
+}
+
+func (s *inMemoryStore) GetACMELEOrder(_ context.Context, _ string) (acmeLEOrder, error) {
+	return acmeLEOrder{}, errUnsupported
+}
+
+func (s *inMemoryStore) DeleteACMELEOrder(_ context.Context, _ string) error {
+	return errUnsupported
 }

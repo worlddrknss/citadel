@@ -40,11 +40,15 @@
 
   // Let's Encrypt request + settings
   let leDomains = $state('');
-  let leRequesting = $state(false);
   let leEnvironment = $state('staging');
   let leDirectoryUrl = $state('');
   let leContactEmail = $state('');
   let leSavingSettings = $state(false);
+  // Manual DNS-01 two-phase order state
+  let leOrderId = $state('');
+  let leDnsRecords: { domain: string; name: string; value: string }[] = $state([]);
+  let leBeginning = $state(false);
+  let leCompleting = $state(false);
 
   // Renew confirmation
   let renewCert: Certificate | null = $state(null);
@@ -233,17 +237,39 @@
       notify('at least one domain is required', false);
       return;
     }
-    leRequesting = true;
+    leBeginning = true;
     try {
-      await api.requestLetsEncryptCert(leDomains.trim());
+      const res = await api.beginLetsEncryptDns(leDomains.trim());
+      leOrderId = res.orderId;
+      leDnsRecords = res.records;
+      notify('DNS challenge created — publish the TXT records below, then complete');
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message, false);
+    } finally {
+      leBeginning = false;
+    }
+  }
+
+  async function completeLECert() {
+    if (!leOrderId) return;
+    leCompleting = true;
+    try {
+      await api.completeLetsEncryptDns(leOrderId);
       notify("Let's Encrypt certificate issued");
       leDomains = '';
+      leOrderId = '';
+      leDnsRecords = [];
       await load();
     } catch (e) {
       if (e instanceof ApiError) notify(e.message, false);
     } finally {
-      leRequesting = false;
+      leCompleting = false;
     }
+  }
+
+  function cancelLECert() {
+    leOrderId = '';
+    leDnsRecords = [];
   }
 
   async function confirmRevoke() {
@@ -548,8 +574,9 @@
 <div class="card" style="margin-top:1.25rem">
   <h3 style="margin-top:0">Let's Encrypt</h3>
   <p class="muted small" style="margin-top:0">
-    Issue publicly-trusted certificates via ACME (HTTP-01). The challenge endpoint
-    <span class="mono">/.well-known/acme-challenge/</span> must be reachable from the public internet for the chosen domains.
+    Issue publicly-trusted certificates via ACME using manual DNS-01 validation. Begin an order, publish the
+    returned <span class="mono">TXT</span> records at your DNS provider, then complete it. DNS-01 supports
+    wildcard certificates (<span class="mono">*.example.com</span>) and needs no inbound connectivity.
   </p>
   <div class="toolbar">
     <div class="field">
@@ -578,15 +605,58 @@
   </div>
   <div class="toolbar" style="margin-bottom:0">
     <div class="field" style="flex:1">
-      <label for="le-domains">Domains (comma/space separated)</label>
-      <input id="le-domains" placeholder="example.com www.example.com" bind:value={leDomains} />
+      <label for="le-domains">Domains (comma/space separated, wildcards allowed)</label>
+      <input
+        id="le-domains"
+        placeholder="example.com *.example.com"
+        bind:value={leDomains}
+        disabled={!!leOrderId}
+      />
     </div>
     <div class="field" style="align-self:flex-end">
-      <button class="btn btn-p" onclick={requestLECert} disabled={leRequesting}>
-        {leRequesting ? 'Requesting…' : 'Request certificate'}
+      <button class="btn btn-p" onclick={requestLECert} disabled={leBeginning || !!leOrderId}>
+        {leBeginning ? 'Starting…' : 'Begin DNS challenge'}
       </button>
     </div>
   </div>
+
+  {#if leOrderId}
+    <div class="le-challenge">
+      <p class="muted small">
+        Add the following <span class="mono">TXT</span> record{leDnsRecords.length > 1 ? 's' : ''} at your DNS
+        provider, wait for propagation, then click <strong>Complete issuance</strong>. Validation may take a
+        few minutes after the records go live.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Record name</th>
+            <th>Type</th>
+            <th>Value</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each leDnsRecords as rec}
+            <tr>
+              <td class="mono small">{rec.name}</td>
+              <td><span class="badge">TXT</span></td>
+              <td class="mono small" style="word-break:break-all">{rec.value}</td>
+              <td>
+                <button class="btn btn-sm" onclick={() => copyText(rec.value)}>Copy</button>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+      <div class="row-act" style="justify-content:flex-end;margin-top:0.75rem">
+        <button class="btn btn-sm" onclick={cancelLECert} disabled={leCompleting}>Cancel</button>
+        <button class="btn btn-sm btn-p" onclick={completeLECert} disabled={leCompleting}>
+          {leCompleting ? 'Completing…' : 'Complete issuance'}
+        </button>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <!-- renew confirmation modal -->

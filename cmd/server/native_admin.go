@@ -930,3 +930,61 @@ func (s *server) handleV1RequestLECert(w http.ResponseWriter, r *http.Request) {
 	s.recordAudit(ctx, auditEvent{Action: "citadel.RequestLetsEncrypt", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"requested": true})
 }
+
+type nativeBeginLEDNSRequest struct {
+	Domains string `json:"domains"`
+}
+
+// handleV1BeginLEDNSOrder starts a manual DNS-01 Let's Encrypt order and returns
+// the TXT records the operator must publish at their DNS provider.
+func (s *server) handleV1BeginLEDNSOrder(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	var req nativeBeginLEDNSRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	orderID, records, err := s.beginLEDNSOrder(ctx, []string{req.Domains})
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "begin_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.BeginLetsEncryptDNS", Result: "ok", Actor: r.RemoteAddr})
+	recs := make([]map[string]any, 0, len(records))
+	for _, rec := range records {
+		recs = append(recs, map[string]any{"domain": rec.Domain, "name": rec.Name, "value": rec.Value})
+	}
+	writeNativeJSON(w, http.StatusOK, map[string]any{"orderId": orderID, "records": recs})
+}
+
+type nativeCompleteLEDNSRequest struct {
+	OrderID string `json:"orderId"`
+}
+
+// handleV1CompleteLEDNSOrder validates the published DNS-01 records and
+// finalizes issuance for a previously-begun manual order.
+func (s *server) handleV1CompleteLEDNSOrder(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	var req nativeCompleteLEDNSRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if strings.TrimSpace(req.OrderID) == "" {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "orderId is required")
+		return
+	}
+	cert, err := s.completeLEDNSOrder(ctx, strings.TrimSpace(req.OrderID))
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "complete_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.CompleteLetsEncryptDNS", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"certId": cert.CertID, "domains": cert.Domains, "issued": true})
+}

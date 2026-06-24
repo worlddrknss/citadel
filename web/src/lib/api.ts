@@ -536,6 +536,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ domains })
     }),
+  beginLetsEncryptDns: (domains: string) =>
+    req<{ orderId: string; records: { domain: string; name: string; value: string }[] }>(
+      '/v1/certificates/letsencrypt/dns/begin',
+      {
+        method: 'POST',
+        body: JSON.stringify({ domains })
+      }
+    ),
+  completeLetsEncryptDns: (orderId: string) =>
+    req<{ certId: string; domains: string; issued: boolean }>(
+      '/v1/certificates/letsencrypt/dns/complete',
+      {
+        method: 'POST',
+        body: JSON.stringify({ orderId })
+      }
+    ),
   // Public CRL distribution point (served at the server root, outside /app).
   crlUrl: (caId: string) => `/crl/${encodeURIComponent(caId)}`,
 

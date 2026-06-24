@@ -165,6 +165,9 @@ type keyStore interface {
 	CreateACMELECertificate(ctx context.Context, cert acmeLECertificate) error
 	GetACMELECertificate(ctx context.Context, certID string) (acmeLECertificate, error)
 	ListACMELECertificates(ctx context.Context) ([]acmeLECertificate, error)
+	CreateACMELEOrder(ctx context.Context, order acmeLEOrder) error
+	GetACMELEOrder(ctx context.Context, orderID string) (acmeLEOrder, error)
+	DeleteACMELEOrder(ctx context.Context, orderID string) error
 }
 
 type dbStore struct {
@@ -727,6 +730,8 @@ func main() {
 	mux.HandleFunc("GET /v1/certificates/letsencrypt/settings", s.handleV1GetLESettings)
 	mux.HandleFunc("POST /v1/certificates/letsencrypt/settings", s.handleV1SaveLESettings)
 	mux.HandleFunc("POST /v1/certificates/letsencrypt/request", s.handleV1RequestLECert)
+	mux.HandleFunc("POST /v1/certificates/letsencrypt/dns/begin", s.handleV1BeginLEDNSOrder)
+	mux.HandleFunc("POST /v1/certificates/letsencrypt/dns/complete", s.handleV1CompleteLEDNSOrder)
 	mux.HandleFunc("GET /v1/audit", s.handleV1ListAudit)
 	mux.HandleFunc("GET /v1/change-requests", s.handleV1ListChangeRequests)
 	mux.HandleFunc("POST /v1/change-requests", s.handleV1CreateChangeRequest)
@@ -1419,6 +1424,21 @@ CREATE TABLE IF NOT EXISTS acme_le_certificates (
 	not_after TIMESTAMPTZ NOT NULL,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Pending manual DNS-01 orders. Persists the in-flight ACME order URL between
+-- the "begin" call (which returns the TXT records to publish) and the
+-- "complete" call (which validates and finalizes once the operator has added
+-- them). Scoped per account; rows are short-lived and removed on completion.
+CREATE TABLE IF NOT EXISTS acme_le_orders (
+	order_id TEXT PRIMARY KEY,
+	order_url TEXT NOT NULL,
+	directory_url TEXT NOT NULL DEFAULT '',
+	domains TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'pending',
+	account_id CHAR(12),
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '7 days'
 );
 
 -- Per-account isolation: tag every resource with the owning account's 12-digit

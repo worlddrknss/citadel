@@ -277,6 +277,14 @@ func (s *server) issueLetsEncryptCertificate(ctx context.Context, domains []stri
 		return acmeLECertificate{}, fmt.Errorf("wait for order to be ready: %w", err)
 	}
 
+	return s.finalizeAndStoreLECert(ctx, client, orderURL, order.FinalizeURL, domains, directoryURL)
+}
+
+// finalizeAndStoreLECert generates the leaf key pair and CSR, finalizes the ACME
+// order, and persists the issued certificate (with its wrapped private key). It
+// is shared by the HTTP-01 and manual DNS-01 issuance paths once all of an
+// order's authorizations are valid.
+func (s *server) finalizeAndStoreLECert(ctx context.Context, client *acme.Client, orderURL, finalizeURL string, domains []string, directoryURL string) (acmeLECertificate, error) {
 	// Generate the leaf key pair and CSR.
 	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -290,7 +298,7 @@ func (s *server) issueLetsEncryptCertificate(ctx context.Context, domains []stri
 		return acmeLECertificate{}, fmt.Errorf("create csr: %w", err)
 	}
 
-	derChain, err := finalizeOrderCert(ctx, client, orderURL, order.FinalizeURL, csrDER)
+	derChain, err := finalizeOrderCert(ctx, client, orderURL, finalizeURL, csrDER)
 	if err != nil {
 		return acmeLECertificate{}, err
 	}
@@ -329,6 +337,150 @@ func (s *server) issueLetsEncryptCertificate(ctx context.Context, domains []stri
 	if err := s.store.CreateACMELECertificate(ctx, cert); err != nil {
 		return acmeLECertificate{}, fmt.Errorf("store certificate: %w", err)
 	}
+	return cert, nil
+}
+
+// dnsChallengeRecord describes a TXT record an operator must publish at their
+// DNS provider to satisfy a manual DNS-01 challenge.
+type dnsChallengeRecord struct {
+	Domain string `json:"domain"`
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+}
+
+// beginLEDNSOrder creates an ACME order for the given domains and returns the
+// DNS-01 TXT records the operator must publish, persisting the order so it can
+// be completed later. It does not contact the operator's DNS provider; the
+// caller publishes the records out of band.
+func (s *server) beginLEDNSOrder(ctx context.Context, domains []string) (string, []dnsChallengeRecord, error) {
+	domains = normalizeDomains(domains)
+	if len(domains) == 0 {
+		return "", nil, fmt.Errorf("at least one domain is required")
+	}
+
+	directoryURL := s.acmeLEDirectoryURL(ctx)
+	contactEmail := s.acmeLEContactEmail(ctx)
+
+	cctx, cancel := context.WithTimeout(ctx, acmeOrderTimeout)
+	defer cancel()
+
+	client, err := s.loadOrCreateACMEClient(cctx, directoryURL, contactEmail)
+	if err != nil {
+		return "", nil, err
+	}
+
+	order, err := client.AuthorizeOrder(cctx, acme.DomainIDs(domains...))
+	if err != nil {
+		return "", nil, fmt.Errorf("create order: %w", err)
+	}
+
+	var records []dnsChallengeRecord
+	for _, authzURL := range order.AuthzURLs {
+		authz, aErr := client.GetAuthorization(cctx, authzURL)
+		if aErr != nil {
+			return "", nil, fmt.Errorf("get authorization: %w", aErr)
+		}
+		if authz.Status == acme.StatusValid {
+			continue
+		}
+
+		var chal *acme.Challenge
+		for _, c := range authz.Challenges {
+			if c.Type == "dns-01" {
+				chal = c
+				break
+			}
+		}
+		if chal == nil {
+			return "", nil, fmt.Errorf("no dns-01 challenge offered for %s", authz.Identifier.Value)
+		}
+
+		value, vErr := client.DNS01ChallengeRecord(chal.Token)
+		if vErr != nil {
+			return "", nil, fmt.Errorf("compute dns-01 record: %w", vErr)
+		}
+		records = append(records, dnsChallengeRecord{
+			Domain: authz.Identifier.Value,
+			Name:   "_acme-challenge." + strings.TrimPrefix(authz.Identifier.Value, "*."),
+			Value:  value,
+		})
+	}
+
+	orderRec := acmeLEOrder{
+		OrderID:      randomHex(12),
+		OrderURL:     order.URI,
+		DirectoryURL: directoryURL,
+		Domains:      strings.Join(domains, ","),
+		Status:       "pending",
+	}
+	if err := s.store.CreateACMELEOrder(ctx, orderRec); err != nil {
+		return "", nil, fmt.Errorf("persist order: %w", err)
+	}
+	return orderRec.OrderID, records, nil
+}
+
+// completeLEDNSOrder accepts the DNS-01 challenges for a previously-begun order,
+// waits for validation, and finalizes issuance. The operator must have already
+// published the TXT records returned by beginLEDNSOrder.
+func (s *server) completeLEDNSOrder(ctx context.Context, orderID string) (acmeLECertificate, error) {
+	orderRec, err := s.store.GetACMELEOrder(ctx, orderID)
+	if err != nil {
+		return acmeLECertificate{}, err
+	}
+	domains := normalizeDomains([]string{orderRec.Domains})
+	directoryURL := orderRec.DirectoryURL
+	contactEmail := s.acmeLEContactEmail(ctx)
+
+	cctx, cancel := context.WithTimeout(ctx, acmeOrderTimeout)
+	defer cancel()
+
+	client, err := s.loadOrCreateACMEClient(cctx, directoryURL, contactEmail)
+	if err != nil {
+		return acmeLECertificate{}, err
+	}
+
+	order, err := client.GetOrder(cctx, orderRec.OrderURL)
+	if err != nil {
+		return acmeLECertificate{}, fmt.Errorf("get order: %w", err)
+	}
+
+	for _, authzURL := range order.AuthzURLs {
+		authz, aErr := client.GetAuthorization(cctx, authzURL)
+		if aErr != nil {
+			return acmeLECertificate{}, fmt.Errorf("get authorization: %w", aErr)
+		}
+		if authz.Status == acme.StatusValid {
+			continue
+		}
+
+		var chal *acme.Challenge
+		for _, c := range authz.Challenges {
+			if c.Type == "dns-01" {
+				chal = c
+				break
+			}
+		}
+		if chal == nil {
+			return acmeLECertificate{}, fmt.Errorf("no dns-01 challenge for %s", authz.Identifier.Value)
+		}
+
+		if _, err := client.Accept(cctx, chal); err != nil {
+			return acmeLECertificate{}, fmt.Errorf("accept challenge: %w", err)
+		}
+		if _, err := client.WaitAuthorization(cctx, authzURL); err != nil {
+			return acmeLECertificate{}, fmt.Errorf("authorization failed for %s (check the TXT records are published and propagated): %w", authz.Identifier.Value, err)
+		}
+	}
+
+	if _, err := client.WaitOrder(cctx, orderRec.OrderURL); err != nil {
+		return acmeLECertificate{}, fmt.Errorf("wait for order to be ready: %w", err)
+	}
+
+	cert, err := s.finalizeAndStoreLECert(cctx, client, orderRec.OrderURL, order.FinalizeURL, domains, directoryURL)
+	if err != nil {
+		return acmeLECertificate{}, err
+	}
+	_ = s.store.DeleteACMELEOrder(cctx, orderID)
 	return cert, nil
 }
 
