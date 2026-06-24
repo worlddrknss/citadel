@@ -93,6 +93,7 @@ type keyStore interface {
 	ResolveByID(ctx context.Context, keyID string) (kmsKey, error)
 	ResolveDefault(ctx context.Context) (kmsKey, error)
 	EnsureBootstrap(ctx context.Context, k kmsKey) error
+	EnsureAccountDefaultKey(ctx context.Context, accountID string) (kmsKey, error)
 	DeploymentIdentity() (region, accountID string)
 	CreateKey(ctx context.Context, description, keyUsage, keySpec string) (kmsKey, error)
 	ImportSigningKey(ctx context.Context, description string, privPKCS8DER, pubPKIXDER []byte, keySpec string) (kmsKey, error)
@@ -205,6 +206,10 @@ type kmsKey struct {
 	DeletionDate *time.Time
 	KeyUsage     string
 	KeySpec      string
+	// Managed marks an immutable, system-provisioned key (an account's default
+	// key reached via alias/default). Managed keys cannot be disabled, deleted,
+	// or re-aliased.
+	Managed bool
 }
 
 type kmsAlias struct {
@@ -638,6 +643,13 @@ func main() {
 
 	if err := maybeBootstrapFromLegacy(context.Background(), cfg, store); err != nil {
 		log.Fatalf("failed to bootstrap key material: %v", err)
+	}
+
+	// Provision the immutable per-account default key (alias/default) for every
+	// known account. Idempotent; best-effort so a transient failure does not
+	// block startup (ResolveDefault still falls back to legacy resolution).
+	if err := ensureManagedDefaultKeys(context.Background(), store); err != nil {
+		log.Printf("warning: failed to ensure per-account default keys: %v", err)
 	}
 
 	// Merge admin-console users from the database (RBAC tied into the DB) with
@@ -1321,6 +1333,8 @@ ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS key_nonce_b64 TEXT NOT NULL DEFAUL
 ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS public_key_b64 TEXT NOT NULL DEFAULT '';
 ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS key_usage TEXT NOT NULL DEFAULT 'ENCRYPT_DECRYPT';
 ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS key_spec TEXT NOT NULL DEFAULT 'SYMMETRIC_DEFAULT';
+-- managed marks an immutable, system-provisioned default key (alias/default).
+ALTER TABLE kms_keys ADD COLUMN IF NOT EXISTS managed BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS pca_certificate_authorities (
 	ca_id TEXT PRIMARY KEY,
@@ -1429,6 +1443,25 @@ BEGIN
 	UPDATE pca_certificate_authorities SET account_id = root_acct WHERE account_id IS NULL;
 	UPDATE pca_certificates SET account_id = root_acct WHERE account_id IS NULL;
 	UPDATE acme_le_certificates SET account_id = root_acct WHERE account_id IS NULL;
+END $$;
+
+-- Aliases are scoped per account: the same alias name (e.g. alias/default) may
+-- exist once per account. Promote the kms_aliases primary key from a global
+-- alias_name to the composite (account_id, alias_name). Runs after the backfill
+-- above so account_id is fully populated and can be made NOT NULL.
+DO $$
+BEGIN
+	IF EXISTS (
+		SELECT 1 FROM information_schema.table_constraints
+		WHERE table_name = 'kms_aliases' AND constraint_type = 'PRIMARY KEY' AND constraint_name = 'kms_aliases_pkey'
+	) AND NOT EXISTS (
+		SELECT 1 FROM information_schema.key_column_usage
+		WHERE table_name = 'kms_aliases' AND constraint_name = 'kms_aliases_pkey' AND column_name = 'account_id'
+	) THEN
+		ALTER TABLE kms_aliases DROP CONSTRAINT kms_aliases_pkey;
+		ALTER TABLE kms_aliases ALTER COLUMN account_id SET NOT NULL;
+		ALTER TABLE kms_aliases ADD PRIMARY KEY (account_id, alias_name);
+	END IF;
 END $$;
 `
 	if _, err := db.ExecContext(ctx, ddl); err != nil {
@@ -1978,6 +2011,11 @@ func (s *server) handleCreateAlias(w http.ResponseWriter, r *http.Request) {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "AliasName and TargetKeyId are required")
 		return
 	}
+	if req.AliasName == managedDefaultAlias {
+		writeAWSJSONError(w, http.StatusBadRequest, "UnsupportedOperationException", "alias/default is reserved for the account's managed default key")
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
+		return
+	}
 	key, err := s.store.ResolveByID(r.Context(), req.TargetKeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "target key not found or alias exists")
@@ -2007,6 +2045,11 @@ func (s *server) handleUpdateAlias(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AliasName == "" || req.TargetKeyID == "" {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "AliasName and TargetKeyId are required")
+		return
+	}
+	if req.AliasName == managedDefaultAlias {
+		writeAWSJSONError(w, http.StatusBadRequest, "UnsupportedOperationException", "alias/default is immutable and cannot be re-pointed")
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
 		return
 	}
 	key, err := s.store.ResolveByID(r.Context(), req.TargetKeyID)
@@ -2092,6 +2135,11 @@ func (s *server) handleSetKeyEnabled(w http.ResponseWriter, r *http.Request, ena
 		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
 		return
 	}
+	if !enabled && key.Managed {
+		writeAWSJSONError(w, http.StatusBadRequest, "UnsupportedOperationException", "the account default key cannot be disabled")
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
+		return
+	}
 	if err := s.store.SetKeyEnabled(r.Context(), req.KeyID, enabled); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
 		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
@@ -2128,6 +2176,11 @@ func (s *server) handleScheduleKeyDeletion(w http.ResponseWriter, r *http.Reques
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:ScheduleKeyDeletion"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
 		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		return
+	}
+	if key.Managed {
+		writeAWSJSONError(w, http.StatusBadRequest, "UnsupportedOperationException", "the account default key cannot be scheduled for deletion")
+		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
 		return
 	}
 	deletionDate, err := s.store.ScheduleKeyDeletion(r.Context(), req.KeyID, req.PendingWindowInDays)
@@ -2377,13 +2430,13 @@ func (s *server) recordAudit(ctx context.Context, event auditEvent) {
 func (s *dbStore) ResolveByID(ctx context.Context, keyID string) (kmsKey, error) {
 	if strings.HasPrefix(keyID, "alias/") {
 		var target string
-		if err := s.db.QueryRowContext(ctx, `SELECT target_key_id FROM kms_aliases WHERE alias_name = $1`, keyID).Scan(&target); err != nil {
+		if err := s.db.QueryRowContext(ctx, `SELECT target_key_id FROM kms_aliases WHERE alias_name = $1 AND account_id = $2`, keyID, s.accountForContext(ctx)).Scan(&target); err != nil {
 			return kmsKey{}, err
 		}
 		keyID = target
 	}
 	const q = `
-	SELECT id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at
+	SELECT id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at, managed
 FROM kms_keys
 WHERE id = $1
 `
@@ -2403,7 +2456,7 @@ WHERE id = $1
 		keySpec      string
 		deletionDate sql.NullTime
 	)
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &publicB64, &keyUsage, &keySpec, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt)
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &publicB64, &keyUsage, &keySpec, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt, &k.Managed)
 	if err != nil {
 		return kmsKey{}, err
 	}
@@ -2432,13 +2485,27 @@ WHERE id = $1
 }
 
 func (s *dbStore) ResolveDefault(ctx context.Context) (kmsKey, error) {
+	// Per-account immutable default: each account's alias/default points at its
+	// managed default key. This is the authoritative resolution path.
+	var aliasTarget string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT target_key_id FROM kms_aliases WHERE alias_name = $1 AND account_id = $2`,
+		managedDefaultAlias, s.accountForContext(ctx)).Scan(&aliasTarget)
+	if err == nil {
+		return s.ResolveByID(ctx, aliasTarget)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return kmsKey{}, err
+	}
+
+	// Legacy fallback for deployments not yet migrated to per-account defaults.
 	const keyBySetting = `
 SELECT setting_value
 FROM kms_settings
 WHERE setting_key = 'default_key_id'
 `
 	var keyID string
-	err := s.db.QueryRowContext(ctx, keyBySetting).Scan(&keyID)
+	err = s.db.QueryRowContext(ctx, keyBySetting).Scan(&keyID)
 	if err == nil {
 		return s.ResolveByID(ctx, keyID)
 	}
@@ -2446,14 +2513,17 @@ WHERE setting_key = 'default_key_id'
 		return kmsKey{}, err
 	}
 
-	const fallback = `
+	fallback := `
 SELECT id
 FROM kms_keys
-WHERE enabled = TRUE
-ORDER BY created_at ASC
-LIMIT 1
-`
-	err = s.db.QueryRowContext(ctx, fallback).Scan(&keyID)
+WHERE enabled = TRUE`
+	var args []any
+	if cond, extra := accountFilter(ctx, "account_id", 1); cond != "" {
+		fallback += "\nAND " + cond
+		args = append(args, extra...)
+	}
+	fallback += "\nORDER BY created_at ASC\nLIMIT 1"
+	err = s.db.QueryRowContext(ctx, fallback, args...).Scan(&keyID)
 	if err != nil {
 		return kmsKey{}, err
 	}
@@ -2552,7 +2622,7 @@ VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11)
 
 func (s *dbStore) ListKeys(ctx context.Context) ([]kmsKey, error) {
 	q := `
-	SELECT id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at
+	SELECT id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at, managed
 FROM kms_keys`
 	cond, args := accountFilter(ctx, "account_id", 1)
 	if cond != "" {
@@ -2577,7 +2647,7 @@ FROM kms_keys`
 			keySpec      string
 			deletionDate sql.NullTime
 		)
-		if err := rows.Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &publicB64, &keyUsage, &keySpec, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt); err != nil {
+		if err := rows.Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &publicB64, &keyUsage, &keySpec, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt, &k.Managed); err != nil {
 			return nil, err
 		}
 		if deletionDate.Valid {
@@ -2661,6 +2731,9 @@ VALUES ($1, $2, $3)
 }
 
 func (s *dbStore) UpdateAlias(ctx context.Context, aliasName, keyID string) error {
+	if aliasName == managedDefaultAlias {
+		return errImmutableManagedKey
+	}
 	const q = `
 UPDATE kms_aliases
 SET target_key_id = $2, updated_at = NOW()
@@ -2681,6 +2754,9 @@ WHERE alias_name = $1
 }
 
 func (s *dbStore) DeleteAlias(ctx context.Context, aliasName string) error {
+	if aliasName == managedDefaultAlias {
+		return errImmutableManagedKey
+	}
 	cond, args := accountFilter(ctx, "account_id", 2)
 	q := `DELETE FROM kms_aliases WHERE alias_name = $1`
 	if cond != "" {
@@ -2726,6 +2802,13 @@ FROM kms_aliases`
 }
 
 func (s *dbStore) SetKeyEnabled(ctx context.Context, keyID string, enabled bool) error {
+	if !enabled {
+		if managed, err := s.keyManaged(ctx, keyID); err != nil {
+			return err
+		} else if managed {
+			return errImmutableManagedKey
+		}
+	}
 	const q = `UPDATE kms_keys SET enabled = $2, updated_at = NOW() WHERE id = $1`
 	res, err := s.db.ExecContext(ctx, q, keyID, enabled)
 	if err != nil {
@@ -2742,6 +2825,11 @@ func (s *dbStore) SetKeyEnabled(ctx context.Context, keyID string, enabled bool)
 }
 
 func (s *dbStore) ScheduleKeyDeletion(ctx context.Context, keyID string, windowDays int) (time.Time, error) {
+	if managed, err := s.keyManaged(ctx, keyID); err != nil {
+		return time.Time{}, err
+	} else if managed {
+		return time.Time{}, errImmutableManagedKey
+	}
 	deletionDate := time.Now().UTC().Add(time.Duration(windowDays) * 24 * time.Hour)
 	const q = `UPDATE kms_keys SET deletion_date = $2, updated_at = NOW() WHERE id = $1`
 	res, err := s.db.ExecContext(ctx, q, keyID, deletionDate)
@@ -2775,6 +2863,11 @@ func (s *dbStore) CancelKeyDeletion(ctx context.Context, keyID string) error {
 }
 
 func (s *dbStore) ForceDeleteKey(ctx context.Context, keyID string) error {
+	if managed, err := s.keyManaged(ctx, keyID); err != nil {
+		return err
+	} else if managed {
+		return errImmutableManagedKey
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -2955,6 +3048,10 @@ func (s *inMemoryStore) ResolveDefault(_ context.Context) (kmsKey, error) {
 
 func (s *inMemoryStore) EnsureBootstrap(_ context.Context, _ kmsKey) error {
 	return nil
+}
+
+func (s *inMemoryStore) EnsureAccountDefaultKey(_ context.Context, _ string) (kmsKey, error) {
+	return kmsKey{}, errUnsupported
 }
 
 func (s *inMemoryStore) CreateKey(_ context.Context, _ string, _ string, _ string) (kmsKey, error) {

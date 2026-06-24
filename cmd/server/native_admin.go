@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -597,6 +598,12 @@ func (s *server) handleV1CreateAccount(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
+	}
+	// Provision the account's immutable default key (alias/default). Best-effort:
+	// a failure here is logged but does not fail account creation, and the
+	// startup backfill will retry on the next restart.
+	if _, err := s.store.EnsureAccountDefaultKey(ctx, accountID); err != nil {
+		log.Printf("warning: failed to provision default key for account %s: %v", accountID, err)
 	}
 	s.recordAudit(ctx, auditEvent{Action: "citadel.CreateAccount", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"accountId": accountID, "created": true})
