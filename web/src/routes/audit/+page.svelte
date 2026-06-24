@@ -7,6 +7,9 @@
   let error = $state('');
   let filter = $state('');
 
+  const pageSize = 25;
+  let pageNum = $state(1);
+
   const shown = $derived(
     filter
       ? events.filter((e) =>
@@ -16,6 +19,16 @@
         )
       : events
   );
+
+  const pageCount = $derived(Math.max(1, Math.ceil(shown.length / pageSize)));
+  const clampedPage = $derived(Math.min(pageNum, pageCount));
+  const paged = $derived(shown.slice((clampedPage - 1) * pageSize, clampedPage * pageSize));
+  const rangeStart = $derived(shown.length === 0 ? 0 : (clampedPage - 1) * pageSize + 1);
+  const rangeEnd = $derived(Math.min(clampedPage * pageSize, shown.length));
+
+  function resetPage() {
+    pageNum = 1;
+  }
 
   onMount(async () => {
     try {
@@ -32,7 +45,7 @@
   <h2>Audit Log</h2>
   <p class="muted">Tamper-evident, hash-chained record of every KMS, Secrets, and certificate action.</p>
 
-  <input placeholder="Filter by action, actor, key…" bind:value={filter} style="width: 320px;" />
+  <input placeholder="Filter by action, actor, key…" bind:value={filter} oninput={resetPage} style="width: 320px;" />
 
   {#if loading}
     <p class="muted">Loading…</p>
@@ -52,7 +65,7 @@
         </tr>
       </thead>
       <tbody>
-        {#each shown as e}
+        {#each paged as e}
           <tr>
             <td>{new Date(e.createdAt).toLocaleString()}</td>
             <td class="mono">{e.action}</td>
@@ -65,5 +78,35 @@
         {/each}
       </tbody>
     </table>
+
+    <div class="pager">
+      <span class="muted small">Showing {rangeStart}–{rangeEnd} of {shown.length}</span>
+      <div class="pager-act">
+        <button class="btn btn-sm" disabled={clampedPage <= 1} onclick={() => (pageNum = 1)}>« First</button>
+        <button class="btn btn-sm" disabled={clampedPage <= 1} onclick={() => (pageNum = clampedPage - 1)}>‹ Prev</button>
+        <span class="small">Page {clampedPage} of {pageCount}</span>
+        <button class="btn btn-sm" disabled={clampedPage >= pageCount} onclick={() => (pageNum = clampedPage + 1)}>Next ›</button>
+        <button class="btn btn-sm" disabled={clampedPage >= pageCount} onclick={() => (pageNum = pageCount)}>Last »</button>
+      </div>
+    </div>
   {/if}
 </div>
+
+<style>
+  .pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-top: 1rem;
+    flex-wrap: wrap;
+  }
+  .pager-act {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .small {
+    font-size: 0.82rem;
+  }
+</style>
