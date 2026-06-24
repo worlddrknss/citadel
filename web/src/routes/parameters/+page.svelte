@@ -5,7 +5,6 @@
     ApiError,
     type Parameter,
     type ParameterType,
-    type ParameterTier,
     type ParameterHistoryEntry,
     type ParameterTag,
     type KMSKey
@@ -24,11 +23,11 @@
   // Reveal cache: parameter name -> decrypted value.
   let revealed: Record<string, string> = $state({});
 
-  // New-parameter form.
+  // New-parameter form (shown in a modal).
+  let createOpen = $state(false);
   let newName = $state('');
   let newType: ParameterType = $state('String');
   let newValue = $state('');
-  let newTier: ParameterTier = $state('Standard');
   let newKms = $state('');
   let newDescription = $state('');
   let overwrite = $state(false);
@@ -123,6 +122,16 @@
     }
   }
 
+  function openCreate() {
+    newName = '';
+    newType = 'String';
+    newValue = '';
+    newKms = '';
+    newDescription = '';
+    overwrite = false;
+    createOpen = true;
+  }
+
   async function addParameter() {
     const rel = newName.trim();
     if (!rel) {
@@ -136,11 +145,11 @@
         type: newType,
         value: newValue,
         kmsKeyId: newType === 'SecureString' ? newKms || undefined : undefined,
-        tier: newTier,
         description: newDescription.trim() || undefined,
         overwrite
       });
       notify(`Saved ${fullName}`);
+      createOpen = false;
       newName = '';
       newValue = '';
       newDescription = '';
@@ -292,109 +301,60 @@
   {/each}
 </div>
 
-<div class="grid">
-  <div class="card">
-    <h3 style="margin-top:0">Parameters</h3>
-    {#if loading}
-      <div class="empty">Loading…</div>
-    {:else if subfolders.length === 0 && currentParams.length === 0}
-      <div class="empty">No parameters at this path.</div>
-    {:else}
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Type</th>
-            <th>Tier</th>
-            <th>Version</th>
-            <th>Value</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each subfolders as f}
-            <tr>
-              <td>
-                <button class="link-btn" onclick={() => openFolder(f)}>📁 {f}/</button>
-              </td>
-              <td class="muted" colspan="5">folder</td>
-            </tr>
-          {/each}
-          {#each currentParams as p}
-            <tr>
-              <td class="mono">{leaf(p.name)}</td>
-              <td><span class="badge">{p.type}</span></td>
-              <td class="muted">{p.tier}</td>
-              <td class="muted">v{p.version}</td>
-              <td class="mono">
-                {#if revealed[p.name] !== undefined}
-                  <code>{revealed[p.name]}</code>
-                  <button class="btn btn-sm" onclick={() => hide(p.name)}>Hide</button>
-                {:else}
-                  <button class="btn btn-sm" onclick={() => reveal(p)}>Reveal</button>
-                {/if}
-              </td>
-              <td style="white-space:nowrap">
-                <button class="btn btn-sm" onclick={() => openDetail(p)}>Details</button>
-                <button class="btn btn-sm btn-d" onclick={() => askDelete(p)}>Delete</button>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {/if}
+<div class="card">
+  <div class="toolbar" style="margin-bottom:0; align-items:center">
+    <h3 style="margin:0; flex:1">Parameters</h3>
+    <button class="btn btn-p" onclick={openCreate}>+ Parameter</button>
   </div>
+</div>
 
-  <div class="card">
-    <h3 style="margin-top:0">Add parameter</h3>
-    <p class="muted" style="margin-top:0">Created under <code>{prefix}</code></p>
-    <div class="field">
-      <label for="np-name">Name</label>
-      <input id="np-name" class="mono" placeholder="db/password" bind:value={newName} />
-    </div>
-    <div class="field">
-      <label for="np-type">Type</label>
-      <select id="np-type" bind:value={newType}>
-        <option value="String">String</option>
-        <option value="StringList">StringList</option>
-        <option value="SecureString">SecureString</option>
-      </select>
-    </div>
-    {#if newType === 'SecureString'}
-      <div class="field">
-        <label for="np-kms">KMS key (defaults to account default)</label>
-        <select id="np-kms" bind:value={newKms}>
-          <option value="">Default key</option>
-          {#each kmsKeys as k}
-            <option value={k.keyId}>{kmsLabel(k)}</option>
-          {/each}
-        </select>
-      </div>
-    {/if}
-    <div class="field">
-      <label for="np-value">Value</label>
-      {#if newType === 'StringList'}
-        <input id="np-value" class="mono" placeholder="a,b,c" bind:value={newValue} />
-      {:else}
-        <input id="np-value" class="mono" bind:value={newValue} />
-      {/if}
-    </div>
-    <div class="field">
-      <label for="np-tier">Tier</label>
-      <select id="np-tier" bind:value={newTier}>
-        <option value="Standard">Standard</option>
-        <option value="Advanced">Advanced</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="np-desc">Description</label>
-      <input id="np-desc" bind:value={newDescription} />
-    </div>
-    <label class="check">
-      <input type="checkbox" bind:checked={overwrite} /> Overwrite if it already exists
-    </label>
-    <button class="btn btn-p" style="margin-top:0.75rem" onclick={addParameter}>Save parameter</button>
-  </div>
+<div class="card" style="margin-top:1.25rem">
+  {#if loading}
+    <div class="empty">Loading…</div>
+  {:else if subfolders.length === 0 && currentParams.length === 0}
+    <div class="empty">No parameters at this path.</div>
+  {:else}
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Version</th>
+          <th>Value</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {#each subfolders as f}
+          <tr>
+            <td>
+              <button class="link-btn" onclick={() => openFolder(f)}>📁 {f}/</button>
+            </td>
+            <td class="muted" colspan="4">folder</td>
+          </tr>
+        {/each}
+        {#each currentParams as p}
+          <tr>
+            <td class="mono">{leaf(p.name)}</td>
+            <td><span class="badge">{p.type}</span></td>
+            <td class="muted">v{p.version}</td>
+            <td class="mono">
+              {#if revealed[p.name] !== undefined}
+                <code>{revealed[p.name]}</code>
+                <button class="btn btn-sm" onclick={() => hide(p.name)}>Hide</button>
+              {:else}
+                <button class="btn btn-sm" onclick={() => reveal(p)}>Reveal</button>
+              {/if}
+            </td>
+            <td style="white-space:nowrap">
+              <button class="btn btn-sm" onclick={() => openDetail(p)}>Details</button>
+              <button class="btn btn-sm btn-d" onclick={() => askDelete(p)}>Delete</button>
+            </td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  {/if}
 </div>
 
 {#if detail}
@@ -403,7 +363,7 @@
     <div class="drawer-head">
       <div>
         <div class="mono" style="font-weight:600">{detail.name}</div>
-        <div class="muted">{detail.type} · {detail.tier} · v{detail.version}</div>
+        <div class="muted">{detail.type} · v{detail.version}</div>
       </div>
       <button class="btn" onclick={closeDetail}>Close</button>
     </div>
@@ -491,20 +451,59 @@
   </div>
 {/if}
 
+{#if createOpen}
+  <div class="modal-back" role="presentation" onclick={() => (createOpen = false)}></div>
+  <div class="modal modal-lg">
+    <h3 style="margin-top:0">Add parameter</h3>
+    <p class="muted" style="margin-top:0">Created under <code>{prefix}</code></p>
+    <div class="field">
+      <label for="np-name">Name</label>
+      <input id="np-name" class="mono" placeholder="db/password" bind:value={newName} />
+    </div>
+    <div class="field">
+      <label for="np-type">Type</label>
+      <select id="np-type" bind:value={newType}>
+        <option value="String">String</option>
+        <option value="StringList">StringList</option>
+        <option value="SecureString">SecureString</option>
+      </select>
+    </div>
+    {#if newType === 'SecureString'}
+      <div class="field">
+        <label for="np-kms">KMS key (defaults to account default)</label>
+        <select id="np-kms" bind:value={newKms}>
+          <option value="">Default key</option>
+          {#each kmsKeys as k}
+            <option value={k.keyId}>{kmsLabel(k)}</option>
+          {/each}
+        </select>
+      </div>
+    {/if}
+    <div class="field">
+      <label for="np-value">Value</label>
+      {#if newType === 'StringList'}
+        <input id="np-value" class="mono" placeholder="a,b,c" bind:value={newValue} />
+      {:else}
+        <input id="np-value" class="mono" bind:value={newValue} />
+      {/if}
+    </div>
+    <div class="field">
+      <label for="np-desc">Description</label>
+      <input id="np-desc" bind:value={newDescription} />
+    </div>
+    <label class="check">
+      <input type="checkbox" bind:checked={overwrite} /> Overwrite if it already exists
+    </label>
+    <div class="modal-actions">
+      <button class="btn" onclick={() => (createOpen = false)}>Cancel</button>
+      <button class="btn btn-p" onclick={addParameter}>Save parameter</button>
+    </div>
+  </div>
+{/if}
+
 <style>
   .crumbs {
     margin-bottom: 0.85rem;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: 2fr 1fr;
-    gap: 1.25rem;
-    align-items: start;
-  }
-  @media (max-width: 900px) {
-    .grid {
-      grid-template-columns: 1fr;
-    }
   }
   .field :global(input),
   .field :global(select) {
@@ -587,6 +586,11 @@
     padding: 1.25rem;
     width: min(440px, 92vw);
     z-index: 42;
+  }
+  .modal-lg {
+    width: min(520px, 92vw);
+    max-height: 90vh;
+    overflow-y: auto;
   }
   .modal-actions {
     display: flex;
