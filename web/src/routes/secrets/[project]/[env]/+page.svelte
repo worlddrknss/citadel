@@ -121,6 +121,17 @@
     }
   }
 
+  // Prefer the first alias (without the "alias/" prefix) for display so users
+  // pick keys by their friendly name; fall back to the key ID.
+  function kmsLabel(k: KMSKey): string {
+    const alias = (k.aliases ?? []).find((a) => a && a.trim());
+    if (alias) {
+      const name = alias.replace(/^alias\//, '');
+      return `${name} · ${k.keyId.slice(0, 8)}…`;
+    }
+    return k.keyId;
+  }
+
   async function loadItems() {
     if (!project || !env) {
       items = [];
@@ -691,7 +702,7 @@
       <select id="nkms" bind:value={newKms}>
         <option value="">default</option>
         {#each kmsKeys as k}
-          <option value={k.keyId}>{k.keyId}</option>
+          <option value={k.keyId}>{kmsLabel(k)}</option>
         {/each}
       </select>
     </div>
@@ -806,7 +817,7 @@
           <select id="mk" bind:value={metaKms}>
             <option value="">default</option>
             {#each kmsKeys as k}
-              <option value={k.keyId}>{k.keyId}</option>
+              <option value={k.keyId}>{kmsLabel(k)}</option>
             {/each}
           </select>
         </div>

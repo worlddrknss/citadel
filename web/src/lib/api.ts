@@ -104,6 +104,7 @@ export interface KMSKey {
   keySpec: string;
   createdAt: string;
   deletionDate?: string;
+  aliases: string[];
 }
 
 export interface KMSGrant {

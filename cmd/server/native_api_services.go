@@ -13,14 +13,15 @@ import (
 // html/template pages.
 
 type nativeKMSKey struct {
-	KeyID        string `json:"keyId"`
-	ARN          string `json:"arn"`
-	Description  string `json:"description"`
-	Enabled      bool   `json:"enabled"`
-	KeyUsage     string `json:"keyUsage"`
-	KeySpec      string `json:"keySpec"`
-	CreatedAt    string `json:"createdAt"`
-	DeletionDate string `json:"deletionDate,omitempty"`
+	KeyID        string   `json:"keyId"`
+	ARN          string   `json:"arn"`
+	Description  string   `json:"description"`
+	Enabled      bool     `json:"enabled"`
+	KeyUsage     string   `json:"keyUsage"`
+	KeySpec      string   `json:"keySpec"`
+	CreatedAt    string   `json:"createdAt"`
+	DeletionDate string   `json:"deletionDate,omitempty"`
+	Aliases      []string `json:"aliases"`
 }
 
 // handleV1ListKMSKeys returns the KMS keys visible to the caller.
@@ -34,6 +35,12 @@ func (s *server) handleV1ListKMSKeys(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusInternalServerError, "list_failed", err.Error())
 		return
 	}
+	aliasesByKey := map[string][]string{}
+	if aliases, aerr := s.store.ListAliases(ctx); aerr == nil {
+		for _, a := range aliases {
+			aliasesByKey[a.TargetKeyID] = append(aliasesByKey[a.TargetKeyID], a.AliasName)
+		}
+	}
 	out := make([]nativeKMSKey, 0, len(keys))
 	for _, k := range keys {
 		nk := nativeKMSKey{
@@ -44,6 +51,10 @@ func (s *server) handleV1ListKMSKeys(w http.ResponseWriter, r *http.Request) {
 			KeyUsage:    k.KeyUsage,
 			KeySpec:     k.KeySpec,
 			CreatedAt:   k.CreatedAt.UTC().Format(time.RFC3339),
+			Aliases:     aliasesByKey[k.ID],
+		}
+		if nk.Aliases == nil {
+			nk.Aliases = []string{}
 		}
 		if k.DeletionDate != nil {
 			nk.DeletionDate = k.DeletionDate.UTC().Format(time.RFC3339)
