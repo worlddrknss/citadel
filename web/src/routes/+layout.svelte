@@ -60,6 +60,7 @@
   const nav = [
     { href: '/', label: 'Dashboard', icon: 'dashboard', section: 'Services' },
     { href: '/secrets', label: 'Secrets', icon: 'secrets', section: 'Services' },
+    { href: '/parameters', label: 'Parameter Store', icon: 'parameters', section: 'Services' },
     { href: '/kms', label: 'KMS', icon: 'kms', section: 'Services' },
     { href: '/certificates', label: 'Certificates', icon: 'certificate', section: 'Services' },
     { href: '/audit', label: 'Audit', icon: 'audit', section: 'Services' },
@@ -74,12 +75,14 @@
   function isActive(href: string): boolean {
     if (href === '/') return currentPath === '/';
     if (href === '/secrets') return currentPath.startsWith('/secrets');
+    if (href === '/parameters') return currentPath.startsWith('/parameters');
     return currentPath === href || currentPath.startsWith(href + '/');
   }
 
   const titles: Record<string, string> = {
     '/': 'Dashboard',
     '/secrets': 'Secrets Management',
+    '/parameters': 'Parameter Store',
     '/kms': 'Key Management Service',
     '/certificates': 'Certificate Management',
     '/audit': 'Audit Log',
@@ -100,6 +103,8 @@
       <rect x="3" y="3" width="7" height="9" rx="1" /><rect x="14" y="3" width="7" height="5" rx="1" /><rect x="14" y="12" width="7" height="9" rx="1" /><rect x="3" y="16" width="7" height="5" rx="1" />
     {:else if name === 'secrets'}
       <rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /><circle cx="12" cy="15.5" r="1.4" />
+    {:else if name === 'parameters'}
+      <path d="M4 7h16" /><path d="M4 12h16" /><path d="M4 17h16" /><circle cx="8" cy="7" r="1.6" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none" /><circle cx="10" cy="17" r="1.6" fill="currentColor" stroke="none" />
     {:else if name === 'kms'}
       <circle cx="8" cy="12" r="4" /><path d="M11.5 12H21" /><path d="M17 12v3" /><path d="M20 12v2.5" />
     {:else if name === 'certificate'}

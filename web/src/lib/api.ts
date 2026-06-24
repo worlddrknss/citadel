@@ -202,6 +202,34 @@ export interface Account {
   createdAt: string;
 }
 
+export type ParameterType = 'String' | 'StringList' | 'SecureString';
+export type ParameterTier = 'Standard' | 'Advanced';
+
+export interface Parameter {
+  name: string;
+  type: ParameterType;
+  tier: ParameterTier;
+  version: number;
+  description: string;
+  kmsKeyId?: string;
+  lastModified: string;
+}
+
+export interface ParameterHistoryEntry {
+  name: string;
+  version: number;
+  type: ParameterType;
+  tier: ParameterTier;
+  description: string;
+  labels: string[];
+  modifiedAt: string;
+}
+
+export interface ParameterTag {
+  key: string;
+  value: string;
+}
+
 const qs = (params: Record<string, string>) =>
   new URLSearchParams(params).toString();
 
@@ -392,6 +420,46 @@ export const api = {
     req<{ keyId: string; restored: boolean }>('/v1/kms/keys/cancel-deletion', {
       method: 'POST',
       body: JSON.stringify({ keyId })
+    }),
+
+  // Parameter Store
+  parameters: () => req<{ parameters: Parameter[] }>('/v1/parameters'),
+  putParameter: (body: {
+    name: string;
+    type: ParameterType;
+    value: string;
+    kmsKeyId?: string;
+    tier?: ParameterTier;
+    description?: string;
+    overwrite?: boolean;
+  }) =>
+    req<{ parameter: Parameter }>('/v1/parameters', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  deleteParameter: (name: string) =>
+    req<{ deleted: string }>(`/v1/parameters?${qs({ name })}`, { method: 'DELETE' }),
+  revealParameter: (name: string) =>
+    req<{ parameter: Parameter; value: string }>(`/v1/parameters/value?${qs({ name })}`),
+  parameterHistory: (name: string) =>
+    req<{ name: string; history: ParameterHistoryEntry[] }>(
+      `/v1/parameters/history?${qs({ name })}`
+    ),
+  labelParameterVersion: (name: string, version: number, labels: string[]) =>
+    req<{ name: string; labels: string[] }>('/v1/parameters/label', {
+      method: 'POST',
+      body: JSON.stringify({ name, version, labels })
+    }),
+  parameterTags: (name: string) =>
+    req<{ name: string; tags: ParameterTag[] }>(`/v1/parameters/tags?${qs({ name })}`),
+  tagParameter: (name: string, tags: Record<string, string>) =>
+    req<{ name: string }>('/v1/parameters/tags', {
+      method: 'POST',
+      body: JSON.stringify({ name, tags })
+    }),
+  untagParameter: (name: string, keys: string[]) =>
+    req<{ name: string }>(`/v1/parameters/tags?${qs({ name, keys: keys.join(',') })}`, {
+      method: 'DELETE'
     }),
 
   // Certificates

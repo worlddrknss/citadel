@@ -191,6 +191,7 @@ type inMemoryStore struct {
 	region       string
 	accountID    string
 	hier         map[string]*memProject
+	params       map[string]*memParameter
 }
 
 type kmsKey struct {
@@ -684,6 +685,15 @@ func main() {
 	mux.HandleFunc("POST /v1/secrets/rotation", s.handleV1ConfigureRotation)
 	mux.HandleFunc("DELETE /v1/secrets/rotation", s.handleV1CancelRotation)
 	mux.HandleFunc("POST /v1/secrets/bulk", s.handleV1BulkSecrets)
+	mux.HandleFunc("GET /v1/parameters", s.handleV1ListParameters)
+	mux.HandleFunc("POST /v1/parameters", s.handleV1PutParameter)
+	mux.HandleFunc("DELETE /v1/parameters", s.handleV1DeleteParameter)
+	mux.HandleFunc("GET /v1/parameters/value", s.handleV1RevealParameter)
+	mux.HandleFunc("GET /v1/parameters/history", s.handleV1ParameterHistory)
+	mux.HandleFunc("GET /v1/parameters/tags", s.handleV1ListParameterTags)
+	mux.HandleFunc("POST /v1/parameters/tags", s.handleV1TagParameter)
+	mux.HandleFunc("DELETE /v1/parameters/tags", s.handleV1UntagParameter)
+	mux.HandleFunc("POST /v1/parameters/label", s.handleV1LabelParameterVersion)
 	mux.HandleFunc("GET /v1/kms/keys", s.handleV1ListKMSKeys)
 	mux.HandleFunc("POST /v1/kms/keys", s.handleV1CreateKMSKey)
 	mux.HandleFunc("POST /v1/kms/keys/enabled", s.handleV1SetKMSKeyEnabled)
@@ -1117,6 +1127,44 @@ CREATE TABLE IF NOT EXISTS sm_folders (
 	folder_path TEXT NOT NULL,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	PRIMARY KEY (account_id, project_slug, env_slug, folder_path)
+);
+
+CREATE TABLE IF NOT EXISTS ps_parameters (
+	account_id CHAR(12) NOT NULL DEFAULT '000000000000',
+	name TEXT NOT NULL,
+	param_type TEXT NOT NULL DEFAULT 'String',
+	param_value TEXT NOT NULL DEFAULT '',
+	is_encrypted BOOLEAN NOT NULL DEFAULT FALSE,
+	kms_key_id TEXT NOT NULL DEFAULT '',
+	tier TEXT NOT NULL DEFAULT 'Standard',
+	version BIGINT NOT NULL DEFAULT 1,
+	description TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	PRIMARY KEY (account_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS ps_parameter_history (
+	account_id CHAR(12) NOT NULL DEFAULT '000000000000',
+	name TEXT NOT NULL,
+	version BIGINT NOT NULL,
+	param_type TEXT NOT NULL DEFAULT 'String',
+	param_value TEXT NOT NULL DEFAULT '',
+	is_encrypted BOOLEAN NOT NULL DEFAULT FALSE,
+	kms_key_id TEXT NOT NULL DEFAULT '',
+	tier TEXT NOT NULL DEFAULT 'Standard',
+	description TEXT NOT NULL DEFAULT '',
+	labels_json TEXT NOT NULL DEFAULT '[]',
+	modified_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	PRIMARY KEY (account_id, name, version)
+);
+
+CREATE TABLE IF NOT EXISTS ps_parameter_tags (
+	account_id CHAR(12) NOT NULL DEFAULT '000000000000',
+	name TEXT NOT NULL,
+	tag_key TEXT NOT NULL,
+	tag_value TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY (account_id, name, tag_key)
 );
 
 CREATE TABLE IF NOT EXISTS ui_users (
@@ -1562,6 +1610,30 @@ func (s *server) handleKMS(w http.ResponseWriter, r *http.Request) {
 		s.handleCancelRotateSecret(w, r)
 	case "secretsmanager.UpdateSecretVersionStage":
 		s.handleUpdateSecretVersionStage(w, r)
+	case "AmazonSSM.PutParameter":
+		s.handleSSMPutParameter(w, r)
+	case "AmazonSSM.GetParameter":
+		s.handleSSMGetParameter(w, r)
+	case "AmazonSSM.GetParameters":
+		s.handleSSMGetParameters(w, r)
+	case "AmazonSSM.GetParametersByPath":
+		s.handleSSMGetParametersByPath(w, r)
+	case "AmazonSSM.DeleteParameter":
+		s.handleSSMDeleteParameter(w, r)
+	case "AmazonSSM.DeleteParameters":
+		s.handleSSMDeleteParameters(w, r)
+	case "AmazonSSM.DescribeParameters":
+		s.handleSSMDescribeParameters(w, r)
+	case "AmazonSSM.GetParameterHistory":
+		s.handleSSMGetParameterHistory(w, r)
+	case "AmazonSSM.LabelParameterVersion":
+		s.handleSSMLabelParameterVersion(w, r)
+	case "AmazonSSM.AddTagsToResource":
+		s.handleSSMAddTagsToResource(w, r)
+	case "AmazonSSM.RemoveTagsFromResource":
+		s.handleSSMRemoveTagsFromResource(w, r)
+	case "AmazonSSM.ListTagsForResource":
+		s.handleSSMListTagsForResource(w, r)
 	default:
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidAction", "unsupported X-Amz-Target")
 	}
