@@ -650,31 +650,6 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/healthz", s.handleHealth)
-	mux.HandleFunc("/login", s.handleAdminLogin)
-	mux.HandleFunc("/logout", s.handleAdminLogout)
-	mux.HandleFunc("/secrets", s.handleSecretsAdmin)
-	mux.HandleFunc("/certificates", s.handleCertificatesAdmin)
-	mux.HandleFunc("/audit", s.handleAudit)
-
-	// Master admin UI pages
-	mux.HandleFunc("/admin", s.handleMasterAdminOverview)
-	mux.HandleFunc("/admin/users", s.handleMasterAdminUsers)
-	mux.HandleFunc("/admin/rbac", s.handleMasterAdminRBAC)
-	mux.HandleFunc("/admin/accounts", s.handleMasterAdminAccounts)
-	mux.HandleFunc("/admin/settings", s.handleMasterAdminSettings)
-	mux.HandleFunc("/admin/tenants", s.handleLegacyTenantsRedirect)
-
-	// User dashboard routes (self-service)
-	mux.HandleFunc("/account/profile", s.handleAccountProfile)
-	mux.HandleFunc("/account/keys", s.handleAccountKeys)
-	mux.HandleFunc("/account/password", s.handleAccountPassword)
-
-	// Compatibility aliases for old UI paths
-	mux.Handle("/admin/login", http.RedirectHandler("/login", http.StatusMovedPermanently))
-	mux.Handle("/admin/logout", http.RedirectHandler("/logout", http.StatusMovedPermanently))
-	mux.Handle("/admin/secrets", http.RedirectHandler("/secrets", http.StatusMovedPermanently))
-	mux.Handle("/admin/certificates", http.RedirectHandler("/certificates", http.StatusMovedPermanently))
-	mux.Handle("/admin/audit", http.RedirectHandler("/audit", http.StatusMovedPermanently))
 
 	// API endpoint remains available for AWS JSON-RPC clients
 	mux.HandleFunc("/api", s.handleKMS)

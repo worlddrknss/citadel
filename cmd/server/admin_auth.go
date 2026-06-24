@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"html/template"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,8 +12,6 @@ import (
 )
 
 const adminSessionCookieName = "go_kms_admin_session"
-
-var adminLoginTemplate = template.Must(template.ParseFS(uiTemplatesFS, "templates/admin_login.html"))
 
 type uiUserConfig struct {
 	Username     string   `json:"username"`
@@ -79,12 +76,6 @@ type uiRuntime struct {
 // response-timing differences. It corresponds to no real password.
 const dummyArgon2Hash = "$argon2id$v=19$m=65536,t=3,p=2$+Zzc6FCiVBHCPF1Llgz3pQ$ZHroDCBLTiLB04VvCEgi3y0p/p4AyUyYe3rT8HAkYvc"
 
-type adminLoginView struct {
-	NextPath string
-	Error    string
-	AuthOff  bool
-}
-
 func loadUIUsersFromEnv() (map[string]uiUserConfig, error) {
 	if raw := strings.TrimSpace(os.Getenv("KMS_UI_USERS_JSON")); raw != "" {
 		var users []uiUserConfig
@@ -147,100 +138,6 @@ func (s *server) uiRuntime() *uiRuntime {
 	return s.ui
 }
 
-func (s *server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
-	runtime := s.uiRuntime()
-	if !runtime.enabled {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
-	}
-	nextPath := sanitizeAdminNextPath(r.URL.Query().Get("next"))
-	if r.Method == http.MethodGet {
-		s.renderAdminLogin(w, adminLoginView{NextPath: nextPath})
-		return
-	}
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	accountID := strings.TrimSpace(r.FormValue("account_id"))
-	username := strings.TrimSpace(r.FormValue("username"))
-	password := r.FormValue("password")
-
-	if accountID == "" || username == "" {
-		s.renderAdminLogin(w, adminLoginView{NextPath: nextPath, Error: "Account ID and username are required"})
-		return
-	}
-
-	runtime.mu.Lock()
-	user, ok := runtime.users[username]
-	runtime.mu.Unlock()
-
-	// Always run a verification to keep timing roughly constant
-	stored := dummyArgon2Hash
-	if ok {
-		stored = user.storedCredential()
-	}
-	if !verifyPassword(stored, password) || !ok {
-		s.renderAdminLogin(w, adminLoginView{NextPath: nextPath, Error: "Invalid credentials"})
-		return
-	}
-
-	// Check if user belongs to the account. Prefer the DB-backed junction table
-	// (multi-tenant SaaS path); fall back to the user's statically-configured
-	// accounts (legacy env users / in-memory store) so single-tenant and
-	// bootstrap deployments continue to work.
-	found := false
-	if userAccounts, err := s.store.ListUserAccounts(r.Context(), username); err == nil {
-		for _, ua := range userAccounts {
-			if ua.AccountID == accountID {
-				found = true
-				break
-			}
-		}
-	}
-	if !found {
-		for _, a := range user.Accounts {
-			if a == accountID {
-				found = true
-				break
-			}
-		}
-	}
-	if !found {
-		s.renderAdminLogin(w, adminLoginView{NextPath: nextPath, Error: "Invalid credentials or account access denied"})
-		return
-	}
-
-	sessionID := randomHex(24)
-	now := time.Now().UTC()
-	session := uiSession{
-		SessionID:   sessionID,
-		Username:    user.Username,
-		AccountID:   accountID,
-		Role:        user.Role,
-		DisplayName: user.DisplayName,
-		Accounts:    append([]string(nil), user.Accounts...),
-		CreatedAt:   now,
-		LastSeenAt:  now,
-	}
-	runtime.mu.Lock()
-	runtime.sessions[sessionID] = session
-	runtime.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: adminSessionCookieName, Value: sessionID, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: runtime.secureCookies})
-	http.Redirect(w, r, nextPath, http.StatusSeeOther)
-}
-
-func (s *server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
-	runtime := s.uiRuntime()
-	if cookie, err := r.Cookie(adminSessionCookieName); err == nil {
-		runtime.mu.Lock()
-		delete(runtime.sessions, cookie.Value)
-		runtime.mu.Unlock()
-	}
-	http.SetCookie(w, &http.Cookie{Name: adminSessionCookieName, Value: "", Path: "/", Expires: time.Unix(0, 0), MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
-}
-
 func (s *server) requireUISession(w http.ResponseWriter, r *http.Request, minRole string) (*uiSession, bool) {
 	runtime := s.uiRuntime()
 	if !runtime.enabled {
@@ -272,16 +169,6 @@ func (s *server) requireUISession(w http.ResponseWriter, r *http.Request, minRol
 		return nil, false
 	}
 	return &session, true
-}
-
-func (s *server) renderAdminLogin(w http.ResponseWriter, view adminLoginView) {
-	if view.NextPath == "" {
-		view.NextPath = "/"
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := adminLoginTemplate.Execute(w, view); err != nil {
-		http.Error(w, "failed to render login view", http.StatusInternalServerError)
-	}
 }
 
 func uiRoleAtLeast(actual, required string) bool {

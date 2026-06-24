@@ -15,12 +15,8 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// P7: the Svelte SPA is now the primary control plane. Browser traffic to
-	// the site root is sent to /app/. Legacy html/template pages remain
-	// reachable at their own paths (e.g. /login, /admin) until fully retired.
-	if r.Method == http.MethodGet && r.URL.Path == "/" {
-		http.Redirect(w, r, "/app/", http.StatusFound)
-		return
-	}
-	s.handleAdmin(w, r)
+	// The Svelte SPA is the only control plane. Browser traffic to any
+	// non-API path is sent to /app/; the legacy html/template pages have been
+	// retired in favor of the native /v1 API consumed by the SPA.
+	http.Redirect(w, r, "/app/", http.StatusFound)
 }

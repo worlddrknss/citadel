@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -740,123 +739,6 @@ func TestSecretResourcePolicyDeniesGetSecretValue(t *testing.T) {
 		t.Fatalf("status got %d want %d body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
 	assertAWSErrorType(t, rec.Body.Bytes(), "AccessDeniedException")
-}
-
-func TestSecretsAdminPageRenders(t *testing.T) {
-	key := sampleKey(1)
-	store := &inMemoryStore{k: key}
-	if _, _, err := store.CreateSecret(context.Background(), createSecretRequest{
-		Name:         "prod/ui/secret",
-		Description:  "ui secret",
-		SecretString: `{"token":"abc"}`,
-	}); err != nil {
-		t.Fatalf("create secret: %v", err)
-	}
-	s := &server{cfg: config{}, store: store}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/admin/secrets", s.handleSecretsAdmin)
-
-	listReq := httptest.NewRequest(http.MethodGet, "/admin/secrets", nil)
-	listRec := httptest.NewRecorder()
-	mux.ServeHTTP(listRec, listReq)
-	if listRec.Code != http.StatusOK {
-		t.Fatalf("unexpected list page status: %d", listRec.Code)
-	}
-	listBody := listRec.Body.String()
-	if !strings.Contains(listBody, "Secrets Manager") || !strings.Contains(listBody, "prod/ui/secret") {
-		t.Fatalf("unexpected list page body: %s", listBody)
-	}
-	if !strings.Contains(listBody, "Audit Explorer") {
-		t.Fatalf("expected audit explorer sidebar link in secrets list body: %s", listBody)
-	}
-
-	detailReq := httptest.NewRequest(http.MethodGet, "/admin/secrets?secret_id=prod/ui/secret&tab=retrieve", nil)
-	detailRec := httptest.NewRecorder()
-	mux.ServeHTTP(detailRec, detailReq)
-	if detailRec.Code != http.StatusOK {
-		t.Fatalf("unexpected detail page status: %d", detailRec.Code)
-	}
-	detailBody := detailRec.Body.String()
-	if !strings.Contains(detailBody, "Retrieve") || !strings.Contains(detailBody, "token") || !strings.Contains(detailBody, "abc") {
-		t.Fatalf("unexpected detail page body: %s", detailBody)
-	}
-
-	policyReq := httptest.NewRequest(http.MethodGet, "/admin/secrets?secret_id=prod/ui/secret&tab=policy", nil)
-	policyRec := httptest.NewRecorder()
-	mux.ServeHTTP(policyRec, policyReq)
-	if policyRec.Code != http.StatusOK {
-		t.Fatalf("unexpected policy page status: %d", policyRec.Code)
-	}
-	policyBody := policyRec.Body.String()
-	if !strings.Contains(policyBody, "Resource policy") || !strings.Contains(policyBody, "Rotation") || !strings.Contains(policyBody, "Tags") {
-		t.Fatalf("unexpected policy page body: %s", policyBody)
-	}
-}
-
-func TestAuditExplorerRenders(t *testing.T) {
-	key := sampleKey(1)
-	store := &inMemoryStore{k: key}
-	if err := store.RecordAudit(context.Background(), auditEvent{Action: "TrentService.Encrypt", KeyID: key.ID, Result: "ok", Actor: "127.0.0.1"}); err != nil {
-		t.Fatalf("record audit kms: %v", err)
-	}
-	if err := store.RecordAudit(context.Background(), auditEvent{Action: "secretsmanager.CreateSecret", KeyID: key.ID, Result: "error", ErrorType: "ValidationException", Actor: "127.0.0.1"}); err != nil {
-		t.Fatalf("record audit secrets: %v", err)
-	}
-	s := &server{cfg: config{}, store: store}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/admin/audit", s.handleAudit)
-
-	req := httptest.NewRequest(http.MethodGet, "/admin/audit?service=kms&q=Encrypt", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("unexpected audit page status: %d", rec.Code)
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "Audit Explorer") || !strings.Contains(body, "TrentService.Encrypt") || !strings.Contains(body, "KMS / Secrets") {
-		t.Fatalf("unexpected audit page body: %s", body)
-	}
-	if strings.Contains(body, "secretsmanager.CreateSecret") {
-		t.Fatalf("service filter should hide secrets events: %s", body)
-	}
-}
-
-func TestAdminUIAuthenticationFlow(t *testing.T) {
-	key := sampleKey(1)
-	s := &server{cfg: config{uiUsers: map[string]uiUserConfig{"admin": {Username: "admin", Password: "secret", Role: "admin", DisplayName: "Admin", Accounts: []string{"123456789012"}}}}, store: &inMemoryStore{k: key}}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/admin", s.handleAdmin)
-	mux.HandleFunc("/login", s.handleAdminLogin)
-
-	unauthReq := httptest.NewRequest(http.MethodGet, "/admin", nil)
-	unauthRec := httptest.NewRecorder()
-	mux.ServeHTTP(unauthRec, unauthReq)
-	if unauthRec.Code != http.StatusSeeOther {
-		t.Fatalf("unexpected unauthenticated status: %d", unauthRec.Code)
-	}
-	if location := unauthRec.Header().Get("Location"); !strings.HasPrefix(location, "/login") {
-		t.Fatalf("expected login redirect, got %q", location)
-	}
-
-	loginReq := httptest.NewRequest(http.MethodPost, "/login?next=/admin", strings.NewReader("account_id=123456789012&username=admin&password=secret"))
-	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	loginRec := httptest.NewRecorder()
-	mux.ServeHTTP(loginRec, loginReq)
-	if loginRec.Code != http.StatusSeeOther {
-		t.Fatalf("unexpected login status: %d body=%s", loginRec.Code, loginRec.Body.String())
-	}
-	cookies := loginRec.Result().Cookies()
-	if len(cookies) == 0 {
-		t.Fatalf("expected session cookie after login")
-	}
-
-	authReq := httptest.NewRequest(http.MethodGet, "/admin", nil)
-	authReq.AddCookie(cookies[0])
-	authRec := httptest.NewRecorder()
-	mux.ServeHTTP(authRec, authReq)
-	if authRec.Code != http.StatusOK {
-		t.Fatalf("unexpected authenticated status: %d", authRec.Code)
-	}
 }
 
 func sampleKey(seed byte) kmsKey {
