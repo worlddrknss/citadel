@@ -101,6 +101,7 @@ type keyStore interface {
 	PutKeyPolicy(ctx context.Context, keyID, policyName, policyDocument string) error
 	CreateAlias(ctx context.Context, aliasName, keyID string) error
 	UpdateAlias(ctx context.Context, aliasName, keyID string) error
+	DeleteAlias(ctx context.Context, aliasName string) error
 	ListAliases(ctx context.Context) ([]kmsAlias, error)
 	SetKeyEnabled(ctx context.Context, keyID string, enabled bool) error
 	ScheduleKeyDeletion(ctx context.Context, keyID string, windowDays int) (time.Time, error)
@@ -690,6 +691,9 @@ func main() {
 	mux.HandleFunc("POST /v1/kms/keys/cancel-deletion", s.handleV1CancelKMSKeyDeletion)
 	mux.HandleFunc("GET /v1/kms/keys/detail", s.handleV1KMSKeyDetail)
 	mux.HandleFunc("POST /v1/kms/keys/policy", s.handleV1PutKMSKeyPolicy)
+	mux.HandleFunc("POST /v1/kms/aliases", s.handleV1CreateKMSAlias)
+	mux.HandleFunc("POST /v1/kms/aliases/update", s.handleV1UpdateKMSAlias)
+	mux.HandleFunc("DELETE /v1/kms/aliases", s.handleV1DeleteKMSAlias)
 	mux.HandleFunc("GET /v1/certificates", s.handleV1ListCertificates)
 	mux.HandleFunc("POST /v1/certificates/authorities", s.handleV1CreateCA)
 	mux.HandleFunc("POST /v1/certificates/issue", s.handleV1IssueCert)
@@ -2598,6 +2602,26 @@ WHERE alias_name = $1
 	return nil
 }
 
+func (s *dbStore) DeleteAlias(ctx context.Context, aliasName string) error {
+	cond, args := accountFilter(ctx, "account_id", 2)
+	q := `DELETE FROM kms_aliases WHERE alias_name = $1`
+	if cond != "" {
+		q += " AND " + cond
+	}
+	res, err := s.db.ExecContext(ctx, q, append([]any{aliasName}, args...)...)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *dbStore) ListAliases(ctx context.Context) ([]kmsAlias, error) {
 	q := `
 SELECT alias_name, target_key_id
@@ -2906,6 +2930,10 @@ func (s *inMemoryStore) CreateAlias(_ context.Context, _, _ string) error {
 }
 
 func (s *inMemoryStore) UpdateAlias(_ context.Context, _, _ string) error {
+	return errUnsupported
+}
+
+func (s *inMemoryStore) DeleteAlias(_ context.Context, _ string) error {
 	return errUnsupported
 }
 

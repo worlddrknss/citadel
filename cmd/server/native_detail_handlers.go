@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/x509"
+	"database/sql"
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
@@ -144,6 +145,124 @@ func (s *server) handleV1PutKMSKeyPolicy(w http.ResponseWriter, r *http.Request)
 	}
 	s.recordAudit(ctx, auditEvent{Action: "citadel.PutKeyPolicy", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"keyId": keyID, "saved": true})
+}
+
+// normalizeAliasName ensures the alias has the AWS-style "alias/" prefix and is
+// otherwise non-empty.
+func normalizeAliasName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", errors.New("alias name is required")
+	}
+	if !strings.HasPrefix(name, "alias/") {
+		name = "alias/" + name
+	}
+	if name == "alias/" {
+		return "", errors.New("alias name is required")
+	}
+	if strings.HasPrefix(name, "alias/aws/") {
+		return "", errors.New("the alias/aws/ prefix is reserved")
+	}
+	return name, nil
+}
+
+type nativeAliasRequest struct {
+	KeyID     string `json:"keyId"`
+	AliasName string `json:"aliasName"`
+}
+
+// handleV1CreateKMSAlias points a new alias at a key.
+func (s *server) handleV1CreateKMSAlias(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	var req nativeAliasRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	keyID := strings.TrimSpace(req.KeyID)
+	if keyID == "" {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "keyId is required")
+		return
+	}
+	aliasName, err := normalizeAliasName(req.AliasName)
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if _, err := s.store.ResolveByID(ctx, keyID); err != nil {
+		writeNativeError(w, http.StatusNotFound, "not_found", "key not found")
+		return
+	}
+	if err := s.store.CreateAlias(ctx, aliasName, keyID); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "alias_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.CreateAlias", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"aliasName": aliasName, "keyId": keyID, "created": true})
+}
+
+// handleV1UpdateKMSAlias retargets an existing alias to another key.
+func (s *server) handleV1UpdateKMSAlias(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	var req nativeAliasRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	keyID := strings.TrimSpace(req.KeyID)
+	if keyID == "" {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "keyId is required")
+		return
+	}
+	aliasName, err := normalizeAliasName(req.AliasName)
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if _, err := s.store.ResolveByID(ctx, keyID); err != nil {
+		writeNativeError(w, http.StatusNotFound, "not_found", "key not found")
+		return
+	}
+	if err := s.store.UpdateAlias(ctx, aliasName, keyID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeNativeError(w, http.StatusNotFound, "not_found", "alias not found")
+			return
+		}
+		writeNativeError(w, http.StatusBadRequest, "alias_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.UpdateAlias", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"aliasName": aliasName, "keyId": keyID, "updated": true})
+}
+
+// handleV1DeleteKMSAlias removes an alias. The alias name comes from the
+// "aliasName" query parameter.
+func (s *server) handleV1DeleteKMSAlias(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	aliasName, err := normalizeAliasName(r.URL.Query().Get("aliasName"))
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := s.store.DeleteAlias(ctx, aliasName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeNativeError(w, http.StatusNotFound, "not_found", "alias not found")
+			return
+		}
+		writeNativeError(w, http.StatusBadRequest, "alias_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.DeleteAlias", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"aliasName": aliasName, "deleted": true})
 }
 
 type nativeCertificateDetail struct {

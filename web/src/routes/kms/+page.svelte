@@ -13,7 +13,16 @@
   let policyText = $state('');
   let savingPolicy = $state(false);
 
-  // Create-key form
+  // Alias management
+  let aliasInput = $state('');
+  let addingAlias = $state(false);
+
+  // Confirm modal
+  let confirmOpen = $state(false);
+  let confirmTitle = $state('');
+  let confirmBody = $state('');
+  let confirmLabel = $state('Confirm');
+  let confirmAction: (() => Promise<void>) | null = $state(null);
   let description = $state('');
   let keyUsage = $state('ENCRYPT_DECRYPT');
   let keySpec = $state('SYMMETRIC_DEFAULT');
@@ -114,6 +123,17 @@
     detail = null;
   }
 
+  async function refreshDetail() {
+    if (!detail) return;
+    try {
+      const d = await api.kmsKeyDetail(detail.keyId);
+      detail = d;
+      policyText = prettyJSON(d.policyDocument || '');
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message, false);
+    }
+  }
+
   function formatPolicy() {
     policyText = prettyJSON(policyText);
   }
@@ -130,6 +150,59 @@
     } finally {
       savingPolicy = false;
     }
+  }
+
+  function askConfirm(opts: { title: string; body: string; label?: string; action: () => Promise<void> }) {
+    confirmTitle = opts.title;
+    confirmBody = opts.body;
+    confirmLabel = opts.label ?? 'Confirm';
+    confirmAction = opts.action;
+    confirmOpen = true;
+  }
+
+  async function runConfirm() {
+    const action = confirmAction;
+    confirmOpen = false;
+    if (action) await action();
+    confirmAction = null;
+  }
+
+  async function addAlias() {
+    if (!detail || addingAlias) return;
+    const name = aliasInput.trim();
+    if (!name) {
+      notify('Enter an alias name', false);
+      return;
+    }
+    addingAlias = true;
+    try {
+      const res = await api.createKmsAlias(detail.keyId, name);
+      notify(`Added ${res.aliasName}`);
+      aliasInput = '';
+      await refreshDetail();
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message, false);
+    } finally {
+      addingAlias = false;
+    }
+  }
+
+  function deleteAlias(aliasName: string) {
+    if (!detail) return;
+    askConfirm({
+      title: `Delete alias "${aliasName}"?`,
+      body: 'The alias will be removed. The underlying key is not affected.',
+      label: 'Delete alias',
+      action: async () => {
+        try {
+          await api.deleteKmsAlias(aliasName);
+          notify(`Deleted ${aliasName}`);
+          await refreshDetail();
+        } catch (e) {
+          if (e instanceof ApiError) notify(e.message, false);
+        }
+      }
+    });
   }
 
   async function copyText(text: string) {
@@ -368,12 +441,28 @@
       </div>
     {:else if detailTab === 'aliases'}
       <div class="tab-body">
+        <div class="alias-add">
+          <input
+            placeholder="alias/my-key"
+            bind:value={aliasInput}
+            onkeydown={(e) => e.key === 'Enter' && addAlias()}
+          />
+          <button class="btn btn-p btn-sm" onclick={addAlias} disabled={addingAlias}>
+            {addingAlias ? 'Adding…' : 'Add alias'}
+          </button>
+        </div>
+        <p class="muted small" style="margin:0.25rem 0 0.75rem">
+          The <code>alias/</code> prefix is added automatically if omitted.
+        </p>
         {#if detail.aliases.length === 0}
           <div class="empty">No aliases.</div>
         {:else}
-          <ul class="plain">
+          <ul class="plain alias-list">
             {#each detail.aliases as a}
-              <li class="mono small">{a}</li>
+              <li>
+                <span class="mono small">{a}</span>
+                <button class="btn btn-sm btn-d" onclick={() => deleteAlias(a)}>Delete</button>
+              </li>
             {/each}
           </ul>
         {/if}
@@ -394,6 +483,19 @@
   </aside>
 {/if}
 
+<!-- confirm modal -->
+{#if confirmOpen}
+  <div class="modal-scrim" role="presentation" onclick={() => (confirmOpen = false)}></div>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h3 style="margin-top:0">{confirmTitle}</h3>
+    <p class="muted">{confirmBody}</p>
+    <div class="modal-act">
+      <button class="btn" onclick={() => (confirmOpen = false)}>Cancel</button>
+      <button class="btn btn-d" onclick={runConfirm}>{confirmLabel}</button>
+    </div>
+  </div>
+{/if}
+
 <style>
   .linklike {
     background: none;
@@ -402,6 +504,55 @@
     color: var(--c-blue);
     cursor: pointer;
     font: inherit;
+  }
+  .alias-add {
+    display: flex;
+    gap: 0.5rem;
+  }
+  .alias-add input {
+    flex: 1;
+  }
+  .alias-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .alias-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius);
+  }
+  .modal-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 20, 30, 0.35);
+    z-index: 50;
+  }
+  .modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius);
+    padding: 1.25rem;
+    width: min(460px, 92vw);
+    z-index: 51;
+    box-shadow: 0 12px 32px rgba(15, 20, 30, 0.2);
+  }
+  .modal-act {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 1rem;
   }
   .rowsel {
     background: rgba(43, 108, 176, 0.06);

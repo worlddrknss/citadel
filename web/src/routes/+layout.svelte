@@ -58,7 +58,8 @@
   let { children } = $props();
 
   const nav = [
-    { href: '/', label: '🔑 Secrets', section: 'Services' },
+    { href: '/', label: '� Dashboard', section: 'Services' },
+    { href: '/secrets', label: '�🔑 Secrets', section: 'Services' },
     { href: '/kms', label: '🗝 KMS', section: 'Services' },
     { href: '/certificates', label: '📜 Certificates', section: 'Services' },
     { href: '/audit', label: '📋 Audit', section: 'Services' },
@@ -71,12 +72,13 @@
   const currentPath = $derived($page.url.pathname.replace(base, '') || '/');
 
   function isActive(href: string): boolean {
-    if (href === '/') return currentPath === '/' || currentPath.startsWith('/secrets');
+    if (href === '/') return currentPath === '/';
+    if (href === '/secrets') return currentPath.startsWith('/secrets');
     return currentPath === href || currentPath.startsWith(href + '/');
   }
 
   const titles: Record<string, string> = {
-    '/': 'Secrets Management',
+    '/': 'Dashboard',
     '/secrets': 'Secrets Management',
     '/kms': 'Key Management Service',
     '/certificates': 'Certificate Management',

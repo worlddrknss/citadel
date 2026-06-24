@@ -358,6 +358,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ keyId, policyDocument })
     }),
+  createKmsAlias: (keyId: string, aliasName: string) =>
+    req<{ aliasName: string; keyId: string; created: boolean }>('/v1/kms/aliases', {
+      method: 'POST',
+      body: JSON.stringify({ keyId, aliasName })
+    }),
+  updateKmsAlias: (keyId: string, aliasName: string) =>
+    req<{ aliasName: string; keyId: string; updated: boolean }>('/v1/kms/aliases/update', {
+      method: 'POST',
+      body: JSON.stringify({ keyId, aliasName })
+    }),
+  deleteKmsAlias: (aliasName: string) =>
+    req<{ aliasName: string; deleted: boolean }>(`/v1/kms/aliases?${qs({ aliasName })}`, {
+      method: 'DELETE'
+    }),
   createKmsKey: (body: { description: string; keyUsage: string; keySpec: string }) =>
     req<{ keyId: string; arn: string; created: boolean }>('/v1/kms/keys', {
       method: 'POST',
