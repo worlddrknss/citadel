@@ -35,6 +35,11 @@
   // Structure creation
   let newFolderName = $state('');
 
+  // Rotate KMS key (environment-wide re-encryption)
+  let rekeyOpen = $state(false);
+  let rekeyKms = $state('');
+  let rekeyBusy = $state(false);
+
   // Detail drawer
   let detail: ItemDetail | null = $state(null);
   let detailKey = $state('');
@@ -283,6 +288,34 @@
         }
       }
     });
+  }
+
+  function openRekey() {
+    rekeyKms = '';
+    rekeyOpen = true;
+  }
+
+  async function runRekey() {
+    if (!project || !env || !rekeyKms) {
+      notify('select a KMS key', false);
+      return;
+    }
+    rekeyBusy = true;
+    try {
+      const res = await api.rekeySecret({ project, env, kmsKeyId: rekeyKms });
+      const ok = res.failed.length === 0;
+      notify(
+        `Re-keyed ${res.rekeyed} item(s)${res.failed.length ? `; ${res.failed.length} failed` : ''}`,
+        ok
+      );
+      rekeyOpen = false;
+      await loadItems();
+      if (detail) await reloadDetail();
+    } catch (e) {
+      err(e);
+    } finally {
+      rekeyBusy = false;
+    }
   }
 
   function deleteEnvironment() {
@@ -583,6 +616,7 @@
       <input id="nf" placeholder="database" bind:value={newFolderName} />
     </div>
     <button class="btn btn-sm" onclick={createFolder}>+ Folder</button>
+    <button class="btn btn-sm" onclick={openRekey}>Rotate KMS key</button>
     <button class="btn btn-sm btn-d" onclick={deleteEnvironment}>Delete environment</button>
   </div>
 
@@ -944,6 +978,34 @@
     <div class="modal-act">
       <button class="btn" onclick={() => (confirmOpen = false)}>Cancel</button>
       <button class="btn {confirmDanger ? 'btn-d' : 'btn-p'}" onclick={runConfirm}>{confirmLabel}</button>
+    </div>
+  </div>
+{/if}
+
+<!-- rotate KMS key modal -->
+{#if rekeyOpen}
+  <div class="modal-scrim" role="presentation" onclick={() => (rekeyOpen = false)}></div>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h3 style="margin-top:0">Rotate KMS key</h3>
+    <p class="muted">
+      Re-encrypts every active secret in <strong>{project}/{env}</strong> under the selected key. Each
+      item gets a new version sealed with the new key; values are unchanged. External Secrets clients
+      keep reading the latest version.
+    </p>
+    <div class="field block">
+      <label for="rk">New KMS key</label>
+      <select id="rk" bind:value={rekeyKms}>
+        <option value="">Select a key…</option>
+        {#each kmsKeys as k}
+          <option value={k.keyId}>{kmsLabel(k)}</option>
+        {/each}
+      </select>
+    </div>
+    <div class="modal-act">
+      <button class="btn" onclick={() => (rekeyOpen = false)} disabled={rekeyBusy}>Cancel</button>
+      <button class="btn btn-p" onclick={runRekey} disabled={rekeyBusy || !rekeyKms}>
+        {rekeyBusy ? 'Rotating…' : 'Rotate key'}
+      </button>
     </div>
   </div>
 {/if}

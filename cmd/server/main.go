@@ -677,6 +677,7 @@ func main() {
 	mux.HandleFunc("POST /v1/secrets/restore", s.handleV1RestoreSecret)
 	mux.HandleFunc("GET /v1/secrets/detail", s.handleV1SecretDetail)
 	mux.HandleFunc("POST /v1/secrets/metadata", s.handleV1UpdateSecretMetadata)
+	mux.HandleFunc("POST /v1/secrets/rekey", s.handleV1ReKeySecret)
 	mux.HandleFunc("POST /v1/secrets/versions/promote", s.handleV1PromoteVersion)
 	mux.HandleFunc("POST /v1/secrets/tags", s.handleV1TagSecret)
 	mux.HandleFunc("DELETE /v1/secrets/tags", s.handleV1UntagSecret)

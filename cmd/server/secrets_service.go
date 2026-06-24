@@ -656,18 +656,113 @@ func (svc *secretsService) DescribeItem(ctx context.Context, coord itemCoord) (i
 	}, nil
 }
 
-// UpdateItemMetadata updates an item's description and/or KMS key without
-// writing a new secret value.
+// UpdateItemMetadata updates an item's description and/or KMS key.
+//
+// Changing the KMS key requires re-encrypting the stored value under the new
+// key: a secret's ciphertext is sealed with its key's master key and is later
+// decrypted using whatever key the metadata points at. Moving only the key
+// pointer would leave the ciphertext sealed with the old master key and render
+// it undecryptable. When the key changes we therefore re-supply the current
+// value so UpdateSecret writes a fresh version encrypted under the new key.
 func (svc *secretsService) UpdateItemMetadata(ctx context.Context, coord itemCoord, description, kmsKeyID string) error {
 	if err := coord.validate(); err != nil {
 		return err
 	}
-	_, _, err := svc.store.UpdateSecret(ctx, updateSecretRequest{
-		SecretID:    coord.backingName(),
+	name := coord.backingName()
+	desiredKey := strings.TrimSpace(kmsKeyID)
+	req := updateSecretRequest{
+		SecretID:    name,
 		Description: description,
-		KMSKeyID:    strings.TrimSpace(kmsKeyID),
-	})
+		KMSKeyID:    desiredKey,
+	}
+	if desiredKey != "" {
+		meta, err := svc.store.DescribeSecret(ctx, name)
+		if err != nil {
+			return mapItemErr(err)
+		}
+		if desiredKey != meta.KMSKeyID {
+			if err := svc.attachCurrentValue(ctx, coord, &req); err != nil {
+				return err
+			}
+		}
+	}
+	_, _, err := svc.store.UpdateSecret(ctx, req)
 	return mapItemErr(err)
+}
+
+// ReKeyItem re-encrypts a single item's current value under newKMSKeyID,
+// writing a new version. It is the safe primitive behind "rotate KMS key".
+func (svc *secretsService) ReKeyItem(ctx context.Context, coord itemCoord, newKMSKeyID string) error {
+	if err := coord.validate(); err != nil {
+		return err
+	}
+	newKey := strings.TrimSpace(newKMSKeyID)
+	if newKey == "" {
+		return errors.New("kmsKeyId is required")
+	}
+	req := updateSecretRequest{SecretID: coord.backingName(), KMSKeyID: newKey}
+	if err := svc.attachCurrentValue(ctx, coord, &req); err != nil {
+		return err
+	}
+	_, _, err := svc.store.UpdateSecret(ctx, req)
+	return mapItemErr(err)
+}
+
+// ReKeyEnvironment re-encrypts every active item in project/env under
+// newKMSKeyID. It returns the number rotated and the keys that failed, so a
+// partial failure does not abort the whole batch.
+func (svc *secretsService) ReKeyEnvironment(ctx context.Context, project, env, newKMSKeyID string) (int, []string, error) {
+	if err := validateSegment("project", project); err != nil {
+		return 0, nil, err
+	}
+	if err := validateSegment("env", env); err != nil {
+		return 0, nil, err
+	}
+	if strings.TrimSpace(newKMSKeyID) == "" {
+		return 0, nil, errors.New("kmsKeyId is required")
+	}
+	secrets, err := svc.store.ListSecrets(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	rekeyed := 0
+	failed := []string{}
+	for _, sec := range secrets {
+		if sec.DeletedDate != nil {
+			continue
+		}
+		pi, ok := parseSecretName(sec.Name)
+		if !ok || pi.Project != project || pi.Env != env {
+			continue
+		}
+		coord := itemCoord{Project: pi.Project, Env: pi.Env, Folder: pi.Folder, Key: pi.Key}
+		if err := svc.ReKeyItem(ctx, coord, newKMSKeyID); err != nil {
+			failed = append(failed, pi.Key)
+			continue
+		}
+		rekeyed++
+	}
+	return rekeyed, failed, nil
+}
+
+// attachCurrentValue reveals the item's current value and copies it into req so
+// the subsequent UpdateSecret writes a new, re-encrypted version. It refuses to
+// proceed when there is no value to re-encrypt, since that would let the caller
+// move the key pointer without re-sealing the ciphertext.
+func (svc *secretsService) attachCurrentValue(ctx context.Context, coord itemCoord, req *updateSecretRequest) error {
+	current, err := svc.RevealItem(ctx, coord, "", "")
+	if err != nil {
+		return mapItemErr(err)
+	}
+	if current.SecretBinary != "" {
+		req.SecretBinary = current.SecretBinary
+	} else if current.SecretString != nil {
+		req.SecretString = *current.SecretString
+	}
+	if req.SecretString == "" && req.SecretBinary == "" {
+		return errors.New("cannot re-key an empty secret value; store a value first")
+	}
+	return nil
 }
 
 // PromoteItemVersion moves the AWSCURRENT stage to versionID, demoting the

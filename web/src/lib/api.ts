@@ -297,6 +297,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body)
     }),
+  rekeySecret: (body: {
+    project: string;
+    env: string;
+    path?: string;
+    key?: string;
+    kmsKeyId: string;
+  }) =>
+    req<{ rekeyed: number; failed: string[] }>('/v1/secrets/rekey', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
   promoteVersion: (project: string, env: string, path: string, key: string, versionId: string) =>
     req<{ promoted: boolean; versionId: string }>('/v1/secrets/versions/promote', {
       method: 'POST',

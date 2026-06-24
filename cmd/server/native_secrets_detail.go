@@ -124,8 +124,61 @@ func (s *server) handleV1UpdateSecretMetadata(w http.ResponseWriter, r *http.Req
 		writeNativeError(w, http.StatusBadRequest, "update_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.UpdateItemMetadata", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, auditEvent{Action: "citadel.UpdateItemMetadata", KeyID: strings.TrimSpace(req.KMSKeyID), Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"updated": true})
+}
+
+type nativeReKeyRequest struct {
+	Project  string `json:"project"`
+	Env      string `json:"env"`
+	Path     string `json:"path"`
+	Key      string `json:"key"`
+	KMSKeyID string `json:"kmsKeyId"`
+}
+
+// handleV1ReKeySecret re-encrypts an item under a new KMS key. When key is set
+// it rotates a single item; when key is empty it rotates every item in the
+// environment, re-encrypting each current value under the new key.
+func (s *server) handleV1ReKeySecret(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	var req nativeReKeyRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	newKey := strings.TrimSpace(req.KMSKeyID)
+	if newKey == "" {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "kmsKeyId is required")
+		return
+	}
+	if strings.TrimSpace(req.Key) != "" {
+		coord, err := coordFromParts(req.Project, req.Env, req.Path, req.Key)
+		if err != nil {
+			writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		if err := s.secretsSvc().ReKeyItem(ctx, coord, newKey); err != nil {
+			writeNativeError(w, http.StatusBadRequest, "rekey_failed", err.Error())
+			return
+		}
+		s.recordAudit(ctx, auditEvent{Action: "citadel.ReKeyItem", KeyID: newKey, Result: "ok", Actor: r.RemoteAddr})
+		writeNativeJSON(w, http.StatusOK, map[string]any{"rekeyed": 1, "failed": []string{}})
+		return
+	}
+	rekeyed, failed, err := s.secretsSvc().ReKeyEnvironment(ctx, strings.TrimSpace(req.Project), strings.TrimSpace(req.Env), newKey)
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "rekey_failed", err.Error())
+		return
+	}
+	result := "ok"
+	if len(failed) > 0 {
+		result = "partial"
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.ReKeyEnvironment", KeyID: newKey, Result: result, Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"rekeyed": rekeyed, "failed": failed})
 }
 
 type nativePromoteVersionRequest struct {
