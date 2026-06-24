@@ -53,6 +53,38 @@ export interface Item {
   key: string;
   arn: string;
   updatedAt: string;
+  deletionDate?: string;
+}
+
+export interface SecretTag {
+  key: string;
+  value: string;
+}
+
+export interface SecretRotation {
+  enabled: boolean;
+  lambdaArn?: string;
+  afterDays?: number;
+  nextRotationDate?: string;
+}
+
+export interface ItemDetail {
+  project: string;
+  env: string;
+  path: string;
+  key: string;
+  arn: string;
+  description: string;
+  kmsKeyId: string;
+  currentVersionId: string;
+  previousVersionId?: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  deletionDate?: string;
+  tags: SecretTag[];
+  policyDocument: string;
+  rotation: SecretRotation;
 }
 
 export interface ListResult {
@@ -145,8 +177,83 @@ export const api = {
     value: string;
     kmsKeyId?: string;
   }) => req<{ created: boolean }>('/v1/secrets', { method: 'POST', body: JSON.stringify(body) }),
-  remove: (project: string, env: string, path: string, key: string) =>
-    req<{ deleted: boolean }>(`/v1/secrets?${qs({ project, env, path, key })}`, {
+  remove: (project: string, env: string, path: string, key: string, opts?: { force?: boolean; recoveryWindowDays?: number }) => {
+    const params: Record<string, string> = { project, env, path, key };
+    if (opts?.force) params.force = 'true';
+    if (opts?.recoveryWindowDays != null) params.recoveryWindowDays = String(opts.recoveryWindowDays);
+    return req<{ deleted: boolean; forced?: boolean }>(`/v1/secrets?${qs(params)}`, {
+      method: 'DELETE'
+    });
+  },
+  restore: (project: string, env: string, path: string, key: string) =>
+    req<{ restored: boolean }>(`/v1/secrets/restore?${qs({ project, env, path, key })}`, {
+      method: 'POST'
+    }),
+  bulkSecrets: (body: {
+    project: string;
+    env: string;
+    path: string;
+    keys: string[];
+    action: 'delete' | 'restore';
+    force?: boolean;
+    recoveryWindowDays?: number;
+  }) =>
+    req<{ applied: number; failed: string[] }>('/v1/secrets/bulk', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  secretDetail: (project: string, env: string, path: string, key: string) =>
+    req<ItemDetail>(`/v1/secrets/detail?${qs({ project, env, path, key })}`),
+  updateSecretMetadata: (body: {
+    project: string;
+    env: string;
+    path: string;
+    key: string;
+    description: string;
+    kmsKeyId: string;
+  }) =>
+    req<{ updated: boolean }>('/v1/secrets/metadata', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  promoteVersion: (project: string, env: string, path: string, key: string, versionId: string) =>
+    req<{ promoted: boolean; versionId: string }>('/v1/secrets/versions/promote', {
+      method: 'POST',
+      body: JSON.stringify({ project, env, path, key, versionId })
+    }),
+  tagSecret: (project: string, env: string, path: string, key: string, tags: SecretTag[]) =>
+    req<{ tagged: boolean }>('/v1/secrets/tags', {
+      method: 'POST',
+      body: JSON.stringify({ project, env, path, key, tags })
+    }),
+  untagSecret: (project: string, env: string, path: string, key: string, tagKey: string) =>
+    req<{ untagged: boolean }>(`/v1/secrets/tags?${qs({ project, env, path, key, tagKey })}`, {
+      method: 'DELETE'
+    }),
+  getSecretPolicy: (project: string, env: string, path: string, key: string) =>
+    req<{ key: string; policyDocument: string }>(
+      `/v1/secrets/policy?${qs({ project, env, path, key })}`
+    ),
+  putSecretPolicy: (project: string, env: string, path: string, key: string, policyDocument: string) =>
+    req<{ saved: boolean }>('/v1/secrets/policy', {
+      method: 'POST',
+      body: JSON.stringify({ project, env, path, key, policyDocument })
+    }),
+  configureRotation: (body: {
+    project: string;
+    env: string;
+    path: string;
+    key: string;
+    lambdaArn: string;
+    afterDays: number;
+    rotateImmediately: boolean;
+  }) =>
+    req<{ configured: boolean }>('/v1/secrets/rotation', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  cancelRotation: (project: string, env: string, path: string, key: string) =>
+    req<{ cancelled: boolean }>(`/v1/secrets/rotation?${qs({ project, env, path, key })}`, {
       method: 'DELETE'
     }),
   versions: (project: string, env: string, path: string, key: string) =>

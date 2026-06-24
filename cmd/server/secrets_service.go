@@ -69,12 +69,36 @@ type projectSummary struct {
 
 // itemSummary is an item without its (secret) value.
 type itemSummary struct {
-	Project   string
-	Env       string
-	Path      string
-	Key       string
-	ARN       string
-	UpdatedAt time.Time
+	Project      string
+	Env          string
+	Path         string
+	Key          string
+	ARN          string
+	UpdatedAt    time.Time
+	DeletionDate *time.Time
+}
+
+// itemDetail is the full metadata projection for a single item, backing the
+// SPA detail drawer (overview / versions / tags / policy / rotation).
+type itemDetail struct {
+	Project           string
+	Env               string
+	Path              string
+	Key               string
+	ARN               string
+	Description       string
+	KMSKeyID          string
+	CurrentVersionID  string
+	PreviousVersionID string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	DeletionDate      *time.Time
+	Tags              []secretTag
+	PolicyDocument    string
+	RotationEnabled   bool
+	RotationLambdaARN string
+	RotationDays      int
+	NextRotationDate  *time.Time
 }
 
 // itemVersion is one historical version of an item, newest first when sorted.
@@ -157,12 +181,13 @@ func (svc *secretsService) ListFolder(ctx context.Context, project, env string, 
 		}
 		if len(pi.Folder) == len(folder) {
 			items = append(items, itemSummary{
-				Project:   pi.Project,
-				Env:       pi.Env,
-				Path:      folderPath(pi.Folder),
-				Key:       pi.Key,
-				ARN:       sec.ARN,
-				UpdatedAt: sec.LastChangedDate.UTC(),
+				Project:      pi.Project,
+				Env:          pi.Env,
+				Path:         folderPath(pi.Folder),
+				Key:          pi.Key,
+				ARN:          sec.ARN,
+				UpdatedAt:    sec.LastChangedDate.UTC(),
+				DeletionDate: sec.DeletedDate,
 			})
 		} else {
 			subfolders[pi.Folder[len(folder)]] = struct{}{}
@@ -466,6 +491,135 @@ func (svc *secretsService) CreateFolder(ctx context.Context, project, env string
 		return errNoHierarchyStore
 	}
 	return svc.hierarchy.CreateFolder(ctx, project, env, folder)
+}
+
+// DescribeItem returns the full metadata projection for a single item.
+func (svc *secretsService) DescribeItem(ctx context.Context, coord itemCoord) (itemDetail, error) {
+	if err := coord.validate(); err != nil {
+		return itemDetail{}, err
+	}
+	meta, err := svc.store.DescribeSecret(ctx, coord.backingName())
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || isSecretNotFound(err) {
+			return itemDetail{}, errItemNotFound
+		}
+		return itemDetail{}, err
+	}
+	return itemDetail{
+		Project:           coord.Project,
+		Env:               coord.Env,
+		Path:              folderPath(coord.Folder),
+		Key:               coord.Key,
+		ARN:               meta.ARN,
+		Description:       meta.Description,
+		KMSKeyID:          meta.KMSKeyID,
+		CurrentVersionID:  meta.CurrentVersionID,
+		PreviousVersionID: meta.PreviousVersionID,
+		CreatedAt:         meta.CreatedAt,
+		UpdatedAt:         meta.LastChangedDate,
+		DeletionDate:      meta.DeletedDate,
+		Tags:              meta.Tags,
+		PolicyDocument:    meta.PolicyDocument,
+		RotationEnabled:   meta.RotationEnabled,
+		RotationLambdaARN: meta.RotationLambdaARN,
+		RotationDays:      meta.RotationDays,
+		NextRotationDate:  meta.NextRotationDate,
+	}, nil
+}
+
+// UpdateItemMetadata updates an item's description and/or KMS key without
+// writing a new secret value.
+func (svc *secretsService) UpdateItemMetadata(ctx context.Context, coord itemCoord, description, kmsKeyID string) error {
+	if err := coord.validate(); err != nil {
+		return err
+	}
+	_, _, err := svc.store.UpdateSecret(ctx, updateSecretRequest{
+		SecretID:    coord.backingName(),
+		Description: description,
+		KMSKeyID:    strings.TrimSpace(kmsKeyID),
+	})
+	return mapItemErr(err)
+}
+
+// PromoteItemVersion moves the AWSCURRENT stage to versionID, demoting the
+// previous current version to AWSPREVIOUS.
+func (svc *secretsService) PromoteItemVersion(ctx context.Context, coord itemCoord, versionID string) error {
+	if err := coord.validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(versionID) == "" {
+		return errors.New("versionId is required")
+	}
+	_, err := svc.store.UpdateSecretVersionStage(ctx, coord.backingName(), currentVersionStage, strings.TrimSpace(versionID), "")
+	return mapItemErr(err)
+}
+
+// TagItem adds or updates tags on an item.
+func (svc *secretsService) TagItem(ctx context.Context, coord itemCoord, tags []secretTag) error {
+	if err := coord.validate(); err != nil {
+		return err
+	}
+	if len(tags) == 0 {
+		return errors.New("at least one tag is required")
+	}
+	return mapItemErr(svc.store.TagSecret(ctx, coord.backingName(), tags))
+}
+
+// UntagItem removes tags from an item by key.
+func (svc *secretsService) UntagItem(ctx context.Context, coord itemCoord, keys []string) error {
+	if err := coord.validate(); err != nil {
+		return err
+	}
+	if len(keys) == 0 {
+		return errors.New("at least one tag key is required")
+	}
+	return mapItemErr(svc.store.UntagSecret(ctx, coord.backingName(), keys))
+}
+
+// GetItemPolicy returns the resource policy attached to an item.
+func (svc *secretsService) GetItemPolicy(ctx context.Context, coord itemCoord) (string, error) {
+	if err := coord.validate(); err != nil {
+		return "", err
+	}
+	doc, err := svc.store.GetSecretResourcePolicy(ctx, coord.backingName())
+	return doc, mapItemErr(err)
+}
+
+// PutItemPolicy attaches (or clears, when empty) a resource policy on an item.
+func (svc *secretsService) PutItemPolicy(ctx context.Context, coord itemCoord, document string) error {
+	if err := coord.validate(); err != nil {
+		return err
+	}
+	return mapItemErr(svc.store.PutSecretResourcePolicy(ctx, coord.backingName(), document))
+}
+
+// ConfigureItemRotation enables or updates rotation configuration for an item.
+func (svc *secretsService) ConfigureItemRotation(ctx context.Context, coord itemCoord, lambdaARN string, afterDays int, rotateImmediately bool) error {
+	if err := coord.validate(); err != nil {
+		return err
+	}
+	_, err := svc.store.RotateSecret(ctx, coord.backingName(), strings.TrimSpace(lambdaARN), afterDays, rotateImmediately, "")
+	return mapItemErr(err)
+}
+
+// CancelItemRotation disables rotation for an item.
+func (svc *secretsService) CancelItemRotation(ctx context.Context, coord itemCoord) error {
+	if err := coord.validate(); err != nil {
+		return err
+	}
+	_, err := svc.store.CancelRotateSecret(ctx, coord.backingName())
+	return mapItemErr(err)
+}
+
+// mapItemErr normalizes store "not found" errors to errItemNotFound.
+func mapItemErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, sql.ErrNoRows) || isSecretNotFound(err) {
+		return errItemNotFound
+	}
+	return err
 }
 
 func fmtHierarchyKey(parts ...string) string {

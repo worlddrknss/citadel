@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -247,12 +248,13 @@ type nativeProject struct {
 }
 
 type nativeItem struct {
-	Project   string `json:"project"`
-	Env       string `json:"env"`
-	Path      string `json:"path"`
-	Key       string `json:"key"`
-	ARN       string `json:"arn"`
-	UpdatedAt string `json:"updatedAt"`
+	Project      string `json:"project"`
+	Env          string `json:"env"`
+	Path         string `json:"path"`
+	Key          string `json:"key"`
+	ARN          string `json:"arn"`
+	UpdatedAt    string `json:"updatedAt"`
+	DeletionDate string `json:"deletionDate,omitempty"`
 }
 
 // ---- handlers --------------------------------------------------------------
@@ -316,14 +318,18 @@ func (s *server) handleV1ListSecrets(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]nativeItem, 0, len(found))
 	for _, it := range found {
-		items = append(items, nativeItem{
+		ni := nativeItem{
 			Project:   it.Project,
 			Env:       it.Env,
 			Path:      it.Path,
 			Key:       it.Key,
 			ARN:       it.ARN,
 			UpdatedAt: it.UpdatedAt.Format(time.RFC3339),
-		})
+		}
+		if it.DeletionDate != nil {
+			ni.DeletionDate = it.DeletionDate.Format(time.RFC3339)
+		}
+		items = append(items, ni)
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{
 		"project": project,
@@ -420,23 +426,36 @@ func (s *server) handleV1RevealSecret(w http.ResponseWriter, r *http.Request) {
 	writeNativeJSON(w, http.StatusOK, resp)
 }
 
-// handleV1DeleteSecret schedules deletion of a single item.
+// handleV1DeleteSecret schedules deletion of a single item. By default it
+// applies the store's recovery window so the item can be restored; pass
+// force=true to set the deletion date to now, or recoveryWindowDays=N to choose
+// the window. Use the restore endpoint to cancel a pending deletion.
 func (s *server) handleV1DeleteSecret(w http.ResponseWriter, r *http.Request) {
 	_, ctx, ok := s.nativeSession(w, r, "editor")
 	if !ok {
 		return
 	}
-	coord, err := coordFromQuery(r.URL.Query())
+	q := r.URL.Query()
+	coord, err := coordFromQuery(q)
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	if err := s.secretsSvc().DeleteItem(ctx, coord, 0, true); err != nil {
+	force := strings.EqualFold(strings.TrimSpace(q.Get("force")), "true")
+	windowDays := 0
+	if v := strings.TrimSpace(q.Get("recoveryWindowDays")); v != "" {
+		windowDays, err = strconv.Atoi(v)
+		if err != nil {
+			writeNativeError(w, http.StatusBadRequest, "invalid_request", "recoveryWindowDays must be a number")
+			return
+		}
+	}
+	if err := s.secretsSvc().DeleteItem(ctx, coord, windowDays, force); err != nil {
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
 		return
 	}
 	s.recordAudit(ctx, auditEvent{Action: "citadel.DeleteItem", Result: "ok", Actor: r.RemoteAddr})
-	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true, "forced": force})
 }
 
 // coordFromQuery builds and validates an item coordinate from query params.
