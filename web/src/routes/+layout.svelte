@@ -71,12 +71,13 @@
   const currentPath = $derived($page.url.pathname.replace(base, '') || '/');
 
   function isActive(href: string): boolean {
-    if (href === '/') return currentPath === '/';
+    if (href === '/') return currentPath === '/' || currentPath.startsWith('/secrets');
     return currentPath === href || currentPath.startsWith(href + '/');
   }
 
   const titles: Record<string, string> = {
     '/': 'Secrets Management',
+    '/secrets': 'Secrets Management',
     '/kms': 'Key Management Service',
     '/certificates': 'Certificate Management',
     '/audit': 'Audit Log',

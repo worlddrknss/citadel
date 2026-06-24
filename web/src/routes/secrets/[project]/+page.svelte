@@ -2,14 +2,17 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { base } from '$app/paths';
+  import { page } from '$app/stores';
   import { api, ApiError, type Project } from '$lib/api';
+
+  const project = $derived($page.params.project ?? '');
 
   let projects: Project[] = $state([]);
   let loading = $state(true);
   let flash = $state('');
   let flashOk = $state(true);
 
-  let newProjectSlug = $state('');
+  let newEnvSlug = $state('');
 
   // Confirm modal
   let confirmOpen = $state(false);
@@ -24,6 +27,9 @@
   let promptLabel = $state('');
   let promptValue = $state('');
   let promptAction: ((value: string) => Promise<void>) | null = $state(null);
+
+  const current = $derived(projects.find((p) => p.slug === project));
+  const envs = $derived(current?.environments ?? []);
 
   function notify(msg: string, ok = true) {
     flash = msg;
@@ -78,31 +84,31 @@
     }
   }
 
-  async function createProject() {
-    const slug = newProjectSlug.trim();
+  async function createEnvironment() {
+    const slug = newEnvSlug.trim();
     if (!slug) {
-      notify('enter a project name', false);
+      notify('enter an environment name', false);
       return;
     }
     try {
-      await api.createProject(slug, slug);
-      notify(`Created project ${slug}`);
-      newProjectSlug = '';
+      await api.createEnvironment(project, slug, slug);
+      notify(`Created environment ${slug}`);
+      newEnvSlug = '';
       await load();
     } catch (e) {
       err(e);
     }
   }
 
-  function renameProject(slug: string) {
+  function renameProject() {
     askPrompt({
-      title: `Rename project "${slug}"`,
+      title: `Rename project "${project}"`,
       label: 'Display name',
-      value: slug,
+      value: project,
       action: async (name) => {
         try {
-          await api.renameProject(slug, name.trim());
-          notify(`Renamed project ${slug}`);
+          await api.renameProject(project, name.trim());
+          notify(`Renamed project ${project}`);
           await load();
         } catch (e) {
           err(e);
@@ -111,15 +117,32 @@
     });
   }
 
-  function deleteProject(slug: string) {
+  function deleteProject() {
     askConfirm({
-      title: `Delete project "${slug}"?`,
+      title: `Delete project "${project}"?`,
       body: 'This removes the project and its empty environments/folders. It is refused while any secret still exists under it.',
       label: 'Delete project',
       action: async () => {
         try {
-          await api.deleteProject(slug);
-          notify(`Deleted project ${slug}`);
+          await api.deleteProject(project);
+          notify(`Deleted project ${project}`);
+          goto(`${base}/`);
+        } catch (e) {
+          err(e);
+        }
+      }
+    });
+  }
+
+  function renameEnvironment(envSlug: string) {
+    askPrompt({
+      title: `Rename environment "${envSlug}"`,
+      label: 'Display name',
+      value: envSlug,
+      action: async (name) => {
+        try {
+          await api.renameEnvironment(project, envSlug, name.trim());
+          notify(`Renamed environment ${envSlug}`);
           await load();
         } catch (e) {
           err(e);
@@ -128,19 +151,38 @@
     });
   }
 
-  function openProject(slug: string) {
-    goto(`${base}/secrets/${encodeURIComponent(slug)}`);
+  function deleteEnvironment(envSlug: string) {
+    askConfirm({
+      title: `Delete environment "${envSlug}"?`,
+      body: 'This removes the environment and its empty folders. It is refused while any secret still exists under it.',
+      label: 'Delete environment',
+      action: async () => {
+        try {
+          await api.deleteEnvironment(project, envSlug);
+          notify(`Deleted environment ${envSlug}`);
+          await load();
+        } catch (e) {
+          err(e);
+        }
+      }
+    });
+  }
+
+  function openEnv(envSlug: string) {
+    goto(`${base}/secrets/${encodeURIComponent(project)}/${encodeURIComponent(envSlug)}`);
   }
 
   onMount(load);
 </script>
 
+<div class="crumbs" style="margin-bottom:0.5rem">
+  <a href={`${base}/`}>Projects</a>
+  / <span class="cur">{project}</span>
+</div>
+
 <div class="ph">
-  <h1 class="ph-title">Secrets</h1>
-  <p class="ph-sub">
-    Organize secrets by project, environment, and folder. Items remain readable through the
-    AWS Secrets Manager API for ESO and SDK clients.
-  </p>
+  <h1 class="ph-title">{project}</h1>
+  <p class="ph-sub">Environments in this project. Open one to manage its folders and secrets.</p>
 </div>
 
 {#if flash}
@@ -149,43 +191,33 @@
 
 <div class="card">
   <div class="toolbar" style="margin-bottom:0; align-items:flex-end">
-    <h3 style="margin:0; flex:1">Projects</h3>
-    <div class="field">
-      <label for="np">New project</label>
-      <input id="np" placeholder="prod" bind:value={newProjectSlug} onkeydown={(e) => e.key === 'Enter' && createProject()} />
-    </div>
-    <button class="btn btn-p" onclick={createProject}>+ Project</button>
+    <h3 style="margin:0; flex:1">Environments</h3>
+    <button class="btn btn-sm" onclick={renameProject}>Rename project</button>
+    <button class="btn btn-sm btn-d" onclick={deleteProject}>Delete project</button>
   </div>
 </div>
 
 <div class="card" style="margin-top:1.25rem">
   {#if loading}
     <div class="empty">Loading…</div>
-  {:else if projects.length === 0}
-    <div class="empty">No projects yet. Create one above.</div>
+  {:else if !current}
+    <div class="empty">Project not found.</div>
+  {:else if envs.length === 0}
+    <div class="empty">No environments yet. Create one below.</div>
   {:else}
     <table>
       <thead>
-        <tr><th>Project</th><th>Environments</th><th></th></tr>
+        <tr><th>Environment</th><th></th></tr>
       </thead>
       <tbody>
-        {#each projects as p}
+        {#each envs as e}
           <tr>
-            <td><button class="linklike" onclick={() => openProject(p.slug)}>{p.slug}</button></td>
-            <td>
-              {#if p.environments.length === 0}
-                <span class="muted">none</span>
-              {:else}
-                {#each p.environments as e}
-                  <span class="badge env">{e}</span>
-                {/each}
-              {/if}
-            </td>
+            <td><button class="linklike" onclick={() => openEnv(e)}>{e}</button></td>
             <td>
               <div class="rowact">
-                <button class="btn btn-sm" onclick={() => openProject(p.slug)}>Open</button>
-                <button class="btn btn-sm" onclick={() => renameProject(p.slug)}>Rename</button>
-                <button class="btn btn-sm btn-d" onclick={() => deleteProject(p.slug)}>Delete</button>
+                <button class="btn btn-sm" onclick={() => openEnv(e)}>Open</button>
+                <button class="btn btn-sm" onclick={() => renameEnvironment(e)}>Rename</button>
+                <button class="btn btn-sm btn-d" onclick={() => deleteEnvironment(e)}>Delete</button>
               </div>
             </td>
           </tr>
@@ -193,6 +225,17 @@
       </tbody>
     </table>
   {/if}
+</div>
+
+<div class="card" style="margin-top:1.25rem">
+  <h3 style="margin-top:0">Create environment</h3>
+  <div class="toolbar" style="margin-bottom:0; align-items:flex-end">
+    <div class="field" style="flex:1">
+      <label for="ne">Name</label>
+      <input id="ne" placeholder="staging" bind:value={newEnvSlug} />
+    </div>
+    <button class="btn btn-p" onclick={createEnvironment}>+ Environment</button>
+  </div>
 </div>
 
 <!-- confirm modal -->
@@ -231,6 +274,17 @@
 {/if}
 
 <style>
+  .crumbs a {
+    color: var(--c-blue);
+    text-decoration: none;
+  }
+  .crumbs a:hover {
+    text-decoration: underline;
+  }
+  .crumbs .cur {
+    color: var(--c-text);
+    font-weight: 600;
+  }
   .linklike {
     background: none;
     border: none;
@@ -248,9 +302,6 @@
     display: flex;
     gap: 0.35rem;
     justify-content: flex-end;
-  }
-  .badge.env {
-    margin-right: 0.3rem;
   }
   .field.block {
     display: block;

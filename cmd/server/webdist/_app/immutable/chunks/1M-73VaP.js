@@ -1,2 +1,2 @@
-import{C as A,B as C}from"./CYLl0URY.js";const b=[...` 	
+import{C as A,B as C}from"./B4XP4XRO.js";const b=[...` 	
 \r\f \v\uFEFF`];function c(r,g,u){var f=r==null?"":""+r;if(g&&(f=f?f+" "+g:g),u){for(var t of Object.keys(u))if(u[t])f=f?f+" "+t:t;else if(f.length)for(var l=t.length,i=0;(i=f.indexOf(t,i))>=0;){var n=i+l;(i===0||b.includes(f[i-1]))&&(n===f.length||b.includes(f[n]))?f=(i===0?"":f.substring(0,i))+f.substring(n+1):i=n}}return f===""?null:f}function s(r,g,u,f,t,l){var i=r[A];if(C||i!==u||i===void 0){var n=c(u,f,l);(!C||n!==r.getAttribute("class"))&&(n==null?r.removeAttribute("class"):r.className=n),r[A]=u}else if(l&&t!==l)for(var o in l){var v=!!l[o];(t==null||v!==!!t[o])&&r.classList.toggle(o,v)}return l}export{s};
