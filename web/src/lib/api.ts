@@ -141,6 +141,8 @@ export interface Certificate {
   status: string;
   notBefore?: string;
   notAfter?: string;
+  caType?: string;
+  issuerCaId?: string;
 }
 
 export interface CertificateDetail {
@@ -495,6 +497,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ certId, reason })
     }),
+  // Public CRL distribution point (served at the server root, outside /app).
+  crlUrl: (caId: string) => `/crl/${encodeURIComponent(caId)}`,
 
   audit: () => req<{ events: AuditEvent[] }>('/v1/audit'),
 

@@ -62,7 +62,7 @@
     { href: '/secrets', label: 'Secrets', icon: 'secrets', section: 'Services' },
     { href: '/parameters', label: 'Parameter Store', icon: 'parameters', section: 'Services' },
     { href: '/kms', label: 'KMS', icon: 'kms', section: 'Services' },
-    { href: '/certificates', label: 'Certificates', icon: 'certificate', section: 'Services' },
+    { href: '/certificates', label: 'Certificate Authority', icon: 'certificate', section: 'Services' },
     { href: '/audit', label: 'Audit', icon: 'audit', section: 'Services' },
     { href: '/account', label: 'Account', icon: 'account', section: 'Account' },
     { href: '/admin', label: 'Master Admin', icon: 'admin', section: 'Administration' }
@@ -84,7 +84,7 @@
     '/secrets': 'Secrets Management',
     '/parameters': 'Parameter Store',
     '/kms': 'Key Management Service',
-    '/certificates': 'Certificate Management',
+    '/certificates': 'Certificate Authority',
     '/audit': 'Audit Log',
     '/account': 'My Account',
     '/admin': 'Master Administration'

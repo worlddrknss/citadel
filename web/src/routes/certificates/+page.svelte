@@ -34,6 +34,42 @@
 
   const cas = $derived(certs.filter((c) => c.source === 'pca-ca'));
 
+  // CA hierarchy: each CA grouped with the certificates it has issued.
+  const caGroups = $derived(
+    cas.map((ca) => ({
+      ca,
+      issued: certs.filter((c) => c.source === 'pca-cert' && c.issuerCaId === ca.id)
+    }))
+  );
+  // pca-cert rows whose issuing CA is not present in the listing.
+  const orphanCerts = $derived(
+    certs.filter((c) => c.source === 'pca-cert' && !cas.some((ca) => ca.id === c.issuerCaId))
+  );
+  const otherCerts = $derived(certs.filter((c) => c.source === 'lets-encrypt'));
+
+  let expanded = $state<Record<string, boolean>>({});
+  function toggleCA(id: string) {
+    expanded = { ...expanded, [id]: !expanded[id] };
+  }
+
+  // In-app revoke confirmation (no native confirm()).
+  let confirmCert: Certificate | null = $state(null);
+  let confirmReason = $state('Unspecified');
+  let revoking = $state(false);
+  const revokeReasons = [
+    'Unspecified',
+    'KeyCompromise',
+    'CACompromise',
+    'AffiliationChanged',
+    'Superseded',
+    'CessationOfOperation',
+    'PrivilegeWithdrawn'
+  ];
+
+  function fmtType(t?: string): string {
+    return t === 'SUBORDINATE' ? 'Subordinate' : t === 'ROOT' ? 'Root' : t || '—';
+  }
+
   function notify(msg: string, ok = true) {
     flash = msg;
     flashOk = ok;
@@ -96,14 +132,23 @@
     }
   }
 
-  async function revoke(c: Certificate) {
-    if (!confirm(`Revoke certificate ${c.id}?`)) return;
+  function askRevoke(c: Certificate) {
+    confirmReason = 'Unspecified';
+    confirmCert = c;
+  }
+
+  async function confirmRevoke() {
+    if (!confirmCert) return;
+    revoking = true;
     try {
-      await api.revokeCert(c.id, 'Unspecified');
-      notify(`Revoked ${c.id}`);
+      await api.revokeCert(confirmCert.id, confirmReason);
+      notify(`Revoked ${confirmCert.id}`);
+      confirmCert = null;
       await load();
     } catch (e) {
       if (e instanceof ApiError) notify(e.message, false);
+    } finally {
+      revoking = false;
     }
   }
 
@@ -149,8 +194,8 @@
 </script>
 
 <div class="ph">
-  <h1 class="ph-title">Certificate Management</h1>
-  <p class="ph-sub">Private CA hierarchy, issued certificates, and ACME / Let's Encrypt certificates.</p>
+  <h1 class="ph-title">Certificate Authority</h1>
+  <p class="ph-sub">Manage your private CA hierarchy, issue and revoke certificates, and publish revocation lists.</p>
 </div>
 
 {#if flash}
@@ -158,44 +203,133 @@
 {/if}
 
 <div class="card">
-  <h3 style="margin-top:0">Certificates</h3>
+  <h3 style="margin-top:0">Certificate authorities</h3>
   {#if loading}
     <div class="empty">Loading…</div>
-  {:else if certs.length === 0}
-    <div class="empty">No certificates yet.</div>
+  {:else if caGroups.length === 0}
+    <div class="empty">No certificate authorities yet. Create one below to start issuing certificates.</div>
   {:else}
+    <div class="ca-list">
+      {#each caGroups as g}
+        <div class="ca-node">
+          <div class="ca-head">
+            <button class="ca-toggle" onclick={() => toggleCA(g.ca.id)} aria-label="Toggle issued certificates">
+              <span class="caret" class:open={expanded[g.ca.id]}>▸</span>
+            </button>
+            <div class="ca-main">
+              <button class="linklike ca-name" onclick={() => openDetail(g.ca)}>{g.ca.subject || g.ca.id}</button>
+              <div class="ca-meta">
+                <span class="badge">{fmtType(g.ca.caType)}</span>
+                <span class="badge">{g.ca.status || '—'}</span>
+                <span class="muted small">{g.issued.length} issued</span>
+                {#if g.ca.notAfter}
+                  <span class="muted small">expires {new Date(g.ca.notAfter).toLocaleDateString()}</span>
+                {/if}
+              </div>
+            </div>
+            <div class="ca-act">
+              <a class="btn btn-sm" href={api.crlUrl(g.ca.id)} target="_blank" rel="noopener" download>Download CRL</a>
+            </div>
+          </div>
+          {#if expanded[g.ca.id]}
+            <div class="ca-children">
+              {#if g.issued.length === 0}
+                <div class="empty small">No certificates issued by this CA.</div>
+              {:else}
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Certificate</th>
+                      <th>Serial</th>
+                      <th>Status</th>
+                      <th>Not after</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each g.issued as c}
+                      <tr class:rowsel={detail?.id === c.id}>
+                        <td class="mono">
+                          <button class="linklike" onclick={() => openDetail(c)}>{c.id}</button>
+                        </td>
+                        <td class="mono small">{c.subject || '—'}</td>
+                        <td><span class="badge">{c.status || '—'}</span></td>
+                        <td class="muted">{c.notAfter ? new Date(c.notAfter).toLocaleDateString() : '—'}</td>
+                        <td>
+                          {#if c.status !== 'REVOKED'}
+                            <button class="btn btn-sm btn-d" onclick={() => askRevoke(c)}>Revoke</button>
+                          {/if}
+                        </td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/each}
+    </div>
+  {/if}
+</div>
+
+{#if orphanCerts.length > 0}
+  <div class="card" style="margin-top:1.25rem">
+    <h3 style="margin-top:0">Issued certificates (CA unavailable)</h3>
     <table>
       <thead>
         <tr>
-          <th>Source</th>
-          <th>ID</th>
-          <th>Subject / Serial</th>
+          <th>Certificate</th>
+          <th>Serial</th>
           <th>Status</th>
-          <th>Not After</th>
+          <th>Not after</th>
           <th></th>
         </tr>
       </thead>
       <tbody>
-        {#each certs as c}
+        {#each orphanCerts as c}
           <tr class:rowsel={detail?.id === c.id}>
-            <td>{sourceLabel[c.source] ?? c.source}</td>
-            <td class="mono">
-              <button class="linklike" onclick={() => openDetail(c)}>{c.id}</button>
-            </td>
-            <td>{c.subject || '—'}</td>
+            <td class="mono"><button class="linklike" onclick={() => openDetail(c)}>{c.id}</button></td>
+            <td class="mono small">{c.subject || '—'}</td>
             <td><span class="badge">{c.status || '—'}</span></td>
             <td class="muted">{c.notAfter ? new Date(c.notAfter).toLocaleDateString() : '—'}</td>
             <td>
-              {#if c.source === 'pca-cert' && c.status !== 'REVOKED'}
-                <button class="btn btn-sm btn-d" onclick={() => revoke(c)}>Revoke</button>
+              {#if c.status !== 'REVOKED'}
+                <button class="btn btn-sm btn-d" onclick={() => askRevoke(c)}>Revoke</button>
               {/if}
             </td>
           </tr>
         {/each}
       </tbody>
     </table>
-  {/if}
-</div>
+  </div>
+{/if}
+
+{#if otherCerts.length > 0}
+  <div class="card" style="margin-top:1.25rem">
+    <h3 style="margin-top:0">ACME / Let's Encrypt certificates</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Subject</th>
+          <th>Status</th>
+          <th>Not after</th>
+        </tr>
+      </thead>
+      <tbody>
+        {#each otherCerts as c}
+          <tr class:rowsel={detail?.id === c.id}>
+            <td class="mono"><button class="linklike" onclick={() => openDetail(c)}>{c.id}</button></td>
+            <td>{c.subject || '—'}</td>
+            <td><span class="badge">{c.status || '—'}</span></td>
+            <td class="muted">{c.notAfter ? new Date(c.notAfter).toLocaleDateString() : '—'}</td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  </div>
+{/if}
 
 <div class="card" style="margin-top:1.25rem">
   <h3 style="margin-top:0">Create private CA</h3>
@@ -272,6 +406,38 @@
     </div>
   </div>
 </div>
+
+<!-- revoke confirmation modal -->
+{#if confirmCert}
+  <div
+    class="modal-scrim"
+    role="button"
+    tabindex="0"
+    aria-label="Cancel"
+    onclick={() => (confirmCert = null)}
+    onkeydown={(e) => e.key === 'Escape' && (confirmCert = null)}
+  ></div>
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Revoke certificate">
+    <h3 style="margin-top:0">Revoke certificate</h3>
+    <p class="muted small">
+      This permanently revokes <span class="mono">{confirmCert.id}</span> and adds it to the CA's revocation list. This cannot be undone.
+    </p>
+    <div class="field" style="margin-bottom:1rem">
+      <label for="rr">Revocation reason</label>
+      <select id="rr" bind:value={confirmReason}>
+        {#each revokeReasons as r}
+          <option value={r}>{r}</option>
+        {/each}
+      </select>
+    </div>
+    <div class="row-act" style="justify-content:flex-end">
+      <button class="btn btn-sm" onclick={() => (confirmCert = null)} disabled={revoking}>Cancel</button>
+      <button class="btn btn-sm btn-d" onclick={confirmRevoke} disabled={revoking}>
+        {revoking ? 'Revoking…' : 'Revoke'}
+      </button>
+    </div>
+  </div>
+{/if}
 
 <!-- detail drawer -->
 {#if detail}
@@ -493,5 +659,79 @@
     max-height: 360px;
     overflow-y: auto;
     margin: 0 0 0.6rem;
+  }
+  .ca-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+  .ca-node {
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .ca-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.6rem 0.75rem;
+  }
+  .ca-toggle {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    color: var(--c-muted);
+    flex-shrink: 0;
+  }
+  .caret {
+    display: inline-block;
+    transition: transform 0.12s ease;
+  }
+  .caret.open {
+    transform: rotate(90deg);
+  }
+  .ca-main {
+    flex: 1;
+    min-width: 0;
+  }
+  .ca-name {
+    font-weight: 600;
+    display: block;
+    margin-bottom: 0.2rem;
+  }
+  .ca-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .ca-act {
+    flex-shrink: 0;
+  }
+  .ca-children {
+    border-top: 1px solid var(--c-border);
+    padding: 0.5rem 0.75rem;
+    background: rgba(43, 108, 176, 0.03);
+  }
+  .modal-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 20, 30, 0.35);
+    z-index: 50;
+    border: none;
+  }
+  .modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(440px, 92vw);
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius);
+    box-shadow: 0 12px 32px rgba(15, 20, 30, 0.18);
+    z-index: 51;
+    padding: 1.25rem;
   }
 </style>

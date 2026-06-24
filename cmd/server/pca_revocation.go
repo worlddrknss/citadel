@@ -11,6 +11,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -199,8 +200,9 @@ func (s *server) handleGetCRL(w http.ResponseWriter, r *http.Request) {
 
 // handleCRLDownload serves the CRL in binary DER format
 func (s *server) handleCRLDownload(w http.ResponseWriter, r *http.Request) {
-	// Extract CA ID from path: /crl/<ca-id>.crl
-	caID := r.PathValue("ca_id")
+	// Extract CA ID from path: /crl/<ca-id> (an optional .crl suffix is
+	// tolerated so conventional distribution-point URLs also resolve).
+	caID := strings.TrimSuffix(r.PathValue("ca_id"), ".crl")
 	if caID == "" {
 		http.Error(w, "CA ID required", http.StatusBadRequest)
 		return

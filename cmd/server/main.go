@@ -756,6 +756,11 @@ func main() {
 	// Must be reachable unauthenticated so the ACME CA can verify domain control.
 	mux.HandleFunc("GET /.well-known/acme-challenge/{token}", s.handleACMEChallengeToken)
 
+	// Public CRL distribution point. Certificate Revocation Lists are intended
+	// to be fetched anonymously by relying parties, so this is served
+	// unauthenticated in binary DER form at the conventional .crl path.
+	mux.HandleFunc("GET /crl/{ca_id}", s.handleCRLDownload)
+
 	// Middleware chain (outermost first): panic recovery, security headers,
 	// request logging.
 	h := withPanicRecovery(withSecurityHeaders(withRequestLogging(mux)))

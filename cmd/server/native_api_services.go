@@ -65,12 +65,14 @@ func (s *server) handleV1ListKMSKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 type nativeCertificate struct {
-	Source    string `json:"source"`
-	ID        string `json:"id"`
-	Subject   string `json:"subject"`
-	Status    string `json:"status"`
-	NotBefore string `json:"notBefore,omitempty"`
-	NotAfter  string `json:"notAfter,omitempty"`
+	Source     string `json:"source"`
+	ID         string `json:"id"`
+	Subject    string `json:"subject"`
+	Status     string `json:"status"`
+	NotBefore  string `json:"notBefore,omitempty"`
+	NotAfter   string `json:"notAfter,omitempty"`
+	CAType     string `json:"caType,omitempty"`
+	IssuerCAID string `json:"issuerCaId,omitempty"`
 }
 
 // handleV1ListCertificates returns issued certificates across the private CA
@@ -100,6 +102,7 @@ func (s *server) handleV1ListCertificates(w http.ResponseWriter, r *http.Request
 			Status:    ca.State,
 			NotBefore: ca.NotBefore.UTC().Format(time.RFC3339),
 			NotAfter:  ca.NotAfter.UTC().Format(time.RFC3339),
+			CAType:    ca.Type,
 		})
 		certs, cerr := s.store.ListCertificates(ctx, ca.CAID)
 		if cerr != nil {
@@ -107,12 +110,13 @@ func (s *server) handleV1ListCertificates(w http.ResponseWriter, r *http.Request
 		}
 		for _, c := range certs {
 			out = append(out, nativeCertificate{
-				Source:    "pca-cert",
-				ID:        c.CertID,
-				Subject:   c.Serial,
-				Status:    c.Status,
-				NotBefore: c.NotBefore.UTC().Format(time.RFC3339),
-				NotAfter:  c.NotAfter.UTC().Format(time.RFC3339),
+				Source:     "pca-cert",
+				ID:         c.CertID,
+				Subject:    c.Serial,
+				Status:     c.Status,
+				NotBefore:  c.NotBefore.UTC().Format(time.RFC3339),
+				NotAfter:   c.NotAfter.UTC().Format(time.RFC3339),
+				IssuerCAID: ca.CAID,
 			})
 		}
 	}
