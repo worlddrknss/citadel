@@ -742,6 +742,11 @@ VALUES ($1, $2, $3, $4, $5, $6)
 			}
 			promoteSecretVersion(&meta, versionID)
 			nextKMSKeyID = kmsKeyID
+			// The freshly written version is sealed under nextKMSKeyID, so the
+			// returned value record must decrypt with that key. Update meta's
+			// key before building the record to avoid decrypting the new
+			// ciphertext with the previous master key (AEAD auth failure).
+			meta.KMSKeyID = nextKMSKeyID
 			built, buildErr := buildSecretValueRecord(ctx, s.ResolveByID, meta, secretVersionRow{VersionID: versionID, EncryptedPayloadB64: encryptedPayloadB64, IsBinary: isBinary, CreatedAt: now})
 			if buildErr != nil {
 				return secretMetadataRecord{}, nil, buildErr
