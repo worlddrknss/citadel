@@ -549,6 +549,16 @@
     box-sizing: border-box;
     resize: vertical;
   }
+  /* Let inputs/selects fill their field and shrink so the create-CA and
+     issue-certificate forms wrap cleanly instead of overflowing horizontally. */
+  .field {
+    min-width: 0;
+  }
+  .field :global(input),
+  .field :global(select) {
+    width: 100%;
+    min-width: 0;
+  }
   .linklike {
     background: none;
     border: none;

@@ -3,6 +3,8 @@
   --c-surface: #ffffff;
   --c-side: #1e2433;
   --c-side-hover: #2a3142;
+  --c-side-text: #cdd3df;
+  --c-side-label: #6b7280;
   --c-blue: #0070c4;
   --c-blue-dark: #005a9e;
   --c-text: #1a1f2b;
@@ -10,9 +12,41 @@
   --c-border: #e2e5ea;
   --c-danger: #c4320a;
   --c-ok: #1a7f37;
+  --c-input-bg: #ffffff;
+  --c-btn-hover: #f6f7f9;
+  --c-badge-bg: #eef1f5;
+  --c-ok-bg: #e7f6ec;
+  --c-danger-bg: #fbeae5;
+  --c-danger-border: #e7c3b8;
+  --c-row-hover: rgba(43, 108, 176, 0.06);
   --sw: 232px;
   --th: 56px;
   --radius: 8px;
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  --c-bg: #0e121a;
+  --c-surface: #161b26;
+  --c-side: #0b0f16;
+  --c-side-hover: #1b2230;
+  --c-side-text: #c4ccda;
+  --c-side-label: #6b7689;
+  --c-blue: #4a9eff;
+  --c-blue-dark: #3b86e0;
+  --c-text: #e6e9ef;
+  --c-muted: #98a2b3;
+  --c-border: #28303d;
+  --c-danger: #f4795f;
+  --c-ok: #5cc97f;
+  --c-input-bg: #1c222e;
+  --c-btn-hover: #222a37;
+  --c-badge-bg: #222a37;
+  --c-ok-bg: rgba(46, 160, 87, 0.16);
+  --c-danger-bg: rgba(244, 121, 95, 0.16);
+  --c-danger-border: #5c3128;
+  --c-row-hover: rgba(74, 158, 255, 0.1);
+  color-scheme: dark;
 }
 
 * {
@@ -46,7 +80,7 @@ a:hover {
 
 .sidebar {
   background: var(--c-side);
-  color: #cdd3df;
+  color: var(--c-side-text);
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -70,7 +104,7 @@ a:hover {
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #6b7280;
+  color: var(--c-side-label);
   margin-bottom: 0.25rem;
 }
 .sb-link {
@@ -78,7 +112,7 @@ a:hover {
   align-items: center;
   gap: 0.6rem;
   padding: 0.5rem 1.25rem;
-  color: #cdd3df;
+  color: var(--c-side-text);
   cursor: pointer;
   font-size: 0.9rem;
 }
@@ -160,7 +194,7 @@ select {
   padding: 0.45rem 0.6rem;
   border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: #fff;
+  background: var(--c-input-bg);
   color: var(--c-text);
   min-width: 160px;
 }
@@ -178,12 +212,12 @@ select:focus {
   padding: 0.45rem 0.85rem;
   border-radius: 6px;
   border: 1px solid var(--c-border);
-  background: #fff;
+  background: var(--c-input-bg);
   color: var(--c-text);
   cursor: pointer;
 }
 .btn:hover {
-  background: #f6f7f9;
+  background: var(--c-btn-hover);
 }
 .btn-p {
   background: var(--c-blue);
@@ -195,10 +229,10 @@ select:focus {
 }
 .btn-d {
   color: var(--c-danger);
-  border-color: #e7c3b8;
+  border-color: var(--c-danger-border);
 }
 .btn-d:hover {
-  background: #fbeae5;
+  background: var(--c-danger-bg);
 }
 .btn-sm {
   padding: 0.25rem 0.55rem;
@@ -231,7 +265,7 @@ tr:last-child td {
   padding: 0.1rem 0.5rem;
   border-radius: 999px;
   font-size: 0.72rem;
-  background: #eef1f5;
+  background: var(--c-badge-bg);
   color: var(--c-muted);
 }
 .crumbs {
@@ -248,11 +282,11 @@ tr:last-child td {
   font-size: 0.88rem;
 }
 .flash.ok {
-  background: #e7f6ec;
+  background: var(--c-ok-bg);
   color: var(--c-ok);
 }
 .flash.err {
-  background: #fbeae5;
+  background: var(--c-danger-bg);
   color: var(--c-danger);
 }
 .muted {

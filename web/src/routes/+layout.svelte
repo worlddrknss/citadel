@@ -57,6 +57,24 @@
 
   let { children } = $props();
 
+  // Theme switcher. The actual attribute is applied pre-paint by an inline
+  // script in app.html; here we keep reactive state in sync and persist it.
+  let theme = $state<'dark' | 'light'>('dark');
+  onMount(() => {
+    const stored = localStorage.getItem('citadel-theme');
+    theme = stored === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', theme);
+  });
+  function toggleTheme() {
+    theme = theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', theme);
+    try {
+      localStorage.setItem('citadel-theme', theme);
+    } catch {
+      /* ignore */
+    }
+  }
+
   const nav = [
     { href: '/', label: 'Dashboard', icon: 'dashboard', section: 'Services' },
     { href: '/secrets', label: 'Secrets', icon: 'secrets', section: 'Services' },
@@ -178,6 +196,22 @@
             {#if me.accountId}<span class="mono"> · {me.accountId}</span>{/if}
           {/if}
           · <a href="{base}/" onclick={doLogout}>Sign out</a>
+          <button
+            class="theme-toggle"
+            onclick={toggleTheme}
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            aria-label="Toggle color theme"
+          >
+            {#if theme === 'dark'}
+              <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4" />
+              </svg>
+            {:else}
+              <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
+              </svg>
+            {/if}
+          </button>
         </span>
       </header>
       <main class="content">
@@ -203,6 +237,29 @@
     width: 18px;
     height: 18px;
     flex: none;
+  }
+  .user {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    margin-left: 0.35rem;
+    padding: 0;
+    border: 1px solid var(--c-border);
+    border-radius: 6px;
+    background: var(--c-input-bg);
+    color: var(--c-muted);
+    cursor: pointer;
+  }
+  .theme-toggle:hover {
+    background: var(--c-btn-hover);
+    color: var(--c-text);
   }
 </style>
 

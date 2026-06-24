@@ -273,6 +273,11 @@
   <div class="flash {flashOk ? 'ok' : 'err'}">{flash}</div>
 {/if}
 
+<div class="ph">
+  <h1 class="ph-title">Parameter Store</h1>
+  <p class="ph-sub">Hierarchical configuration and secrets, encrypted at rest with KMS.</p>
+</div>
+
 <div class="crumbs">
   <span onclick={() => crumbTo(0)} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && crumbTo(0)}>
     /
@@ -324,14 +329,14 @@
               <td class="mono">
                 {#if revealed[p.name] !== undefined}
                   <code>{revealed[p.name]}</code>
-                  <button class="btn" onclick={() => hide(p.name)}>Hide</button>
+                  <button class="btn btn-sm" onclick={() => hide(p.name)}>Hide</button>
                 {:else}
-                  <button class="btn" onclick={() => reveal(p)}>Reveal</button>
+                  <button class="btn btn-sm" onclick={() => reveal(p)}>Reveal</button>
                 {/if}
               </td>
               <td style="white-space:nowrap">
-                <button class="btn" onclick={() => openDetail(p)}>Details</button>
-                <button class="btn btn-d" onclick={() => askDelete(p)}>Delete</button>
+                <button class="btn btn-sm" onclick={() => openDetail(p)}>Details</button>
+                <button class="btn btn-sm btn-d" onclick={() => askDelete(p)}>Delete</button>
               </td>
             </tr>
           {/each}
@@ -452,7 +457,7 @@
               <tr>
                 <td class="mono">{t.key}</td>
                 <td>{t.value}</td>
-                <td><button class="btn btn-d" onclick={() => removeTag(t.key)}>Remove</button></td>
+                <td><button class="btn btn-sm btn-d" onclick={() => removeTag(t.key)}>Remove</button></td>
               </tr>
             {/each}
           </tbody>
@@ -487,27 +492,29 @@
 {/if}
 
 <style>
+  .crumbs {
+    margin-bottom: 0.85rem;
+  }
   .grid {
     display: grid;
     grid-template-columns: 2fr 1fr;
-    gap: 1rem;
+    gap: 1.25rem;
     align-items: start;
   }
-  .table {
-    width: 100%;
-    border-collapse: collapse;
+  @media (max-width: 900px) {
+    .grid {
+      grid-template-columns: 1fr;
+    }
   }
-  .table th,
-  .table td {
-    text-align: left;
-    padding: 0.5rem 0.6rem;
-    border-bottom: 1px solid var(--border, #2a2a35);
-    font-size: 0.9rem;
+  .field :global(input),
+  .field :global(select) {
+    width: 100%;
+    min-width: 0;
   }
   .link-btn {
     background: none;
     border: none;
-    color: var(--accent, #6ea8fe);
+    color: var(--c-blue);
     cursor: pointer;
     padding: 0;
     font: inherit;
@@ -516,13 +523,17 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
+    color: var(--c-muted);
+  }
+  .check :global(input) {
+    min-width: 0;
   }
   .drawer-back,
   .modal-back {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(15, 20, 30, 0.35);
     z-index: 40;
   }
   .drawer {
@@ -531,8 +542,9 @@
     right: 0;
     bottom: 0;
     width: min(560px, 92vw);
-    background: var(--panel, #16161d);
-    border-left: 1px solid var(--border, #2a2a35);
+    background: var(--c-surface);
+    border-left: 1px solid var(--c-border);
+    box-shadow: -8px 0 24px rgba(15, 20, 30, 0.12);
     padding: 1.25rem;
     overflow-y: auto;
     z-index: 41;
@@ -545,30 +557,33 @@
   }
   .tabs {
     display: flex;
-    gap: 0.5rem;
+    gap: 0.25rem;
     margin-bottom: 1rem;
-    border-bottom: 1px solid var(--border, #2a2a35);
+    border-bottom: 1px solid var(--c-border);
   }
   .tab {
     background: none;
     border: none;
-    color: var(--muted, #9aa0aa);
-    padding: 0.5rem 0.25rem;
-    cursor: pointer;
     border-bottom: 2px solid transparent;
+    color: var(--c-muted);
+    padding: 0.5rem 0.7rem;
+    cursor: pointer;
+    font: inherit;
   }
   .tab.active {
-    color: var(--text, #e7e7ea);
-    border-bottom-color: var(--accent, #6ea8fe);
+    color: var(--c-text);
+    border-bottom-color: var(--c-blue);
+    font-weight: 600;
   }
   .modal {
     position: fixed;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    background: var(--panel, #16161d);
-    border: 1px solid var(--border, #2a2a35);
-    border-radius: 10px;
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius);
+    box-shadow: 0 12px 32px rgba(15, 20, 30, 0.18);
     padding: 1.25rem;
     width: min(440px, 92vw);
     z-index: 42;
