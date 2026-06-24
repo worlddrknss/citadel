@@ -774,6 +774,33 @@ func (s *dbStore) DeleteSecret(ctx context.Context, secretID string, recoveryWin
 	if err != nil {
 		return secretMetadataRecord{}, err
 	}
+	// Force delete purges the secret immediately, bypassing the recovery
+	// window. This works even when the secret is already scheduled for
+	// deletion so operators can fully remove a pending item.
+	if forceDelete {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return secretMetadataRecord{}, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		for _, q := range []string{
+			`DELETE FROM sm_secret_versions WHERE secret_name = $1`,
+			`DELETE FROM sm_secret_tags WHERE secret_name = $1`,
+			`DELETE FROM sm_secret_policies WHERE secret_name = $1`,
+			`DELETE FROM sm_secrets WHERE name = $1`,
+		} {
+			if _, err := tx.ExecContext(ctx, q, meta.Name); err != nil {
+				return secretMetadataRecord{}, err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return secretMetadataRecord{}, err
+		}
+		now := time.Now().UTC()
+		meta.DeletedDate = &now
+		meta.LastChangedDate = now
+		return meta, nil
+	}
 	if meta.DeletedDate != nil {
 		return meta, nil
 	}
@@ -1060,6 +1087,15 @@ func (s *inMemoryStore) DeleteSecret(ctx context.Context, secretID string, recov
 	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
 		return secretMetadataRecord{}, err
+	}
+	// Force delete purges the secret immediately, even when it is already
+	// scheduled for deletion.
+	if forceDelete {
+		delete(s.secrets, memSecretKey(secret.account, secret.metadata.Name))
+		now := time.Now().UTC()
+		secret.metadata.DeletedDate = &now
+		secret.metadata.LastChangedDate = now
+		return secret.metadata, nil
 	}
 	deletionDate, err := normalizeSecretDeletion(forceDelete, recoveryWindowDays)
 	if err != nil {
