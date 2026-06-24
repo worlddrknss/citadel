@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { goto } from '$app/navigation';
   import { base } from '$app/paths';
   import { page } from '$app/stores';
@@ -532,12 +532,16 @@
   }
 
   $effect(() => {
-    // Reload whenever the env route changes.
+    // Reload whenever the env route changes. Only project/env are tracked as
+    // dependencies; the body is untracked so navigating into a folder (which
+    // updates `path` and calls loadItems) does not retrigger this reset.
     void project;
     void env;
-    path = '/';
-    closeDetail();
-    loadItems();
+    untrack(() => {
+      path = '/';
+      closeDetail();
+      loadItems();
+    });
   });
 
   onMount(loadKms);
