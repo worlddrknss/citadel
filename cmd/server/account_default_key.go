@@ -118,13 +118,13 @@ func (s *dbStore) EnsureAccountDefaultKey(ctx context.Context, accountID string)
 			`INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, managed, deletion_date, created_at, account_id)
 			 VALUES ($1, $2, '', $3, $4, '', $5, $6, $7, TRUE, TRUE, NULL, $8, $9)`,
 			keyID, arn, wrappedB64, nonceB64, usage, spec,
-			fmt.Sprintf("Default key for account %s", accountID), time.Now().UTC(), accountID); e != nil {
+			"default", time.Now().UTC(), accountID); e != nil {
 			return kmsKey{}, e
 		}
 	} else {
 		// Promote the adopted key to a managed, enabled, non-deleting state.
 		if _, e := tx.ExecContext(ctx,
-			`UPDATE kms_keys SET managed = TRUE, enabled = TRUE, deletion_date = NULL, updated_at = NOW() WHERE id = $1 AND account_id = $2`,
+			`UPDATE kms_keys SET managed = TRUE, enabled = TRUE, deletion_date = NULL, description = 'default', updated_at = NOW() WHERE id = $1 AND account_id = $2`,
 			keyID, accountID); e != nil {
 			return kmsKey{}, e
 		}
