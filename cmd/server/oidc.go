@@ -84,6 +84,8 @@ const (
 var (
 	kubeSATokenOnce sync.Once
 	kubeSAToken     string
+	kubeHostsOnce   sync.Once
+	kubeHosts       map[string]struct{}
 )
 
 // jwk is a single JSON Web Key (RSA or EC).
@@ -387,7 +389,24 @@ func httpGetJSON[T any](ctx context.Context, client *http.Client, url string) (T
 
 func shouldUseInClusterBearer(host string) bool {
 	h := strings.ToLower(strings.TrimSpace(host))
-	return h == "kubernetes.default.svc" || h == "kubernetes.default.svc.cluster.local"
+	if h == "" {
+		return false
+	}
+	kubeHostsOnce.Do(func() {
+		kubeHosts = map[string]struct{}{
+			"kubernetes":                         {},
+			"kubernetes.default.svc":             {},
+			"kubernetes.default.svc.cluster.local": {},
+		}
+		if v := strings.ToLower(strings.TrimSpace(os.Getenv("KUBERNETES_SERVICE_HOST"))); v != "" {
+			kubeHosts[v] = struct{}{}
+		}
+		if v := strings.ToLower(strings.TrimSpace(os.Getenv("KUBERNETES_PORT_443_TCP_ADDR"))); v != "" {
+			kubeHosts[v] = struct{}{}
+		}
+	})
+	_, ok := kubeHosts[h]
+	return ok
 }
 
 func inClusterServiceAccountToken() string {
