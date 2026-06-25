@@ -150,6 +150,19 @@ type keyStore interface {
 	DeleteAccessKey(ctx context.Context, keyID string) error
 	TouchAccessKeyLastUsed(ctx context.Context, keyID string) error
 
+	// STS / IAM identity federation (OIDC providers, roles, temporary sessions)
+	CreateOIDCProvider(ctx context.Context, p oidcProvider) error
+	ListOIDCProviders(ctx context.Context, accountID string) ([]oidcProvider, error)
+	GetOIDCProviderByURL(ctx context.Context, accountID, url string) (oidcProvider, error)
+	DeleteOIDCProvider(ctx context.Context, accountID, providerARN string) error
+	CreateIAMRole(ctx context.Context, role iamRole) error
+	ListIAMRoles(ctx context.Context, accountID string) ([]iamRole, error)
+	GetIAMRole(ctx context.Context, accountID, roleName string) (iamRole, error)
+	GetIAMRoleByARN(ctx context.Context, roleARN string) (iamRole, error)
+	DeleteIAMRole(ctx context.Context, accountID, roleName string) error
+	CreateSTSSession(ctx context.Context, sess stsSession, secret, sessionToken string) error
+	DeleteExpiredSTSSessions(ctx context.Context) (int64, error)
+
 	// Private CA (acm-pca) methods
 	CreateCertificateAuthority(ctx context.Context, ca pcaCertificateAuthority) error
 	DescribeCertificateAuthority(ctx context.Context, arn string) (pcaCertificateAuthority, error)
@@ -756,6 +769,14 @@ func main() {
 	mux.HandleFunc("POST /v1/admin/accounts/assign", s.handleV1AssignUserAccount)
 	mux.HandleFunc("DELETE /v1/admin/accounts/assign", s.handleV1RemoveUserAccount)
 
+	// IAM identity federation: OIDC providers and roles consumed by STS.
+	mux.HandleFunc("GET /v1/iam/oidc-providers", s.handleV1ListOIDCProviders)
+	mux.HandleFunc("POST /v1/iam/oidc-providers", s.handleV1CreateOIDCProvider)
+	mux.HandleFunc("DELETE /v1/iam/oidc-providers", s.handleV1DeleteOIDCProvider)
+	mux.HandleFunc("GET /v1/iam/roles", s.handleV1ListRoles)
+	mux.HandleFunc("POST /v1/iam/roles", s.handleV1CreateRole)
+	mux.HandleFunc("DELETE /v1/iam/roles", s.handleV1DeleteRole)
+
 	// Modern Svelte single-page control plane, embedded into the binary.
 	mux.Handle("/app/", http.HandlerFunc(s.handleApp))
 	mux.Handle("/app", http.RedirectHandler("/app/", http.StatusMovedPermanently))
@@ -1330,7 +1351,50 @@ CREATE TABLE IF NOT EXISTS iam_access_keys (
 	UNIQUE (access_key_id)
 );
 
-ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS rotation_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+-- IAM OIDC identity providers: external token issuers whose JWTs may be
+-- exchanged for temporary Citadel credentials via STS AssumeRoleWithWebIdentity.
+CREATE TABLE IF NOT EXISTS iam_oidc_providers (
+	provider_arn TEXT PRIMARY KEY,
+	account_id CHAR(12) NOT NULL,
+	url TEXT NOT NULL,
+	client_ids_json TEXT NOT NULL DEFAULT '[]',
+	thumbprints_json TEXT NOT NULL DEFAULT '[]',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	UNIQUE (account_id, url)
+);
+
+-- IAM roles: named identities with a trust policy describing who may assume
+-- them (an OIDC provider's subjects, or principal account IDs).
+CREATE TABLE IF NOT EXISTS iam_roles (
+	role_arn TEXT PRIMARY KEY,
+	account_id CHAR(12) NOT NULL,
+	role_name TEXT NOT NULL,
+	description TEXT NOT NULL DEFAULT '',
+	trust_policy TEXT NOT NULL DEFAULT '{}',
+	max_session_seconds INTEGER NOT NULL DEFAULT 3600,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	UNIQUE (account_id, role_name)
+);
+
+-- STS sessions: short-lived ASIA-prefixed temporary credentials minted by
+-- AssumeRole / AssumeRoleWithWebIdentity. The secret is wrapped exactly like a
+-- long-lived access key so the same SigV4 path verifies it.
+CREATE TABLE IF NOT EXISTS sts_sessions (
+	access_key_id TEXT PRIMARY KEY,
+	account_id CHAR(12) NOT NULL,
+	role_arn TEXT NOT NULL,
+	role_session_name TEXT NOT NULL DEFAULT '',
+	subject TEXT NOT NULL DEFAULT '',
+	secret_wrapped_b64 TEXT NOT NULL,
+	secret_nonce_b64 TEXT NOT NULL,
+	session_token TEXT NOT NULL,
+	expires_at TIMESTAMPTZ NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS sts_sessions_expires_idx ON sts_sessions (expires_at);
+
+
 ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS rotation_lambda_arn TEXT NOT NULL DEFAULT '';
 ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS rotation_days INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE sm_secrets ADD COLUMN IF NOT EXISTS next_rotation_date TIMESTAMPTZ;

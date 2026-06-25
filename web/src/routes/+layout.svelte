@@ -81,6 +81,7 @@
     { href: '/parameters', label: 'Parameter Store', icon: 'parameters', section: 'Services' },
     { href: '/kms', label: 'KMS', icon: 'kms', section: 'Services' },
     { href: '/certificates', label: 'Certificate Authority', icon: 'certificate', section: 'Services' },
+    { href: '/iam', label: 'Identity & Access', icon: 'iam', section: 'Services' },
     { href: '/audit', label: 'Audit', icon: 'audit', section: 'Services' },
     { href: '/account', label: 'Account', icon: 'account', section: 'Account' },
     { href: '/admin', label: 'Master Admin', icon: 'admin', section: 'Administration' }
@@ -103,6 +104,7 @@
     '/parameters': 'Parameter Store',
     '/kms': 'Key Management Service',
     '/certificates': 'Certificate Authority',
+    '/iam': 'Identity & Access',
     '/audit': 'Audit Log',
     '/account': 'My Account',
     '/admin': 'Master Administration'
@@ -131,6 +133,8 @@
       <path d="M9 4h6l4 4v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" /><path d="M14 4v4h4" /><path d="M8 13h6" /><path d="M8 16h4" />
     {:else if name === 'account'}
       <circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" />
+    {:else if name === 'iam'}
+      <circle cx="9" cy="8" r="3.2" /><path d="M3.5 20a5.5 5.5 0 0 1 11 0" /><path d="M16 11l2 2 4-4" />
     {:else if name === 'admin'}
       <circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1" />
     {/if}

@@ -9,6 +9,12 @@ import (
 // AWS-compatible JSON-RPC behavior for API clients that post to '/'.
 func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
+		// STS speaks the AWS Query protocol (form-encoded, Action=...) rather
+		// than the X-Amz-Target JSON-RPC dialect used by the other services.
+		if isSTSRequest(r) {
+			s.handleSTS(w, r)
+			return
+		}
 		if strings.TrimSpace(r.Header.Get("X-Amz-Target")) != "" || strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/x-amz-json") {
 			// Use DB-backed SigV4 verification if available
 			s.handleKMSWithDBBackedAuth(w, r)

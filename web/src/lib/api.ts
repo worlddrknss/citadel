@@ -232,6 +232,33 @@ export interface ParameterTag {
   value: string;
 }
 
+export interface OIDCProvider {
+  providerArn: string;
+  url: string;
+  clientIds: string[];
+  createdAt: string;
+}
+
+export type TrustType = 'oidc' | 'account';
+
+export interface TrustPolicy {
+  type: TrustType;
+  providerUrl?: string;
+  audiences?: string[];
+  subjects?: string[];
+  principals?: string[];
+}
+
+export interface Role {
+  roleArn: string;
+  roleName: string;
+  description: string;
+  trust: TrustPolicy;
+  maxSessionSeconds: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 const qs = (params: Record<string, string>) =>
   new URLSearchParams(params).toString();
 
@@ -605,6 +632,31 @@ export const api = {
   removeUserAccount: (username: string, accountId: string) =>
     req<{ removed: boolean }>(`/v1/admin/accounts/assign?${qs({ username, accountId })}`, {
       method: 'DELETE'
-    })
+    }),
+
+  // IAM identity federation (OIDC providers + roles consumed by STS)
+  oidcProviders: () => req<{ providers: OIDCProvider[] }>('/v1/iam/oidc-providers'),
+  createOIDCProvider: (url: string, clientIds: string[]) =>
+    req<{ providerArn: string }>('/v1/iam/oidc-providers', {
+      method: 'POST',
+      body: JSON.stringify({ url, clientIds })
+    }),
+  deleteOIDCProvider: (providerArn: string) =>
+    req<{ deleted: boolean }>(`/v1/iam/oidc-providers?${qs({ providerArn })}`, {
+      method: 'DELETE'
+    }),
+  roles: () => req<{ roles: Role[] }>('/v1/iam/roles'),
+  createRole: (body: {
+    roleName: string;
+    description?: string;
+    trust: TrustPolicy;
+    maxSessionSeconds?: number;
+  }) =>
+    req<{ roleArn: string }>('/v1/iam/roles', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  deleteRole: (roleName: string) =>
+    req<{ deleted: boolean }>(`/v1/iam/roles?${qs({ roleName })}`, { method: 'DELETE' })
 };
 

@@ -138,6 +138,24 @@ func (s *dbStore) GetAccessKeyByID(ctx context.Context, keyID string) (username,
 		return "", "", "", "", errors.New("keyID is required")
 	}
 
+	// Temporary STS credentials (ASIA-prefixed) live in sts_sessions, not
+	// iam_access_keys. Resolve them here so the same SigV4 verification path
+	// validates long-lived and temporary credentials uniformly. An expired
+	// session is reported as Inactive so callers reject it.
+	if isTempAccessKeyID(keyID) {
+		acct, sec, _, _, serr := s.getSTSSessionSecret(ctx, keyID)
+		if serr == errSTSSessionExpired {
+			return "", "", "", "Inactive", nil
+		}
+		if serr == errSTSSessionNotFound {
+			return "", "", "", "", errAccessKeyNotFound
+		}
+		if serr != nil {
+			return "", "", "", "", serr
+		}
+		return keyID, acct, sec, "Active", nil
+	}
+
 	var wrappedB64, nonceB64 string
 	err = s.db.QueryRowContext(ctx,
 		`SELECT username, account_id, secret_wrapped_b64, secret_nonce_b64, status
