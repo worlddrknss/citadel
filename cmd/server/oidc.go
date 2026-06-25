@@ -382,7 +382,7 @@ func httpGetJSONWithBearer[T any](ctx context.Context, client *http.Client, url 
 			req.Header.Set("Authorization", "Bearer "+tok)
 		}
 	}
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", "application/json, application/jwk-set+json, */*")
 	resp, err := client.Do(req)
 	if err != nil {
 		return zero, err
