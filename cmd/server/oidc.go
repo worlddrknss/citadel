@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,15 @@ type jwksCacheEntry struct {
 var globalJWKSCache = &jwksCache{entries: map[string]jwksCacheEntry{}}
 
 const jwksCacheTTL = 5 * time.Minute
+
+const (
+	kubeServiceAccountTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+)
+
+var (
+	kubeSATokenOnce sync.Once
+	kubeSAToken     string
+)
 
 // jwk is a single JSON Web Key (RSA or EC).
 type jwk struct {
@@ -354,6 +364,11 @@ func httpGetJSON[T any](ctx context.Context, client *http.Client, url string) (T
 	if err != nil {
 		return zero, err
 	}
+	if shouldUseInClusterBearer(req.URL.Hostname()) {
+		if tok := inClusterServiceAccountToken(); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -368,4 +383,20 @@ func httpGetJSON[T any](ctx context.Context, client *http.Client, url string) (T
 		return zero, err
 	}
 	return out, nil
+}
+
+func shouldUseInClusterBearer(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	return h == "kubernetes.default.svc" || h == "kubernetes.default.svc.cluster.local"
+}
+
+func inClusterServiceAccountToken() string {
+	kubeSATokenOnce.Do(func() {
+		b, err := os.ReadFile(kubeServiceAccountTokenPath)
+		if err != nil {
+			return
+		}
+		kubeSAToken = strings.TrimSpace(string(b))
+	})
+	return kubeSAToken
 }
