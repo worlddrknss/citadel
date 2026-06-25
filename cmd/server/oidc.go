@@ -405,8 +405,8 @@ func shouldUseInClusterBearer(host string) bool {
 	}
 	kubeHostsOnce.Do(func() {
 		kubeHosts = map[string]struct{}{
-			"kubernetes":                         {},
-			"kubernetes.default.svc":             {},
+			"kubernetes":                           {},
+			"kubernetes.default.svc":               {},
 			"kubernetes.default.svc.cluster.local": {},
 		}
 		if v := strings.ToLower(strings.TrimSpace(os.Getenv("KUBERNETES_SERVICE_HOST"))); v != "" {
