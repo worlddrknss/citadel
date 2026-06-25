@@ -291,14 +291,21 @@ func fetchJWKS(ctx context.Context, client *http.Client, issuer string) (map[str
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	disco, err := httpGetJSON[oidcDiscovery](ctx, client, strings.TrimRight(issuer, "/")+"/.well-known/openid-configuration")
+	discoveryURL := strings.TrimRight(issuer, "/") + "/.well-known/openid-configuration"
+	discoveryHost := ""
+	if u, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil); err == nil {
+		discoveryHost = u.URL.Hostname()
+	}
+	useInClusterAuth := shouldUseInClusterBearer(discoveryHost)
+
+	disco, err := httpGetJSONWithBearer[oidcDiscovery](ctx, client, discoveryURL, useInClusterAuth)
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery: %w", err)
 	}
 	if strings.TrimSpace(disco.JWKSURI) == "" {
 		return nil, errors.New("oidc discovery missing jwks_uri")
 	}
-	doc, err := httpGetJSON[jwksDocument](ctx, client, disco.JWKSURI)
+	doc, err := httpGetJSONWithBearer[jwksDocument](ctx, client, disco.JWKSURI, useInClusterAuth)
 	if err != nil {
 		return nil, fmt.Errorf("fetch jwks: %w", err)
 	}
@@ -361,12 +368,16 @@ func (k jwk) publicKey() (crypto.PublicKey, error) {
 
 // httpGetJSON fetches a URL and decodes the JSON body into T.
 func httpGetJSON[T any](ctx context.Context, client *http.Client, url string) (T, error) {
+	return httpGetJSONWithBearer[T](ctx, client, url, false)
+}
+
+func httpGetJSONWithBearer[T any](ctx context.Context, client *http.Client, url string, forceInClusterBearer bool) (T, error) {
 	var zero T
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return zero, err
 	}
-	if shouldUseInClusterBearer(req.URL.Hostname()) {
+	if forceInClusterBearer || shouldUseInClusterBearer(req.URL.Hostname()) {
 		if tok := inClusterServiceAccountToken(); tok != "" {
 			req.Header.Set("Authorization", "Bearer "+tok)
 		}
