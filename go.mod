@@ -1,4 +1,4 @@
-module github.com/worlddrknss/go-kms
+module github.com/worlddrknss/citadel
 
 go 1.25.0
 

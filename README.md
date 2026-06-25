@@ -38,7 +38,7 @@ It is not a drop-in reimplementation of every AWS feature or edge behavior.
 
 ```bash
 export KMS_MASTER_KEY_B64="$(openssl rand -base64 32)"
-export KMS_KEY_ID="go-kms-default-key"
+export KMS_KEY_ID="citadel-default-key"
 
 go run ./cmd/server
 ```
@@ -48,7 +48,7 @@ go run ./cmd/server
 ```bash
 export KMS_DB_URL="postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
 export KMS_MASTER_KEY_B64="$(openssl rand -base64 32)"
-export KMS_KEY_ID="go-kms-default-key"
+export KMS_KEY_ID="citadel-default-key"
 
 go run ./cmd/server
 ```
@@ -64,8 +64,8 @@ curl -s http://127.0.0.1:8080/healthz
 ```hcl
 seal "awskms" {
   region     = "us-east-1"
-  kms_key_id = "go-kms-default-key"
-  endpoint   = "http://go-kms.infrastructure.svc.cluster.local:8080"
+  kms_key_id = "citadel-default-key"
+  endpoint   = "http://citadel.infrastructure.svc.cluster.local:8080"
 }
 ```
 

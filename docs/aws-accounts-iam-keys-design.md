@@ -2,7 +2,7 @@
 
 Status: **Planned — not yet built.** Captured 2026-06-21 for implementation.
 
-This document is the build plan for making Citadel/go-kms behave like real AWS for
+This document is the build plan for making Citadel behave like real AWS for
 identity and request signing:
 
 1. Accounts have a **system-generated, immutable, unique 12-digit Account ID** plus a name.
@@ -13,7 +13,7 @@ identity and request signing:
 5. **Genuine SigV4 verification**: the server looks up the secret **by Access Key ID**,
    derives the **account** from the key, and authorizes accordingly. Then enable
    `KMS_SIGV4_STRICT=true`.
-6. Wire **External Secrets Operator (ESO)** to go-kms via `auth.secretRef`, while
+6. Wire **External Secrets Operator (ESO)** to Citadel via `auth.secretRef`, while
    **keeping `93rdavenue` and `varaperformance` on Vault** (untouched).
 
 ---
@@ -242,16 +242,16 @@ if requireAccessKey:
 - Options to avoid disturbing the Vault-backed apps:
   - **Preferred:** run a **separate ESO controller instance** (own Helm release /
     `controllerClass`) with `AWS_SECRETSMANAGER_ENDPOINT` pointing at
-    `http://go-kms.infrastructure.svc.cluster.local:8080`, used only by go-kms-backed stores.
+    `http://citadel.infrastructure.svc.cluster.local:8080`, used only by Citadel-backed stores.
     The existing controller keeps serving the Vault `SecretStore`s unchanged.
   - **Alternative:** set the endpoint on the existing controller (only safe if **no** AWS
     provider stores rely on real AWS — today only Vault stores exist, so technically safe,
     but it globally reroutes any future AWS store). Prefer the separate-instance approach for
     clarity and blast-radius.
 - Create a test namespace + `SecretStore` (AWS provider, `service: SecretsManager`,
-  `region: us-west-2`, `auth.secretRef` → a k8s secret holding the go-kms Access Key ID +
+  `region: us-west-2`, `auth.secretRef` → a k8s secret holding the Citadel Access Key ID +
   Secret) + an `ExternalSecret` pulling `eso-kms-test/demo`. Verify the synced k8s secret
-  matches what go-kms returned.
+  matches what Citadel returned.
 - **Leave** `93rdavenue` and `varaperformance` `SecretStore`/`ExternalSecret` (Vault)
   exactly as-is.
 
@@ -279,7 +279,7 @@ if requireAccessKey:
 9. **Verification gate**: `gofmt -l`, `go vet ./...`, `go vet -tags acme_integration ./cmd/server/`,
    `go build ./...`, `go test ./cmd/server/`, plus the Pebble/e2e tag if touched.
 10. **Release**: tag `v1.13.0` → CI image → Flux bump → reconcile; set
-    `KMS_SIGV4_STRICT=true` (+ optional bootstrap key) in `go-kms/deployment.yaml`.
+    `KMS_SIGV4_STRICT=true` (+ optional bootstrap key) in `citadel/deployment.yaml`.
 11. **ESO**: add the separate ESO controller (or endpoint) + test namespace store/ExternalSecret
     in the infrastructure repo; reconcile; verify sync. Keep Vault stores untouched.
 
@@ -294,7 +294,7 @@ if requireAccessKey:
   passwords (hashed). This is required for HMAC and matches AWS UX (shown once).
 - **Bootstrap chicken-and-egg**: keep an env-based bootstrap/root credential so the platform
   can authenticate before any DB-stored user key exists (e.g. for the cluster's own calls).
-- **ESO blast radius**: prefer a dedicated ESO controller for the go-kms endpoint so the
+- **ESO blast radius**: prefer a dedicated ESO controller for the Citadel endpoint so the
   shared Vault stores for `93rdavenue`/`varaperformance` are never rerouted.
 - **Strict SigV4 flip is a hard cutover**: once `KMS_SIGV4_STRICT=true`, every caller must
   send a correctly-signed request with a known, Active key. Ensure the cluster's own
@@ -306,11 +306,11 @@ if requireAccessKey:
 
 ## 7. Quick reference — current verified facts
 
-- go-kms SecretsManager API works (proven via `kubectl port-forward svc/go-kms 18080:8080`
+- Citadel SecretsManager API works (proven via `kubectl port-forward svc/citadel 18080:8080`
   then curl `secretsmanager.CreateSecret` / `secretsmanager.GetSecretValue`; seeded
   `eso-kms-test/demo`). Returns correct AWS-shaped JSON (ARN, VersionId, `AWSCURRENT`).
-- go-kms `KMS_ACCESS_KEY_ID` is present (5 chars, likely `vault`); `KMS_SECRET_ACCESS_KEY`
+- Citadel `KMS_ACCESS_KEY_ID` is present (5 chars, likely `vault`); `KMS_SECRET_ACCESS_KEY`
   and `KMS_SIGV4_STRICT` are **not set** → SigV4 not verified today.
-- Deployment: `ghcr.io/worlddrknss/go-kms:1.12.0`, namespace `infrastructure`, Service
-  `go-kms:8080`, config secret `go-kms-config`.
+- Deployment: `ghcr.io/worlddrknss/citadel:1.12.0`, namespace `infrastructure`, Service
+  `citadel:8080`, config secret `citadel-config`.
 - ESO: Helm release `external-secrets` v0.20.4, `external-secrets.io/v1` API.

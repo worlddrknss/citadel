@@ -3,9 +3,9 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/go-kms ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/citadel ./cmd/server
 
 FROM gcr.io/distroless/static:nonroot
-COPY --from=build /out/go-kms /go-kms
+COPY --from=build /out/citadel /citadel
 EXPOSE 8080
-ENTRYPOINT ["/go-kms"]
+ENTRYPOINT ["/citadel"]
