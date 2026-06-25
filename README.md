@@ -86,7 +86,7 @@ Citadel handles sensitive workloads; run it with production controls enabled.
 - Run with least-privilege database and network policies
 - Rotate keys, access keys, and session credentials regularly
 
-For coordinated vulnerability disclosure, open a private security report in your forge of choice or contact maintainers directly before public disclosure.
+For coordinated vulnerability disclosure, follow the process in `SECURITY.md` before any public disclosure.
 
 ## Open source readiness note
 
@@ -104,9 +104,7 @@ SPDX: `AGPL-3.0-or-later`
 
 Contributions are welcome.
 
-- Open an issue for bugs and feature proposals
-- Keep changes focused and well-tested
-- Include tests for behavior changes where possible
-- Follow existing coding and API conventions
+- Start with `CONTRIBUTING.md` for setup, validation, and pull request expectations.
+- Follow `CODE_OF_CONDUCT.md` when participating in project spaces.
 
 By contributing, you agree that your contributions are licensed under AGPL-3.0-or-later.
