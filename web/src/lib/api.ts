@@ -93,6 +93,14 @@ export interface ListResult {
   path: string;
   folders: string[];
   items: Item[];
+  /**
+   * Objects stored under this folder's own name rather than under a key in it.
+   * They shadow the folder's JSON projection — a client reading the folder gets
+   * this frozen object instead of a live view of the keys — and they used to be
+   * absent from this listing entirely, so nothing in the console revealed them.
+   * They have no key, which is why removeShadowing exists separately.
+   */
+  shadowed: Item[];
 }
 
 export interface KMSKey {
@@ -290,6 +298,19 @@ export const api = {
     if (opts?.force) params.force = 'true';
     if (opts?.recoveryWindowDays != null) params.recoveryWindowDays = String(opts.recoveryWindowDays);
     return req<{ deleted: boolean; forced?: boolean }>(`/v1/secrets?${qs(params)}`, {
+      method: 'DELETE'
+    });
+  },
+  removeShadowing: (
+    project: string,
+    env: string,
+    path: string,
+    opts?: { force?: boolean; recoveryWindowDays?: number }
+  ) => {
+    const params: Record<string, string> = { project, env, path };
+    if (opts?.force) params.force = 'true';
+    if (opts?.recoveryWindowDays != null) params.recoveryWindowDays = String(opts.recoveryWindowDays);
+    return req<{ deleted: boolean; forced?: boolean }>(`/v1/secrets/shadowing?${qs(params)}`, {
       method: 'DELETE'
     });
   },

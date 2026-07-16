@@ -18,6 +18,9 @@
   let path = $state('/');
   let folders: string[] = $state([]);
   let items: Item[] = $state([]);
+  // Objects stored under this folder's own name instead of under a key in it.
+  // Normally empty; when not, something is shadowing the folder's projection.
+  let shadowed: Item[] = $state([]);
   let revealed: Record<string, string> = $state({});
   let selected: Record<string, boolean> = $state({});
 
@@ -141,6 +144,7 @@
     if (!project || !env) {
       items = [];
       folders = [];
+      shadowed = [];
       return;
     }
     loading = true;
@@ -148,6 +152,7 @@
       const res = await api.list(project, env, path);
       items = res.items;
       folders = res.folders;
+      shadowed = res.shadowed ?? [];
       revealed = {};
       selected = {};
     } catch (e) {
@@ -270,6 +275,27 @@
     } catch (e) {
       err(e);
     }
+  }
+
+  function deleteShadowing() {
+    askConfirm({
+      title: 'Delete the object shadowing this folder?',
+      body:
+        'A secret is stored under this folder\u2019s own name. Anything reading the folder ' +
+        'receives that stored object instead of a live view of the keys below \u2014 so it ' +
+        'serves a frozen copy, and keys added since are silently missing. Deleting it ' +
+        'restores the live projection. The keys in this folder are not touched.',
+      label: 'Delete shadowing object',
+      action: async () => {
+        try {
+          await api.removeShadowing(project, env, path, { force: true });
+          notify('Deleted the shadowing object; the folder now serves a live view');
+          await loadItems();
+        } catch (e) {
+          err(e);
+        }
+      }
+    });
   }
 
   function deleteFolder(name: string) {
@@ -719,6 +745,28 @@
     </table>
   {/if}
 </div>
+
+<!-- Only ever rendered when something is wrong. A secret stored under this
+     folder's own name shadows the folder's JSON projection: readers get that
+     frozen object instead of the live keys, and keys added afterwards never
+     reach them. It used to be absent from this page entirely. -->
+{#each shadowed as sh (sh.arn)}
+  <div class="card shadow-warning" style="margin-top:1.25rem">
+    <h3 style="margin-top:0">⚠ An object is shadowing this folder</h3>
+    <p>
+      A secret is stored under this folder's own name
+      (<code>{project}/{env}{path === '/' ? '' : path}</code>) rather than under a key inside it.
+      Anything reading this folder — External Secrets Operator included — receives that stored
+      object instead of a live view of the keys below, so it serves a frozen copy and any key
+      added since is silently missing from it.
+    </p>
+    <p class="muted-line">Last changed {new Date(sh.updatedAt).toLocaleString()}</p>
+    <button class="danger" onclick={deleteShadowing}>Delete shadowing object</button>
+    <span class="muted-line" style="margin-left:.5rem">
+      The {items.length} key{items.length === 1 ? '' : 's'} in this folder are not affected.
+    </span>
+  </div>
+{/each}
 
 <div class="card" style="margin-top:1.25rem">
   <h3 style="margin-top:0">Add / update secret</h3>
@@ -1199,5 +1247,17 @@
     justify-content: flex-end;
     gap: 0.5rem;
     margin-top: 1rem;
+  }
+
+  .shadow-warning {
+    border-color: #b4541e;
+    background: rgba(180, 84, 30, 0.08);
+  }
+  .shadow-warning code {
+    word-break: break-all;
+  }
+  .muted-line {
+    color: var(--muted, #94a3b8);
+    font-size: 0.85rem;
   }
 </style>

@@ -257,6 +257,19 @@ func (s *server) handleCreateSecret(w http.ResponseWriter, r *http.Request) {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidRequestException", err.Error())
 		return
 	}
+	// A secret named exactly like a folder shadows that folder's JSON projection:
+	// GetSecretValue finds the stored object, so the live view of the folder is
+	// never computed and the caller silently receives a frozen copy instead.
+	// d76riders lost EMERGENCY_MASTER_KEY that way for five days — the folder had
+	// the key, the object at the folder's name did not, and ESO read the object.
+	// Such a secret is also unreachable in the UI, which lists a folder's
+	// children rather than the folder's own name.
+	if shadows, err := s.secretsSvc().NameShadowsFolder(r.Context(), req.Name); err == nil && shadows {
+		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException",
+			fmt.Sprintf("%q names a folder that already holds secrets; a secret stored there would shadow the folder's JSON projection and be invisible in the UI", req.Name))
+		return
+	}
 	meta, value, err := s.store.CreateSecret(r.Context(), req)
 	if err != nil {
 		secretError(w, err)

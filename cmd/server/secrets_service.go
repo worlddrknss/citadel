@@ -156,24 +156,61 @@ func (svc *secretsService) ListProjects(ctx context.Context) ([]projectSummary, 
 	return out, nil
 }
 
-// ListFolder returns the immediate subfolders and the items located directly at
-// the requested project/env/folder path.
-func (svc *secretsService) ListFolder(ctx context.Context, project, env string, folder []string) (folders []string, items []itemSummary, err error) {
+// shadowName is the backing name of the object that would sit at a folder's own
+// path — "d76riders/prod" for the folder d76riders/prod, as opposed to the
+// "d76riders/prod/KEY" items inside it.
+func shadowName(project, env string, folder []string) string {
+	return strings.Join(append([]string{project, env}, folder...), "/")
+}
+
+// ListFolder returns the immediate subfolders, the items located directly at the
+// requested project/env/folder path, and any object occupying the folder's own
+// path.
+//
+// That last one exists because a backing secret can be named exactly like a
+// folder. parseSecretName needs at least project/env/key, so an object named
+// "d76riders/prod" decomposes into nothing and was dropped from this listing
+// entirely: not a folder, not an item, invisible in the UI while still being
+// perfectly readable through the Secrets Manager API. One such object fed
+// d76riders' ExternalSecret for five days, holding a stale copy of the
+// environment and quietly costing it EMERGENCY_MASTER_KEY, with nothing in the
+// console to suggest it existed. Returned separately rather than mixed into
+// items: it is not a key in this folder, it is a thing wearing the folder's name.
+func (svc *secretsService) ListFolder(ctx context.Context, project, env string, folder []string) (folders []string, items []itemSummary, shadowed []itemSummary, err error) {
 	if err = validateSegment("project", project); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err = validateSegment("env", env); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	secrets, err := svc.store.ListSecrets(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	items = make([]itemSummary, 0)
+	shadowed = make([]itemSummary, 0)
 	subfolders := map[string]struct{}{}
+	wantShadow := shadowName(project, env, folder)
 	for _, sec := range secrets {
 		pi, ok := parseSecretName(sec.Name)
-		if !ok || pi.Project != project || pi.Env != env {
+		if !ok {
+			// Unparseable as an item. If it is wearing this folder's name, surface
+			// it so it can be seen and deleted; otherwise it belongs to some other
+			// folder and will be surfaced when that one is listed.
+			if sec.Name == wantShadow {
+				shadowed = append(shadowed, itemSummary{
+					Project:      project,
+					Env:          env,
+					Path:         folderPath(folder),
+					Key:          "",
+					ARN:          sec.ARN,
+					UpdatedAt:    sec.LastChangedDate.UTC(),
+					DeletionDate: sec.DeletedDate,
+				})
+			}
+			continue
+		}
+		if pi.Project != project || pi.Env != env {
 			continue
 		}
 		if !folderHasPrefix(pi.Folder, folder) {
@@ -207,7 +244,7 @@ func (svc *secretsService) ListFolder(ctx context.Context, project, env string, 
 		folders = append(folders, f)
 	}
 	sort.Strings(folders)
-	return folders, items, nil
+	return folders, items, shadowed, nil
 }
 
 // PutItem creates or updates a single item, returning created=true on first
@@ -325,7 +362,7 @@ func (svc *secretsService) ListItemVersions(ctx context.Context, coord itemCoord
 // given project/env/folder. This backs the "folder = one AWS secret (JSON of
 // all keys)" projection shape (PLAN.md §5).
 func (svc *secretsService) FolderJSON(ctx context.Context, project, env string, folder []string) (map[string]string, error) {
-	_, items, err := svc.ListFolder(ctx, project, env, folder)
+	_, items, _, err := svc.ListFolder(ctx, project, env, folder)
 	if err != nil {
 		return nil, err
 	}
@@ -373,6 +410,60 @@ func (svc *secretsService) FolderJSONByName(ctx context.Context, name string) (m
 		return nil, false, nil
 	}
 	return values, true, nil
+}
+
+// NameShadowsFolder reports whether storing a secret under this exact name would
+// shadow a folder that already holds items.
+//
+// The two shapes share a namespace: "d76riders/prod/MAPBOX_TOKEN" is an item, and
+// "d76riders/prod" is the JSON projection of every item in that folder. The
+// projection is only computed when no stored secret answers to that name, so a
+// stored object at a folder's name silently replaces a live view with a frozen
+// copy — and stays invisible in a UI that lists a folder's children.
+func (svc *secretsService) NameShadowsFolder(ctx context.Context, name string) (bool, error) {
+	parts := strings.Split(strings.Trim(strings.TrimSpace(name), "/"), "/")
+	if len(parts) < 2 {
+		return false, nil
+	}
+	project, env := parts[0], parts[1]
+	folder := parts[2:]
+	if validateSegment("project", project) != nil || validateSegment("env", env) != nil {
+		return false, nil
+	}
+	for _, seg := range folder {
+		if validateSegment("folder", seg) != nil {
+			return false, nil
+		}
+	}
+	_, items, _, err := svc.ListFolder(ctx, project, env, folder)
+	if err != nil {
+		return false, err
+	}
+	return len(items) > 0, nil
+}
+
+// DeleteShadowing removes the object occupying a folder's own name, which is
+// otherwise unaddressable: itemCoord always appends a key, so no coordinate can
+// name it. Used to clear objects created before NameShadowsFolder rejected them.
+func (svc *secretsService) DeleteShadowing(ctx context.Context, project, env string, folder []string, recoveryWindowDays int, forceDelete bool) error {
+	if err := validateSegment("project", project); err != nil {
+		return err
+	}
+	if err := validateSegment("env", env); err != nil {
+		return err
+	}
+	for _, seg := range folder {
+		if err := validateSegment("folder", seg); err != nil {
+			return err
+		}
+	}
+	if _, err := svc.store.DeleteSecret(ctx, shadowName(project, env, folder), recoveryWindowDays, forceDelete); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errItemNotFound
+		}
+		return err
+	}
+	return nil
 }
 
 // resolveReferences expands ${KEY} and ${/abs/path/KEY} references within a

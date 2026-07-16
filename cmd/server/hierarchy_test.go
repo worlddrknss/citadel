@@ -41,7 +41,7 @@ func TestHierarchyEmptyFoldersAndProjects(t *testing.T) {
 	}
 
 	// Root folder listing exposes the empty "db" subfolder.
-	folders, items, err := svc.ListFolder(ctxA, "payments", "prod", nil)
+	folders, items, _, err := svc.ListFolder(ctxA, "payments", "prod", nil)
 	if err != nil {
 		t.Fatalf("ListFolder root: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestHierarchyEmptyFoldersAndProjects(t *testing.T) {
 	}
 
 	// Nested listing exposes the empty "primary" subfolder.
-	folders, _, err = svc.ListFolder(ctxA, "payments", "prod", []string{"db"})
+	folders, _, _, err = svc.ListFolder(ctxA, "payments", "prod", []string{"db"})
 	if err != nil {
 		t.Fatalf("ListFolder db: %v", err)
 	}

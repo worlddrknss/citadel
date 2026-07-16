@@ -311,13 +311,12 @@ func (s *server) handleV1ListSecrets(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	folders, found, err := s.secretsSvc().ListFolder(ctx, project, env, wantFolder)
+	folders, found, shadowing, err := s.secretsSvc().ListFolder(ctx, project, env, wantFolder)
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	items := make([]nativeItem, 0, len(found))
-	for _, it := range found {
+	toNative := func(it itemSummary) nativeItem {
 		ni := nativeItem{
 			Project:   it.Project,
 			Env:       it.Env,
@@ -329,15 +328,68 @@ func (s *server) handleV1ListSecrets(w http.ResponseWriter, r *http.Request) {
 		if it.DeletionDate != nil {
 			ni.DeletionDate = it.DeletionDate.Format(time.RFC3339)
 		}
-		items = append(items, ni)
+		return ni
+	}
+	items := make([]nativeItem, 0, len(found))
+	for _, it := range found {
+		items = append(items, toNative(it))
+	}
+	// Reported apart from items so the UI can show it for what it is: an object
+	// wearing this folder's name, shadowing the folder's JSON projection, and
+	// until now invisible here.
+	shadowed := make([]nativeItem, 0, len(shadowing))
+	for _, it := range shadowing {
+		shadowed = append(shadowed, toNative(it))
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{
-		"project": project,
-		"env":     env,
-		"path":    folderPath(wantFolder),
-		"folders": folders,
-		"items":   items,
+		"project":  project,
+		"env":      env,
+		"path":     folderPath(wantFolder),
+		"folders":  folders,
+		"items":    items,
+		"shadowed": shadowed,
 	})
+}
+
+// handleV1DeleteShadowing removes the object sitting at a folder's own name.
+// Separate from handleV1DeleteSecret, which requires a key: this object has none,
+// which is precisely why it could never be deleted from the console.
+func (s *server) handleV1DeleteShadowing(w http.ResponseWriter, r *http.Request) {
+	_, ctx, ok := s.nativeSession(w, r, "editor")
+	if !ok {
+		return
+	}
+	q := r.URL.Query()
+	project := strings.TrimSpace(q.Get("project"))
+	env := strings.TrimSpace(q.Get("env"))
+	if project == "" || env == "" {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "project and env are required")
+		return
+	}
+	folder, err := normalizeFolder(q.Get("path"))
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	force := strings.EqualFold(strings.TrimSpace(q.Get("force")), "true")
+	windowDays := 0
+	if v := strings.TrimSpace(q.Get("recoveryWindowDays")); v != "" {
+		windowDays, err = strconv.Atoi(v)
+		if err != nil {
+			writeNativeError(w, http.StatusBadRequest, "invalid_request", "recoveryWindowDays must be a number")
+			return
+		}
+	}
+	if err := s.secretsSvc().DeleteShadowing(ctx, project, env, folder, windowDays, force); err != nil {
+		if errors.Is(err, errItemNotFound) {
+			writeNativeError(w, http.StatusNotFound, "not_found", "no object is shadowing that folder")
+			return
+		}
+		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, auditEvent{Action: "citadel.DeleteShadowing", Result: "ok", Actor: r.RemoteAddr})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true, "forced": force})
 }
 
 // folderHasPrefix reports whether folder starts with prefix.

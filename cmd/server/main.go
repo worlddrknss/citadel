@@ -700,6 +700,9 @@ func main() {
 	mux.HandleFunc("GET /v1/secrets", s.handleV1ListSecrets)
 	mux.HandleFunc("POST /v1/secrets", s.handleV1PutSecret)
 	mux.HandleFunc("DELETE /v1/secrets", s.handleV1DeleteSecret)
+	// Removes an object occupying a folder's own name. DELETE /v1/secrets can't:
+	// it addresses a secret by key, and this thing has no key.
+	mux.HandleFunc("DELETE /v1/secrets/shadowing", s.handleV1DeleteShadowing)
 	mux.HandleFunc("GET /v1/secrets/value", s.handleV1RevealSecret)
 	mux.HandleFunc("GET /v1/secrets/versions", s.handleV1ListVersions)
 	mux.HandleFunc("POST /v1/secrets/restore", s.handleV1RestoreSecret)
