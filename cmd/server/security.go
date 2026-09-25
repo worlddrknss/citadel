@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/hmac"
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -14,6 +15,7 @@ import (
 	"log"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,15 +23,21 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Password hashing (Argon2id, PHC string format)
+// Password hashing: PBKDF2-HMAC-SHA256 (FIPS 140-3 approved, via Go's
+// validated crypto module), PHC-style string format.
+//
+// Argon2id hashes from earlier versions still verify, and a successful login
+// re-hashes them to PBKDF2 (see needsRehash). Once no Argon2id hashes remain,
+// the Argon2 code can go and the image can run with GODEBUG=fips140=only.
 // ---------------------------------------------------------------------------
 
 const (
-	argon2Time    uint32 = 3
-	argon2Memory  uint32 = 64 * 1024 // 64 MiB
-	argon2Threads uint8  = 2
-	argon2KeyLen  uint32 = 32
-	argon2SaltLen        = 16
+	// OWASP's current recommendation for PBKDF2-HMAC-SHA256.
+	pbkdf2Iterations    = 600_000
+	pbkdf2KeyLen        = 32
+	pbkdf2SaltLen       = 16
+	pbkdf2Prefix        = "$pbkdf2-sha256$"
+	pbkdf2MaxIterations = 10_000_000 // refuse absurd stored values
 )
 
 func readRandom(b []byte) error {
@@ -37,41 +45,89 @@ func readRandom(b []byte) error {
 	return err
 }
 
-// hashPassword returns an Argon2id PHC-formatted hash string for the password.
+// hashPassword returns a PBKDF2-HMAC-SHA256 hash string for the password:
+// $pbkdf2-sha256$i=<iterations>$<salt b64>$<hash b64>
 func hashPassword(password string) (string, error) {
-	salt := make([]byte, argon2SaltLen)
+	salt := make([]byte, pbkdf2SaltLen)
 	if err := readRandom(salt); err != nil {
 		return "", err
 	}
-	digest := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
-	return fmt.Sprintf(
-		"$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version,
-		argon2Memory, argon2Time, argon2Threads,
+	digest, err := pbkdf2.Key(sha256.New, password, salt, pbkdf2Iterations, pbkdf2KeyLen)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%si=%d$%s$%s", pbkdf2Prefix, pbkdf2Iterations,
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(digest),
 	), nil
 }
 
-// looksLikeArgon2Hash reports whether the stored value is an Argon2id PHC string.
+func looksLikePBKDF2Hash(stored string) bool {
+	return strings.HasPrefix(stored, pbkdf2Prefix)
+}
+
+// looksLikeArgon2Hash reports whether the stored value is a legacy Argon2id PHC string.
 func looksLikeArgon2Hash(stored string) bool {
 	return strings.HasPrefix(stored, "$argon2id$")
 }
 
-// verifyPassword compares a candidate password against a stored credential.
-// If the stored value is an Argon2id PHC string it is verified cryptographically;
-// otherwise it is treated as a (legacy) plaintext secret and compared in
-// constant time. Verification always performs constant-time work to limit
-// username-enumeration timing side channels.
+// needsRehash reports whether a stored credential that just verified should be
+// replaced with a current PBKDF2 hash: legacy Argon2id and plaintext values, and
+// PBKDF2 hashes with fewer iterations than today's setting.
+func needsRehash(stored string) bool {
+	if !looksLikePBKDF2Hash(stored) {
+		return true
+	}
+	iterations, _, _, err := parsePBKDF2(stored)
+	return err != nil || iterations < pbkdf2Iterations
+}
+
+// verifyPassword compares a candidate password against a stored credential:
+// PBKDF2 and (legacy) Argon2id hashes are verified cryptographically; anything
+// else is treated as a legacy plaintext secret and compared in constant time.
+// Verification always performs constant-time work to limit username-enumeration
+// timing side channels.
 func verifyPassword(stored, candidate string) bool {
-	if looksLikeArgon2Hash(stored) {
+	switch {
+	case looksLikePBKDF2Hash(stored):
+		ok, err := verifyPBKDF2(stored, candidate)
+		return err == nil && ok
+	case looksLikeArgon2Hash(stored):
 		ok, err := verifyArgon2(stored, candidate)
-		if err != nil {
-			return false
-		}
-		return ok
+		return err == nil && ok
 	}
 	return compareSecret(stored, candidate)
+}
+
+func parsePBKDF2(encoded string) (iterations int, salt, want []byte, err error) {
+	parts := strings.Split(encoded, "$")
+	// ["", "pbkdf2-sha256", "i=600000", "<salt>", "<hash>"]
+	if len(parts) != 5 || parts[1] != "pbkdf2-sha256" || !strings.HasPrefix(parts[2], "i=") {
+		return 0, nil, nil, errors.New("invalid pbkdf2 hash format")
+	}
+	iterations, err = strconv.Atoi(strings.TrimPrefix(parts[2], "i="))
+	if err != nil || iterations < 1 || iterations > pbkdf2MaxIterations {
+		return 0, nil, nil, errors.New("invalid pbkdf2 iteration count")
+	}
+	if salt, err = base64.RawStdEncoding.DecodeString(parts[3]); err != nil {
+		return 0, nil, nil, err
+	}
+	if want, err = base64.RawStdEncoding.DecodeString(parts[4]); err != nil {
+		return 0, nil, nil, err
+	}
+	return iterations, salt, want, nil
+}
+
+func verifyPBKDF2(encoded, candidate string) (bool, error) {
+	iterations, salt, want, err := parsePBKDF2(encoded)
+	if err != nil {
+		return false, err
+	}
+	got, err := pbkdf2.Key(sha256.New, candidate, salt, iterations, len(want))
+	if err != nil {
+		return false, err
+	}
+	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }
 
 func verifyArgon2(encoded, candidate string) (bool, error) {

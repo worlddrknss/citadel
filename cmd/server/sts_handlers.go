@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base32"
 	"encoding/xml"
 	"errors"
@@ -283,13 +283,13 @@ func clampDuration(raw string, maxSecs int) time.Duration {
 
 // roleUniqueID derives a stable AROA-prefixed unique ID for a role name.
 func roleUniqueID(roleName string) string {
-	sum := sha1.Sum([]byte("role:" + roleName))
+	sum := sha256.Sum256([]byte("role:" + roleName))
 	return "AROA" + strings.ToUpper(base32.StdEncoding.EncodeToString(sum[:])[:16])
 }
 
 // principalUserID derives the UserId field for GetCallerIdentity from an ARN.
 func principalUserID(arn string) string {
-	sum := sha1.Sum([]byte(arn))
+	sum := sha256.Sum256([]byte(arn))
 	return "AIDA" + strings.ToUpper(base32.StdEncoding.EncodeToString(sum[:])[:16])
 }
 

@@ -60,7 +60,7 @@ func (s *server) handleV1Login(w http.ResponseWriter, r *http.Request) {
 
 	// Always run a verification to keep timing roughly constant and avoid
 	// user-enumeration via response timing.
-	stored := dummyArgon2Hash
+	stored := dummyPasswordHash
 	if ok {
 		stored = user.storedCredential()
 	}
@@ -68,6 +68,7 @@ func (s *server) handleV1Login(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid credentials")
 		return
 	}
+	s.rehashOnLogin(r.Context(), runtime, user, req.Password)
 
 	// Confirm the user may access the requested account. Prefer the DB-backed
 	// junction table; fall back to statically-configured accounts.
@@ -987,4 +988,28 @@ func (s *server) handleV1CompleteLEDNSOrder(w http.ResponseWriter, r *http.Reque
 	}
 	s.recordAudit(ctx, auditEvent{Action: "citadel.CompleteLetsEncryptDNS", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"certId": cert.CertID, "domains": cert.Domains, "issued": true})
+}
+
+// rehashOnLogin replaces a verified legacy credential (Argon2id, plaintext or
+// an outdated PBKDF2 hash) with a current PBKDF2 hash, in the database and in
+// memory. Failures are logged, never fatal: the login already succeeded.
+func (s *server) rehashOnLogin(ctx context.Context, runtime *uiRuntime, user uiUserConfig, password string) {
+	if !needsRehash(user.storedCredential()) {
+		return
+	}
+	hashed, err := hashPassword(password)
+	if err != nil {
+		log.Printf("password rehash for %q: %v", user.Username, err)
+		return
+	}
+	user.PasswordHash = hashed
+	user.Password = ""
+	if err := s.store.UpsertUIUser(ctx, user); err != nil {
+		log.Printf("password rehash for %q: %v", user.Username, err)
+		return
+	}
+	runtime.mu.Lock()
+	runtime.users[user.Username] = user
+	runtime.mu.Unlock()
+	s.recordAudit(ctx, auditEvent{Action: "citadel.RehashPassword", Result: "ok", Actor: user.Username})
 }
