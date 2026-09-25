@@ -12,11 +12,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/citadel ./cmd/server
 
 FROM ${BASE_IMAGE}
 COPY --from=build /out/citadel /citadel
-# fips140=on, not the base image's fips140=only: the module is in use, but
-# non-approved algorithms still run. citadel needs two of them: Argon2id for
-# password hashes (security.go) and SHA-1 for deriving STS IDs (sts_handlers.go).
-# Moving to fips140=only means PBKDF2/SHA-256 with a migration of stored hashes
-# and IDs.
+# fips140=on, not the base image's fips140=only, until the last legacy Argon2id
+# password hash is gone: passwords are PBKDF2-HMAC-SHA256 now, and an Argon2id
+# hash is re-hashed on its next successful login, but verifying it still uses
+# Argon2 (not FIPS approved). Then drop Argon2 and switch to fips140=only.
 ENV GODEBUG=fips140=on
 EXPOSE 8080
 USER 65532:65532

@@ -40,8 +40,8 @@ func (u *uiUserConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// storedCredential returns the secret used to verify a login attempt. An
-// Argon2id PHC hash is preferred; the plaintext Password field is only a
+// storedCredential returns the secret used to verify a login attempt. A
+// password hash is preferred; the plaintext Password field is only a
 // fallback for legacy/env-configured users.
 func (u uiUserConfig) storedCredential() string {
 	if strings.TrimSpace(u.PasswordHash) != "" {
@@ -71,10 +71,11 @@ type uiRuntime struct {
 	mu            sync.Mutex
 }
 
-// dummyArgon2Hash is a fixed, valid Argon2id hash used to spend comparable CPU
-// time when an unknown username is supplied, mitigating user-enumeration via
-// response-timing differences. It corresponds to no real password.
-const dummyArgon2Hash = "$argon2id$v=19$m=65536,t=3,p=2$+Zzc6FCiVBHCPF1Llgz3pQ$ZHroDCBLTiLB04VvCEgi3y0p/p4AyUyYe3rT8HAkYvc"
+// dummyPasswordHash is a fixed, valid PBKDF2 hash (current parameters) used to
+// spend comparable CPU time when an unknown username is supplied, mitigating
+// user-enumeration via response-timing differences. It corresponds to no real
+// password.
+const dummyPasswordHash = "$pbkdf2-sha256$i=600000$Y0q6S1JhYRMtaRnYXtT+1g$vWWUOxgQ7EVskOU4UldrOnx5wdUEiGPel/mlNcG/O+0"
 
 func loadUIUsersFromEnv() (map[string]uiUserConfig, error) {
 	if raw := strings.TrimSpace(os.Getenv("KMS_UI_USERS_JSON")); raw != "" {
