@@ -18,17 +18,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"golang.org/x/crypto/argon2"
 )
 
 // ---------------------------------------------------------------------------
 // Password hashing: PBKDF2-HMAC-SHA256 (FIPS 140-3 approved, via Go's
 // validated crypto module), PHC-style string format.
-//
-// Argon2id hashes from earlier versions still verify, and a successful login
-// re-hashes them to PBKDF2 (see needsRehash). Once no Argon2id hashes remain,
-// the Argon2 code can go and the image can run with GODEBUG=fips140=only.
 // ---------------------------------------------------------------------------
 
 const (
@@ -66,14 +60,9 @@ func looksLikePBKDF2Hash(stored string) bool {
 	return strings.HasPrefix(stored, pbkdf2Prefix)
 }
 
-// looksLikeArgon2Hash reports whether the stored value is a legacy Argon2id PHC string.
-func looksLikeArgon2Hash(stored string) bool {
-	return strings.HasPrefix(stored, "$argon2id$")
-}
-
 // needsRehash reports whether a stored credential that just verified should be
-// replaced with a current PBKDF2 hash: legacy Argon2id and plaintext values, and
-// PBKDF2 hashes with fewer iterations than today's setting.
+// replaced with a current PBKDF2 hash: legacy plaintext values, and PBKDF2
+// hashes with fewer iterations than today's setting.
 func needsRehash(stored string) bool {
 	if !looksLikePBKDF2Hash(stored) {
 		return true
@@ -83,7 +72,7 @@ func needsRehash(stored string) bool {
 }
 
 // verifyPassword compares a candidate password against a stored credential:
-// PBKDF2 and (legacy) Argon2id hashes are verified cryptographically; anything
+// PBKDF2 hashes are verified cryptographically; anything
 // else is treated as a legacy plaintext secret and compared in constant time.
 // Verification always performs constant-time work to limit username-enumeration
 // timing side channels.
@@ -91,9 +80,6 @@ func verifyPassword(stored, candidate string) bool {
 	switch {
 	case looksLikePBKDF2Hash(stored):
 		ok, err := verifyPBKDF2(stored, candidate)
-		return err == nil && ok
-	case looksLikeArgon2Hash(stored):
-		ok, err := verifyArgon2(stored, candidate)
 		return err == nil && ok
 	}
 	return compareSecret(stored, candidate)
@@ -127,36 +113,6 @@ func verifyPBKDF2(encoded, candidate string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return subtle.ConstantTimeCompare(got, want) == 1, nil
-}
-
-func verifyArgon2(encoded, candidate string) (bool, error) {
-	parts := strings.Split(encoded, "$")
-	// ["", "argon2id", "v=19", "m=...,t=...,p=...", "<salt>", "<hash>"]
-	if len(parts) != 6 || parts[1] != "argon2id" {
-		return false, errors.New("invalid argon2 hash format")
-	}
-	var version int
-	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil {
-		return false, err
-	}
-	if version != argon2.Version {
-		return false, errors.New("unsupported argon2 version")
-	}
-	var memory, iterations uint32
-	var parallelism uint8
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &iterations, &parallelism); err != nil {
-		return false, err
-	}
-	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil {
-		return false, err
-	}
-	want, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil {
-		return false, err
-	}
-	got := argon2.IDKey([]byte(candidate), salt, iterations, memory, parallelism, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }
 

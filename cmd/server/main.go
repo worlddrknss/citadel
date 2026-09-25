@@ -3355,22 +3355,15 @@ func (s *dbStore) wrapKeyMaterial(keyID string, raw []byte) (string, string, err
 	if len(s.wrappingKey) != 32 {
 		return "", "", errors.New("wrapping key is not configured")
 	}
-	block, err := aes.NewCipher(s.wrappingKey)
-	if err != nil {
-		return "", "", err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", "", err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", "", err
-	}
 	// Bind the key ID as additional authenticated data so a wrapped blob cannot
 	// be transplanted onto a different key row.
-	sealed := gcm.Seal(nil, nonce, raw, []byte(keyID))
-	return base64.StdEncoding.EncodeToString(sealed), base64.StdEncoding.EncodeToString(nonce), nil
+	sealed, err := gcmSeal(s.wrappingKey, raw, []byte(keyID))
+	if err != nil {
+		return "", "", err
+	}
+	// Stored as separate ciphertext and nonce columns, as before.
+	nonce, wrapped := sealed[:gcmNonceSize], sealed[gcmNonceSize:]
+	return base64.StdEncoding.EncodeToString(wrapped), base64.StdEncoding.EncodeToString(nonce), nil
 }
 
 func (s *dbStore) unwrapKeyMaterial(keyID, wrappedB64, nonceB64 string) ([]byte, error) {
@@ -3406,19 +3399,10 @@ func (s *dbStore) unwrapKeyMaterial(keyID, wrappedB64, nonceB64 string) ([]byte,
 			}{s.legacyWrappingKey, nil},
 		)
 	}
+	blob := append(append(make([]byte, 0, len(nonce)+len(wrapped)), nonce...), wrapped...)
 	var lastErr error
 	for _, c := range candidates {
-		block, err := aes.NewCipher(c.key)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		gcm, err := cipher.NewGCM(block)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if out, err := gcm.Open(nil, nonce, wrapped, c.aad); err == nil {
+		if out, err := gcmOpen(c.key, blob, c.aad); err == nil {
 			return out, nil
 		} else {
 			lastErr = err
@@ -3523,62 +3507,53 @@ func canonicalContext(ctx map[string]string) []byte {
 	return sum[:]
 }
 
+// AES-GCM with the nonce generated inside Go's FIPS 140-3 module
+// (cipher.NewGCMWithRandomNonce): FIPS 140-only mode refuses GCM with
+// caller-supplied IVs. Its output is nonce || ciphertext || tag, the same
+// layout citadel has always stored, so existing data decrypts unchanged.
+const gcmNonceSize = 12
+
+func gcmSeal(key, plaintext, aad []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCMWithRandomNonce(block)
+	if err != nil {
+		return nil, err
+	}
+	return aead.Seal(nil, nil, plaintext, aad), nil
+}
+
+func gcmOpen(key, blob, aad []byte) ([]byte, error) {
+	if len(blob) <= gcmNonceSize {
+		return nil, errors.New("ciphertext too short")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCMWithRandomNonce(block)
+	if err != nil {
+		return nil, err
+	}
+	return aead.Open(nil, nil, blob, aad)
+}
+
 func encryptBlob(masterKey []byte, keyID string, plaintext, aad []byte) ([]byte, error) {
-	block, err := aes.NewCipher(masterKey)
+	raw, err := gcmSeal(masterKey, plaintext, aad)
 	if err != nil {
 		return nil, err
 	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, err
-	}
-	ciphertext := gcm.Seal(nil, nonce, plaintext, aad)
-	raw := make([]byte, 0, len(nonce)+len(ciphertext))
-	raw = append(raw, nonce...)
-	raw = append(raw, ciphertext...)
 	return encodeCipherBlob(keyID, raw), nil
 }
 
 func encryptLegacyBlob(masterKey, plaintext, aad []byte) ([]byte, error) {
-	block, err := aes.NewCipher(masterKey)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, err
-	}
-	ciphertext := gcm.Seal(nil, nonce, plaintext, aad)
-	out := make([]byte, 0, len(nonce)+len(ciphertext))
-	out = append(out, nonce...)
-	out = append(out, ciphertext...)
-	return out, nil
+	return gcmSeal(masterKey, plaintext, aad)
 }
 
 func decryptBlob(masterKey, blob, aad []byte) ([]byte, error) {
-	block, err := aes.NewCipher(masterKey)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	nonceSize := gcm.NonceSize()
-	if len(blob) <= nonceSize {
-		return nil, errors.New("ciphertext too short")
-	}
-	nonce := blob[:nonceSize]
-	ciphertext := blob[nonceSize:]
-	return gcm.Open(nil, nonce, ciphertext, aad)
+	return gcmOpen(masterKey, blob, aad)
 }
 
 func decodeCipherBlob(blob []byte) (string, []byte, error) {

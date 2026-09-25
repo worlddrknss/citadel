@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"testing"
 	"time"
-
-	"golang.org/x/crypto/argon2"
 )
 
 func TestHashAndVerifyPassword(t *testing.T) {
@@ -88,29 +86,17 @@ func TestVerifyPasswordDummyHashRejects(t *testing.T) {
 	}
 }
 
-// legacyArgon2Hash is an Argon2id hash of "correct horse battery staple" as
-// earlier versions stored it.
-func legacyArgon2Hash(t *testing.T) string {
-	t.Helper()
-	salt := []byte("0123456789abcdef")
-	digest := argon2.IDKey([]byte("correct horse battery staple"), salt, 3, 64*1024, 2, 32)
-	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s", argon2.Version, 64*1024, 3, 2,
-		base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(digest))
-}
-
-func TestLegacyArgon2StillVerifiesAndNeedsRehash(t *testing.T) {
-	legacy := legacyArgon2Hash(t)
-	if !verifyPassword(legacy, "correct horse battery staple") {
-		t.Fatal("legacy argon2 hash should still verify")
-	}
-	if verifyPassword(legacy, "wrong password") {
-		t.Fatal("legacy argon2 hash should reject a wrong password")
-	}
-	if !needsRehash(legacy) {
-		t.Fatal("legacy argon2 hash should need rehashing")
-	}
+func TestLegacyPlaintextNeedsRehash(t *testing.T) {
 	if !needsRehash("plaintext-secret") {
 		t.Fatal("legacy plaintext should need rehashing")
+	}
+}
+
+// Argon2id hashes are no longer accepted: every stored one was migrated.
+func TestArgon2HashNoLongerVerifies(t *testing.T) {
+	const argon2Hash = "$argon2id$v=19$m=65536,t=3,p=2$+Zzc6FCiVBHCPF1Llgz3pQ$ZHroDCBLTiLB04VvCEgi3y0p/p4AyUyYe3rT8HAkYvc"
+	if verifyPassword(argon2Hash, "anything") {
+		t.Fatal("argon2 hashes must not verify")
 	}
 }
 
