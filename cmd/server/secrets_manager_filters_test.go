@@ -4,6 +4,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestListSecretsAcceptsFiltersBody guards the Secrets Manager wire contract:
@@ -153,5 +154,37 @@ func TestValidateSecretsFilters(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+// TestListSecretsLeavesOutPlannedDeletions matches AWS: a secret scheduled for
+// deletion isn't listed unless the caller sets IncludePlannedDeletion. It can't
+// be read (GetSecretValue answers "scheduled for deletion"), and External
+// Secrets Operator's dataFrom.find lists then reads every match, so a single
+// pending delete under d76riders/prod/ failed the whole ExternalSecret.
+func TestListSecretsLeavesOutPlannedDeletions(t *testing.T) {
+	when := time.Now().Add(7 * 24 * time.Hour)
+	live := secretMetadataRecord{Name: "d76riders/prod/API_URL"}
+	pending := secretMetadataRecord{Name: "d76riders/prod/OLD_KEY", DeletedDate: &when}
+	byName := []secretsFilter{{Key: "name", Values: []string{"d76riders/prod/"}}}
+
+	if !listableSecret(live, listSecretsRequest{Filters: byName}) {
+		t.Fatal("a live secret matching the filter should be listed")
+	}
+	if listableSecret(pending, listSecretsRequest{Filters: byName}) {
+		t.Fatal("a secret scheduled for deletion should be left out by default")
+	}
+	if !listableSecret(pending, listSecretsRequest{Filters: byName, IncludePlannedDeletion: true}) {
+		t.Fatal("IncludePlannedDeletion should list a secret scheduled for deletion")
+	}
+	if listableSecret(pending, listSecretsRequest{Filters: []secretsFilter{{Key: "name", Values: []string{"other/"}}}, IncludePlannedDeletion: true}) {
+		t.Fatal("filters still apply with IncludePlannedDeletion")
+	}
+
+	// The flag decodes from the wire (the decoder rejects unknown fields).
+	r := httptest.NewRequest("POST", "/", strings.NewReader(`{"IncludePlannedDeletion":true}`))
+	var req listSecretsRequest
+	if err := decodeOptionalJSONBody(r, &req); err != nil || !req.IncludePlannedDeletion {
+		t.Fatalf("IncludePlannedDeletion should decode: err=%v got=%v", err, req.IncludePlannedDeletion)
 	}
 }
