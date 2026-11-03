@@ -165,6 +165,12 @@ type listSecretsRequest struct {
 	MaxResults int             `json:"MaxResults"`
 	NextToken  string          `json:"NextToken"`
 	Filters    []secretsFilter `json:"Filters"`
+	// IncludePlannedDeletion, as in AWS: secrets scheduled for deletion are left
+	// out of ListSecrets unless a caller asks for them. They can't be read
+	// (GetSecretValue answers "scheduled for deletion"), so listing them broke
+	// External Secrets Operator's dataFrom.find: it lists, then reads every
+	// match, and one pending delete failed the whole ExternalSecret.
+	IncludePlannedDeletion bool `json:"IncludePlannedDeletion"`
 }
 
 type listSecretsResponse struct {
@@ -631,6 +637,15 @@ func secretFieldMatches(item secretMetadataRecord, key, value string) bool {
 	return false
 }
 
+// listableSecret says whether ListSecrets returns an item: it must match the
+// filters, and a secret scheduled for deletion is listed only on request.
+func listableSecret(item secretMetadataRecord, req listSecretsRequest) bool {
+	if item.DeletedDate != nil && !req.IncludePlannedDeletion {
+		return false
+	}
+	return secretMatchesFilters(item, req.Filters)
+}
+
 func (s *server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 	const action = "secretsmanager.ListSecrets"
 	var req listSecretsRequest
@@ -658,7 +673,7 @@ func (s *server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 	}
 	entries := make([]secretListEntry, 0, len(items))
 	for _, item := range items {
-		if !secretMatchesFilters(item, req.Filters) {
+		if !listableSecret(item, req) {
 			continue
 		}
 		entries = append(entries, secretListEntry{
