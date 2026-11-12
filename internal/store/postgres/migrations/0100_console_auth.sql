@@ -3,7 +3,20 @@
 
 -- A platform admin (global role admin + this flag) manages every account;
 -- other admins only the accounts where they hold the admin role.
-ALTER TABLE ui_users ADD COLUMN IF NOT EXISTS platform_admin BOOLEAN NOT NULL DEFAULT FALSE;
+-- Before 2.0 every admin managed the whole deployment, so admins that exist
+-- when the column is introduced keep that: they become platform admins.
+-- Without this an upgraded deployment would have no platform admin at all,
+-- and nothing in the console could grant the flag back.
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'ui_users' AND column_name = 'platform_admin'
+	) THEN
+		ALTER TABLE ui_users ADD COLUMN platform_admin BOOLEAN NOT NULL DEFAULT FALSE;
+		UPDATE ui_users SET platform_admin = TRUE WHERE role = 'admin';
+	END IF;
+END $$;
 
 -- Signed-in console sessions. token_hash is the hex SHA-256 of the cookie
 -- value; the token itself is never stored. id is a separate public handle

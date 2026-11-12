@@ -15,7 +15,9 @@ jobs:
       postgres:
         image: postgres:17
         env:
-          POSTGRES_PASSWORD: postgres
+          # At least 14 characters: under FIPS mode the PostgreSQL driver uses
+          # the password as an HMAC key and rejects shorter ones.
+          POSTGRES_PASSWORD: citadel-ci-password
         ports:
           - 5432:5432
         options: >-
@@ -25,7 +27,7 @@ jobs:
           --health-retries 10
     env:
       # Postgres-backed store tests run against this; they skip when unset.
-      CITADEL_TEST_DB_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      CITADEL_TEST_DB_URL: postgres://postgres:citadel-ci-password@localhost:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

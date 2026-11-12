@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Schema migrations.
@@ -132,9 +133,11 @@ func Migrate(ctx context.Context, db *sql.DB) (err error) {
 		if applied[m.version] {
 			continue
 		}
+		start := time.Now()
 		if err := applyMigration(ctx, conn, m); err != nil {
 			return fmt.Errorf("initialize schema: migration %04d_%s: %w", m.version, m.name, err)
 		}
+		log.Printf("applied migration %04d_%s in %s", m.version, m.name, time.Since(start).Round(time.Millisecond))
 	}
 	return nil
 }
