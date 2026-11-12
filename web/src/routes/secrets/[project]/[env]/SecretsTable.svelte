@@ -35,6 +35,7 @@
     ondeletefolder,
     onopen,
     reveal,
+    canReveal = true,
     menuFor,
     empty,
     footer
@@ -55,6 +56,8 @@
     ondeletefolder?: (name: string) => void;
     onopen: (row: SecretRow) => void;
     reveal: (row: SecretRow) => Promise<string>;
+    /** False hides Reveal (viewers while viewersCanReveal is off). */
+    canReveal?: boolean;
     menuFor: (row: SecretRow) => MenuItem[];
     empty: Snippet;
     footer: Snippet;
@@ -203,8 +206,10 @@
               <td class="val">
                 {#if r.deletionDate}
                   <span class="subtle small">Unavailable until restored</span>
-                {:else}
+                {:else if canReveal}
                   <SecretValue load={() => reveal(r)} hideAfter={30} />
+                {:else}
+                  <span class="subtle small" title="Your role can't reveal values in this account">Hidden</span>
                 {/if}
               </td>
               <td><span class="mono subtle">{r.version ? `v${r.version}` : '—'}</span></td>

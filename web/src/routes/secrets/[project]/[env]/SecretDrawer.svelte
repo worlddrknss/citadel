@@ -40,6 +40,7 @@
     requireApproval,
     minApprovals,
     canEdit,
+    canReveal = true,
     reloadToken,
     tab,
     ontab,
@@ -57,6 +58,8 @@
     requireApproval: boolean;
     minApprovals: number;
     canEdit: boolean;
+    /** False hides value reveals (viewers while viewersCanReveal is off). */
+    canReveal?: boolean;
     /** Bump to make the panel reload after a change made elsewhere. */
     reloadToken: number;
     tab: DrawerTab;
@@ -243,7 +246,7 @@
             <strong>Scheduled for deletion on {fullDate(detail.deletionDate)}.</strong>
             <span>Clients no longer receive it. Restore it to read or change the value.</span>
           </div>
-          {#if canEdit}
+          {#if canEdit && !requireApproval}
             <button type="button" class="btn btn-secondary btn-sm" onclick={() => onrestore(secretKey)}>Restore</button>
           {/if}
         </div>
@@ -251,7 +254,11 @@
         <section class="sec">
           <span class="label">Current value</span>
           <div class="valbox">
-            <SecretValue load={() => secretsApi.revealValue(project, env, path, secretKey)} hideAfter={30} />
+            {#if canReveal}
+              <SecretValue load={() => secretsApi.revealValue(project, env, path, secretKey)} hideAfter={30} />
+            {:else}
+              <span class="subtle small">Viewers can't reveal values in this account. Ask an admin or editor.</span>
+            {/if}
           </div>
           <span class="field-hint">
             {#if detail.valueLength !== undefined}{detail.valueLength} characters{/if}
@@ -361,11 +368,11 @@
         <p class="subtle">No versions found.</p>
       {:else}
         <p class="subtle small intro">
-          Reveal any version to compare it. Restoring moves AWSCURRENT{requireApproval ? ' through a change request' : ''}; nothing is deleted.
+          {canReveal ? 'Reveal any version to compare it. ' : ''}Restoring moves AWSCURRENT{requireApproval ? ' through a change request' : ''}; nothing is deleted.
         </p>
         <VersionsTimeline
           {versions}
-          showValues={!deleted}
+          showValues={!deleted && canReveal}
           canRestore={canEdit && !deleted}
           {requireApproval}
           disabled={busy}
@@ -385,7 +392,8 @@
   {#if canEdit && detail}
     <footer class="foot">
       {#if deleted}
-        <button type="button" class="btn btn-primary btn-sm" onclick={() => onrestore(secretKey)}>
+        <!-- The server refuses restores where changes need approval (409 approval_required). -->
+        <button type="button" class="btn btn-primary btn-sm" onclick={() => onrestore(secretKey)} disabled={requireApproval} title={requireApproval ? 'Restoring is not available where changes need approval' : undefined}>
           <Icon name="history" size={14} />Restore secret
         </button>
       {:else}

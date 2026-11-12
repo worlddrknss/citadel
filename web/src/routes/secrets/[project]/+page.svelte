@@ -133,12 +133,17 @@
   let policyEnv = $state('');
   let policyRequire = $state(false);
   let policyMin = $state(1);
+  let policyEditors = $state(false);
+  let policySource = $state<'project' | 'organization' | undefined>(undefined);
   let policyBusy = $state(false);
+  const MAX_APPROVALS = 10;
 
   function openPolicy(r: EnvRow) {
     policyEnv = r.slug;
     policyRequire = r.policy?.requireApproval ?? false;
     policyMin = Math.max(1, r.policy?.minApprovals ?? 1);
+    policyEditors = r.policy?.approverRoles?.includes('editor') ?? false;
+    policySource = r.policy?.source;
     policyOpen = true;
   }
 
@@ -146,17 +151,29 @@
     e.preventDefault();
     policyBusy = true;
     try {
-      const approvalsRequired = policyRequire ? Math.min(5, Math.max(1, Math.round(policyMin))) : 0;
-      await secretsApi.savePolicy({ project, env: policyEnv, approvalsRequired });
-      policies = {
-        ...policies,
-        [policyEnv]: {
-          ...(policies[policyEnv] ?? defaultPolicy(project, policyEnv)),
-          requireApproval: approvalsRequired > 0,
-          minApprovals: approvalsRequired
-        }
-      };
-      toast.success(`Saved change policy for ${policyEnv}`);
+      const approvalsRequired = policyRequire ? Math.min(MAX_APPROVALS, Math.max(1, Math.round(policyMin))) : 0;
+      const approverRoles = policyEditors ? ['admin', 'editor'] : ['admin'];
+      await secretsApi.savePolicy({ project, env: policyEnv, approvalsRequired, approverRoles });
+      // Re-read: removing a project policy can leave an organization one in force.
+      try {
+        policies = await secretsApi.envPolicies(project);
+      } catch {
+        policies = {
+          ...policies,
+          [policyEnv]: {
+            ...(policies[policyEnv] ?? defaultPolicy(project, policyEnv)),
+            requireApproval: approvalsRequired > 0,
+            minApprovals: approvalsRequired,
+            approverRoles
+          }
+        };
+      }
+      const now = policies[policyEnv];
+      if (!policyRequire && now?.requireApproval && now.source === 'organization') {
+        toast.info(`${policyEnv} still needs approval: it's an organization approval environment (Administration → Organization settings).`);
+      } else {
+        toast.success(`Saved change policy for ${policyEnv}`);
+      }
       policyOpen = false;
     } catch (err) {
       toast.error(err, 'Could not save the policy');
@@ -268,7 +285,7 @@
       </td>
       <td>
         {#if r.policy?.requireApproval}
-          <span class="policy"><Icon name="lock" size={14} />Needs {r.policy.minApprovals} approval{r.policy.minApprovals === 1 ? '' : 's'}</span>
+          <span class="policy"><Icon name="lock" size={14} />Needs {r.policy.minApprovals} approval{r.policy.minApprovals === 1 ? '' : 's'}{#if r.policy.source === 'organization'}<span class="subtle small"> · org-wide</span>{/if}</span>
         {:else}
           <span class="subtle">Direct edits</span>
         {/if}
@@ -380,8 +397,24 @@
     {#if policyRequire}
       <label class="field">
         <span class="field-label">Approvals needed</span>
-        <input class="input num" type="number" min="1" max="5" bind:value={policyMin} />
+        <input class="input num" type="number" min="1" max={MAX_APPROVALS} bind:value={policyMin} />
       </label>
+      <label class="check">
+        <input type="checkbox" bind:checked={policyEditors} />
+        <span>
+          <span class="field-label">Editors can approve</span>
+          <span class="field-hint block">Otherwise only admins approve. The requester never can.</span>
+        </span>
+      </label>
+    {/if}
+    {#if policySource === 'organization'}
+      <div class="callout callout-info">
+        <Icon name="info" size={16} />
+        <span>
+          This environment needs approval organization-wide (Administration → Organization settings). Saving here sets a
+          project policy that overrides it; turning approval off here doesn't remove the organization rule.
+        </span>
+      </div>
     {/if}
   </form>
   {#snippet footer()}

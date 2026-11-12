@@ -9,6 +9,7 @@
   import PageHeader from '$lib/components/PageHeader.svelte';
   import { confirm } from '$lib/stores/confirm.svelte';
   import { session } from '$lib/stores/session.svelte';
+  import { revealPolicy } from '$lib/stores/revealPolicy.svelte';
   import { toast } from '$lib/stores/toast.svelte';
   import { param, setParams } from '$lib/url';
   import { defaultPolicy, secretsApi, type EnvPolicy, type ProjectInfo, type SecretList, type SecretRow } from '../../api';
@@ -45,6 +46,13 @@
   });
 
   const canEdit = $derived(session.can('editor'));
+  // Viewers read values only while the account allows it (the server
+  // refuses otherwise), so hide Reveal and Export instead of failing.
+  const canReveal = $derived(revealPolicy.canReveal);
+  $effect(() => {
+    void session.me;
+    void revealPolicy.load();
+  });
 
   // ---- Data -------------------------------------------------------------------
   let list = $state<SecretList | null>(null);
@@ -311,10 +319,9 @@
     ];
     if (!canEdit) return items;
     if (r.deletionDate) {
-      items.push(
-        { label: 'Restore', icon: 'history', divider: true, onclick: () => restore(r.key) },
-        { label: 'Force delete…', icon: 'alert-triangle', danger: true, onclick: () => forceDelete([r.key]) }
-      );
+      // The server refuses restores where changes need approval.
+      if (!requireApproval) items.push({ label: 'Restore', icon: 'history', divider: true, onclick: () => restore(r.key) });
+      items.push({ label: 'Force delete…', icon: 'alert-triangle', danger: true, divider: requireApproval, onclick: () => forceDelete([r.key]) });
     } else {
       items.push(
         {
@@ -612,9 +619,11 @@
               <Icon name="upload" size={16} />Import .env
             </button>
           {/if}
-          <button type="button" class="btn btn-secondary" disabled={exporting || !list?.items.length} onclick={exportEnv}>
-            <Icon name="download" size={16} />{exporting ? 'Exporting…' : selectedActive.length ? `Export ${selectedActive.length}` : 'Export'}
-          </button>
+          {#if canReveal}
+            <button type="button" class="btn btn-secondary" disabled={exporting || !list?.items.length} onclick={exportEnv}>
+              <Icon name="download" size={16} />{exporting ? 'Exporting…' : selectedActive.length ? `Export ${selectedActive.length}` : 'Export'}
+            </button>
+          {/if}
           {#if canEdit}
             <button type="button" class="btn btn-primary" onclick={addSecret}>
               <Icon name="plus" size={16} />Add secret
@@ -629,7 +638,7 @@
           copyLabel={nextEnv ? `Copy to ${envLabel(nextEnv).toLowerCase()}` : 'Copy to…'}
           canMove={!requireApproval}
           moveHint={requireApproval ? 'Moves are not available where changes need approval' : undefined}
-          deletedCount={selectedDeleted.length}
+          deletedCount={requireApproval ? 0 : selectedDeleted.length}
           activeCount={selectedActive.length}
           oncopy={() => openCopy('copy')}
           onmove={() => openCopy('move')}
@@ -665,6 +674,7 @@
           ondeletefolder={canEdit ? deleteFolder : undefined}
           onopen={openSecret}
           {reveal}
+          {canReveal}
           {menuFor}
         >
           {#snippet empty()}
@@ -710,6 +720,7 @@
         {requireApproval}
         {minApprovals}
         {canEdit}
+        {canReveal}
         reloadToken={drawerReload}
         tab={drawerTab}
         ontab={(t) => setParams({ tab: t === 'details' ? null : t })}
