@@ -1,5 +1,5 @@
 <!-- Cycles system → light → dark. "System" removes data-theme so CSS follows
-     the OS preference. -->
+     the OS preference. app.html applies a saved choice before first paint. -->
 <script lang="ts">
   import { onMount } from 'svelte';
   import Icon from './Icon.svelte';
@@ -29,9 +29,18 @@
     }
   }
 
-  const label = $derived(`Theme: ${choice}. Click to change.`);
+  const next = $derived(choice === 'system' ? 'light' : choice === 'light' ? 'dark' : 'system');
+  const label = $derived(`Switch theme (now ${choice}, next ${next})`);
 </script>
 
-<button type="button" class="btn-icon" aria-label={label} title={label} onclick={cycle}>
+<button type="button" class="btn btn-ghost btn-icon theme-toggle" aria-label={label} title={label} onclick={cycle}>
   <Icon name={choice === 'light' ? 'sun' : choice === 'dark' ? 'moon' : 'monitor'} />
 </button>
+
+<style>
+  .theme-toggle {
+    width: var(--ctl-h);
+    height: var(--ctl-h);
+    border-radius: var(--radius-md);
+  }
+</style>

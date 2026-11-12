@@ -21,6 +21,7 @@
       await navigator.clipboard.writeText(text);
       copied = true;
       setTimeout(() => (copied = false), 1500);
+      if (clearAfter) toast.info(`Copied. Clipboard clears in ${clearAfter} s.`);
       if (clearAfter) {
         setTimeout(async () => {
           try {

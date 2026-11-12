@@ -2,84 +2,242 @@
   import '$lib/styles.css';
   import { base } from '$app/paths';
   import { page } from '$app/state';
-  import { afterNavigate } from '$app/navigation';
+  import { afterNavigate, goto } from '$app/navigation';
   import { onMount } from 'svelte';
+  import { api, type Certificate, type ChangeRequest } from '$lib/api';
   import { session, type Role } from '$lib/stores/session.svelte';
+  import { toast } from '$lib/stores/toast.svelte';
   import Icon, { type IconName } from '$lib/components/Icon.svelte';
   import Logo from '$lib/components/Logo.svelte';
-  import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+  import Modal from '$lib/components/Modal.svelte';
   import Toaster from '$lib/components/Toaster.svelte';
   import ConfirmHost from '$lib/components/ConfirmHost.svelte';
   import LoginScreen from '$lib/components/LoginScreen.svelte';
+  import CommandPalette from './CommandPalette.svelte';
+  import Menu from './Menu.svelte';
+  import { density } from './prefs.svelte';
+  import { shellApi, type Organization } from './api';
+  import { isNotImplemented } from './http';
+  import { envTone } from './approvals/api';
+  import { daysUntil } from './time';
 
   let { children } = $props();
+
+  const DOCS = 'https://github.com/worlddrknss/citadel/tree/main/docs';
+  const SECURITY = 'https://github.com/worlddrknss/citadel/blob/main/SECURITY.md';
 
   interface NavItem {
     href: string;
     label: string;
     icon: IconName;
     minRole?: Role;
+    /** Query param that must match for this item to be current. */
+    tab?: string;
   }
 
   const groups: { label: string; items: NavItem[] }[] = [
+    { label: '', items: [{ href: '/', label: 'Overview', icon: 'grid' }] },
     {
-      label: '',
-      items: [{ href: '/', label: 'Overview', icon: 'grid' }]
-    },
-    {
-      label: 'Secrets',
+      label: 'Store',
       items: [
         { href: '/secrets', label: 'Secrets', icon: 'lock' },
-        { href: '/parameters', label: 'Parameters', icon: 'sliders' }
-      ]
-    },
-    {
-      label: 'Cryptography',
-      items: [
+        { href: '/parameters', label: 'Parameters', icon: 'sliders' },
         { href: '/kms', label: 'KMS keys', icon: 'key' },
         { href: '/certificates', label: 'Certificates', icon: 'award' }
       ]
     },
     {
-      label: 'Access',
+      label: 'Identity',
       items: [
-        { href: '/iam', label: 'Identity federation', icon: 'users' },
-        { href: '/approvals', label: 'Approvals', icon: 'git-pull-request' },
-        { href: '/audit', label: 'Audit log', icon: 'activity' }
+        { href: '/iam', label: 'IAM', icon: 'users' },
+        { href: '/workload-identity', label: 'Workload identity', icon: 'shield' },
+        { href: '/account', label: 'Access keys', icon: 'command', tab: 'keys' }
       ]
     },
     {
-      label: 'Organization',
+      label: 'Governance',
       items: [
-        { href: '/account', label: 'My account', icon: 'user' },
-        { href: '/admin', label: 'Administration', icon: 'building', minRole: 'admin' }
+        { href: '/audit', label: 'Audit log', icon: 'list' },
+        { href: '/approvals', label: 'Approvals', icon: 'git-pull-request' }
       ]
     }
   ];
 
-  let navOpen = $state(false);
-  afterNavigate(() => (navOpen = false));
-
   const path = $derived(page.url.pathname.slice(base.length) || '/');
-  function isActive(href: string) {
-    return href === '/' ? path === '/' : path === href || path.startsWith(href + '/');
+  const tab = $derived(page.url.searchParams.get('tab') ?? '');
+  function isActive(item: NavItem) {
+    const onPath = item.href === '/' ? path === '/' : path === item.href || path.startsWith(item.href + '/');
+    return onPath && (!item.tab || tab === item.tab);
+  }
+  const settingsHref = $derived(session.can('admin') ? '/admin' : '/account');
+  const settingsActive = $derived(
+    session.can('admin') ? path.startsWith('/admin') : path.startsWith('/account') && tab !== 'keys'
+  );
+  const navHref = (item: NavItem) => `${base}${item.href}${item.tab ? `?tab=${item.tab}` : ''}`;
+
+  // Palette targets: every page, including the ones in menus.
+  const paletteNav = $derived([
+    ...groups.flatMap((g) => g.items.map((i) => ({ href: i.tab ? `${i.href}?tab=${i.tab}` : i.href, label: i.label, icon: i.icon, group: g.label || undefined }))),
+    { href: '/account', label: 'My account', icon: 'user' as IconName, group: 'Settings' },
+    ...(session.can('admin') ? [{ href: '/admin', label: 'Administration', icon: 'building' as IconName, group: 'Settings' }] : [])
+  ]);
+
+  // Environment-aware search: inside /secrets/[project]/[env] the palette
+  // offers that environment as a scope and the top bar shows its tier.
+  const scope = $derived(
+    page.params.project && page.params.env ? { project: page.params.project, env: page.params.env } : null
+  );
+
+  // ---- shell data ---------------------------------------------------------
+  let org = $state<Organization | null>(null);
+  let fips = $state(false);
+  let pending = $state<ChangeRequest[]>([]);
+  let expiring = $state<Certificate[]>([]);
+  let lastPoll = 0;
+
+  const me = $derived(session.me);
+  const forMe = $derived(pending.filter((c) => c.status === 'pending' && c.requester !== me?.username));
+  const currentAccount = $derived(org?.accounts.find((a) => a.accountId === me?.accountId));
+  const orgName = $derived(org?.organization.name || 'Citadel');
+  const orgInitials = $derived(initialsOf(orgName));
+  const notifCount = $derived((session.can('admin') ? forMe.length : 0) + expiring.length);
+
+  function initialsOf(s: string) {
+    return (
+      s
+        .split(/[\s._-]+/)
+        .filter(Boolean)
+        .map((p) => p[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase() || '?'
+    );
+  }
+  const userInitials = $derived(initialsOf(me?.displayName || me?.username || '?'));
+
+  async function loadShell() {
+    const [o, info] = await Promise.allSettled([shellApi.organization(), shellApi.serverInfo()]);
+    org = o.status === 'fulfilled' ? o.value : null;
+    fips = info.status === 'fulfilled' ? !!info.value.fips : false;
   }
 
-  onMount(() => session.refresh());
+  async function poll(force = false) {
+    if (session.status !== 'signed-in') return;
+    if (!force && Date.now() - lastPoll < 30_000) return;
+    lastPoll = Date.now();
+    const [cr, certs] = await Promise.allSettled([api.changeRequests(), api.certificates()]);
+    if (cr.status === 'fulfilled') pending = cr.value.changeRequests.filter((c) => c.status === 'pending');
+    if (certs.status === 'fulfilled') {
+      const soon = Date.now() + 30 * 86_400_000;
+      expiring = certs.value.certificates
+        .filter((c) => c.notAfter && !/revoked/i.test(c.status) && Date.parse(c.notAfter) <= soon && Date.parse(c.notAfter) > Date.now())
+        .sort((a, b) => Date.parse(a.notAfter!) - Date.parse(b.notAfter!));
+    }
+  }
 
-  const initials = $derived(
-    (session.me?.displayName || session.me?.username || '?')
-      .split(/\s+/)
-      .map((p) => p[0])
-      .join('')
-      .slice(0, 2)
-      .toUpperCase()
+  let shellFor = '';
+  $effect(() => {
+    const key = session.status === 'signed-in' ? `${me?.username}@${me?.accountId}` : '';
+    if (key && key !== shellFor) {
+      shellFor = key;
+      void loadShell();
+      void poll(true);
+    }
+    if (!key) shellFor = '';
+  });
+
+  afterNavigate(() => void poll());
+
+  onMount(() => {
+    session.refresh();
+    const onChanged = () => void poll(true);
+    window.addEventListener('citadel:approvals-changed', onChanged);
+    return () => window.removeEventListener('citadel:approvals-changed', onChanged);
+  });
+
+  // ---- palette ------------------------------------------------------------
+  let paletteOpen = $state(false);
+  let paletteInitial = $state('');
+  function openPalette(initial = '') {
+    paletteInitial = initial;
+    paletteOpen = true;
+  }
+  function onWindowKey(e: KeyboardEvent) {
+    if (session.status !== 'signed-in') return;
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (paletteOpen) paletteOpen = false;
+      else openPalette();
+      return;
+    }
+    const t = e.target as HTMLElement;
+    const typing = t.closest('input, textarea, select, [contenteditable="true"], dialog');
+    if (e.key === '/' && !typing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      openPalette();
+    }
+  }
+  const isMac = typeof navigator !== 'undefined' && /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent);
+
+  // ---- account switching ----------------------------------------------------
+  async function switchAccount(accountId: string, close: () => void) {
+    close();
+    if (accountId === me?.accountId) return;
+    try {
+      await shellApi.switchAccount(accountId);
+      await session.refresh();
+      toast.success(`Switched to account ${accountId}`);
+      goto(`${base}/`);
+    } catch (e) {
+      if (isNotImplemented(e)) {
+        // Older servers scope a session to one account: sign in again.
+        try {
+          localStorage.setItem('citadel-last-account', accountId);
+        } catch {
+          /* ignore */
+        }
+        await session.signOut();
+        toast.info(`Sign in to account ${accountId} to switch.`);
+      } else toast.error(e, 'Could not switch account');
+    }
+  }
+  const accountList = $derived(
+    org?.accounts.length ? org.accounts : (me?.accounts ?? []).map((id) => ({ accountId: id, name: '', role: undefined }))
   );
+
+  // ---- theme (menu control; mirrors ThemeToggle's storage) -------------------
+  type Theme = 'system' | 'light' | 'dark';
+  let theme = $state<Theme>('system');
+  onMount(() => {
+    try {
+      const t = localStorage.getItem('citadel-theme');
+      theme = t === 'light' || t === 'dark' ? t : 'system';
+    } catch {
+      /* ignore */
+    }
+  });
+  function setTheme(t: Theme) {
+    theme = t;
+    const root = document.documentElement;
+    if (t === 'system') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', t);
+    try {
+      if (t === 'system') localStorage.removeItem('citadel-theme');
+      else localStorage.setItem('citadel-theme', t);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  let shortcutsOpen = $state(false);
+
 </script>
 
 <svelte:head>
   <title>Citadel</title>
 </svelte:head>
+
+<svelte:window onkeydown={onWindowKey} />
 
 {#if session.status === 'loading'}
   <div class="boot" aria-busy="true" aria-label="Loading Citadel">
@@ -100,79 +258,188 @@
   <LoginScreen />
 {:else}
   <a class="skip" href="#main">Skip to content</a>
-  <div class="shell" class:nav-open={navOpen}>
-    <aside class="sidebar" aria-label="Primary">
-      <div class="sidebar-head">
-        <a href="{base}/" class="brand-link" aria-label="Citadel overview"><Logo /></a>
-        <button class="btn-icon nav-close" aria-label="Close menu" onclick={() => (navOpen = false)}>
-          <Icon name="x" />
-        </button>
-      </div>
-      <nav class="nav">
+  <div class="shell">
+    <aside class="side" aria-label="Primary">
+      <a href="{base}/" class="brand" aria-label="Citadel home"><Logo /></a>
+      <nav class="navgroups" aria-label="Main">
         {#each groups as g (g.label)}
           {@const items = g.items.filter((i) => !i.minRole || session.can(i.minRole))}
           {#if items.length}
-            <div class="nav-group">
-              {#if g.label}<div class="nav-label">{g.label}</div>{/if}
-              <ul>
-                {#each items as item (item.href)}
-                  <li>
-                    <a
-                      class="nav-link"
-                      href="{base}{item.href}"
-                      aria-current={isActive(item.href) ? 'page' : undefined}
-                    >
-                      <Icon name={item.icon} />
-                      <span>{item.label}</span>
-                    </a>
-                  </li>
-                {/each}
-              </ul>
+            <div class="navgroup">
+              {#if g.label}<div class="grouplabel">{g.label}</div>{/if}
+              {#each items as item (item.href + (item.tab ?? ''))}
+                <a class="navi" href={navHref(item)} aria-current={isActive(item) ? 'page' : undefined}>
+                  <Icon name={item.icon} />
+                  <span>{item.label}</span>
+                  {#if item.href === '/approvals' && session.can('admin') && forMe.length}
+                    <span class="count" aria-label="{forMe.length} pending">{forMe.length}</span>
+                  {/if}
+                </a>
+              {/each}
             </div>
           {/if}
         {/each}
       </nav>
-      <div class="sidebar-foot">
-        <div class="org">
-          <Icon name="building" size={14} />
-          <div class="org-text">
-            <span class="subtle small">Account</span>
-            <span class="mono small">{session.me?.accountId || '—'}</span>
+      <div class="sidefoot">
+        <a class="navi" href="{base}{settingsHref}" aria-current={settingsActive ? 'page' : undefined}>
+          <Icon name="settings" /><span>Settings</span>
+        </a>
+        {#if fips}
+          <div class="fips">
+            <Icon name="shield-check" />
+            <div>
+              <span class="fips-t">FIPS 140 mode</span>
+              <span class="subtle">Approved algorithms only</span>
+            </div>
           </div>
-        </div>
+        {/if}
       </div>
     </aside>
-    <button class="scrim" aria-label="Close menu" tabindex="-1" onclick={() => (navOpen = false)}></button>
 
-    <div class="main">
+    <div class="col">
       <header class="topbar">
-        <button class="btn-icon nav-toggle" aria-label="Open menu" aria-expanded={navOpen} onclick={() => (navOpen = true)}>
-          <Icon name="menu" />
-        </button>
-        <div class="topbar-spacer"></div>
-        <ThemeToggle />
-        <details class="usermenu">
-          <summary aria-label="Account menu">
-            <span class="avatar" aria-hidden="true">{initials}</span>
-            <span class="user-text">
-              <span class="user-name">{session.me?.displayName || session.me?.username}</span>
-              <span class="user-role subtle">{session.me?.role}</span>
+        <Menu label="Switch organization or account. Current: {orgName}, account {me?.accountId}" triggerClass="btn btn-ghost orgbtn" width={300}>
+          {#snippet trigger()}
+            <span class="orgmark" aria-hidden="true">{orgInitials}</span>
+            <span class="orgtext">
+              <span class="orgname">{orgName}</span>
+              <span class="mono subtle orgacct">{currentAccount?.name ? `${currentAccount.name} · ` : ''}{me?.accountId || '—'}</span>
             </span>
-            <Icon name="chevron-down" size={14} />
-          </summary>
-          <div class="menu" role="menu">
-            <a role="menuitem" href="{base}/account"><Icon name="user" /> My account</a>
-            <button role="menuitem" type="button" onclick={() => session.signOut()}>
-              <Icon name="log-out" /> Sign out
-            </button>
-          </div>
-        </details>
+            <Icon name="arrow-up-down" size={14} />
+          {/snippet}
+          {#snippet children(close)}
+            <div class="menu-label">Accounts in {orgName}</div>
+            {#each accountList as a (a.accountId)}
+              <button type="button" role="menuitemradio" aria-checked={a.accountId === me?.accountId} onclick={() => switchAccount(a.accountId, close)}>
+                <span class="acct">
+                  <span>{a.name || 'Account'}</span>
+                  <span class="mono subtle small">{a.accountId}{a.role ? ` · ${a.role}` : ''}</span>
+                </span>
+                {#if a.accountId === me?.accountId}<Icon name="check" />{/if}
+              </button>
+            {:else}
+              <p class="menu-head subtle small">No other accounts.</p>
+            {/each}
+            {#if session.can('admin')}
+              <div class="menu-sep"></div>
+              <a role="menuitem" href="{base}/admin" onclick={close}><Icon name="building" />Manage accounts</a>
+            {/if}
+          {/snippet}
+        </Menu>
+
+        <div class="search" role="search">
+          <button type="button" class="searchbox" aria-haspopup="dialog" aria-keyshortcuts={isMac ? 'Meta+K' : 'Control+K'} onclick={() => openPalette()}>
+            <Icon name="search" />
+            <span class="ph">{scope ? `Search ${scope.project} / ${scope.env}, keys, ARNs…` : 'Search secrets, keys, ARNs, people…'}</span>
+            <span class="sk">
+              {#if scope}<span class="badge badge-{envTone(scope.env)} envchip hide-sm">{scope.env}</span>{/if}
+              <kbd>{isMac ? '⌘K' : 'Ctrl K'}</kbd>
+            </span>
+          </button>
+        </div>
+
+        <div class="tools">
+          <Menu label="Help and docs" triggerClass="btn btn-ghost btn-icon tool" align="end" width={240}>
+            {#snippet trigger()}<Icon name="info" />{/snippet}
+            {#snippet children(close)}
+              <a role="menuitem" href={DOCS} target="_blank" rel="noopener noreferrer" onclick={close}><Icon name="file" />Documentation<Icon name="external-link" size={12} /></a>
+              <button type="button" role="menuitem" onclick={() => { close(); shortcutsOpen = true; }}><Icon name="command" />Keyboard shortcuts</button>
+              <a role="menuitem" href={SECURITY} target="_blank" rel="noopener noreferrer" onclick={close}><Icon name="shield" />Report a security issue<Icon name="external-link" size={12} /></a>
+            {/snippet}
+          </Menu>
+
+          <Menu label="Notifications, {notifCount} {notifCount === 1 ? 'item' : 'items'}" triggerClass="btn btn-ghost btn-icon tool bell" align="end" width={340}>
+            {#snippet trigger()}
+              <Icon name="alert-circle" />
+              {#if notifCount}<span class="dot" aria-hidden="true"></span>{/if}
+            {/snippet}
+            {#snippet children(close)}
+              <div class="menu-label">Notifications</div>
+              {#if session.can('admin')}
+                {#each forMe.slice(0, 5) as c (c.id)}
+                  <a role="menuitem" href="{base}/approvals?cr={encodeURIComponent(c.id)}" onclick={close}>
+                    <Icon name="git-pull-request" />
+                    <span class="acct"><span>Review change to <span class="mono">{c.key}</span></span><span class="subtle small">{c.requester} · {c.project} / {c.env}</span></span>
+                  </a>
+                {/each}
+              {/if}
+              {#each expiring.slice(0, 5) as c (c.source + c.id)}
+                {@const d = daysUntil(c.notAfter!)}
+                <a role="menuitem" href="{base}/certificates?cert={encodeURIComponent(c.id)}&source={encodeURIComponent(c.source)}" onclick={close}>
+                  <Icon name="award" />
+                  <span class="acct"><span class="mono">{c.subject || c.id}</span><span class="small" class:warn={d > 9} class:danger={d <= 9}>Expires {d <= 0 ? 'today' : d === 1 ? 'tomorrow' : `in ${d} days`}</span></span>
+                </a>
+              {/each}
+              {#if !notifCount}
+                <p class="menu-head subtle small">You're all caught up.</p>
+              {/if}
+            {/snippet}
+          </Menu>
+
+          <Menu label="Account menu for {me?.displayName || me?.username}, {me?.role}" triggerClass="btn btn-ghost userbtn" align="end" width={280} role="dialog">
+            {#snippet trigger()}
+              <span class="avatar" aria-hidden="true">{userInitials}</span>
+              <span class="usertext hide-sm">
+                <span class="username">{me?.displayName || me?.username}</span>
+                <span class="subtle userrole">{me?.role}</span>
+              </span>
+              <Icon name="chevron-down" size={14} />
+            {/snippet}
+            {#snippet children(close)}
+              <div class="menu-head">
+                <strong>{me?.displayName || me?.username}</strong>
+                <span class="subtle small">{me?.username} · <span class="cap">{me?.role}</span> · <span class="mono">{me?.accountId}</span></span>
+              </div>
+              <div class="menu-sep"></div>
+              <a role="menuitem" href="{base}/account" onclick={close}><Icon name="user" />My account</a>
+              <a role="menuitem" href="{base}/account?tab=keys" onclick={close}><Icon name="command" />Access keys</a>
+              {#if session.can('admin')}
+                <a role="menuitem" href="{base}/admin" onclick={close}><Icon name="building" />Administration</a>
+              {/if}
+              <div class="menu-sep"></div>
+              <div class="pref">
+                <span class="small muted" id="pref-theme">Theme</span>
+                <div class="seg" role="group" aria-labelledby="pref-theme">
+                  {#each ['system', 'light', 'dark'] as const as t (t)}
+                    <button type="button" aria-pressed={theme === t} onclick={() => setTheme(t)}>{t[0].toUpperCase() + t.slice(1)}</button>
+                  {/each}
+                </div>
+              </div>
+              <div class="pref">
+                <span class="small muted" id="pref-density">Density</span>
+                <div class="seg" role="group" aria-labelledby="pref-density">
+                  {#each ['comfortable', 'compact'] as const as d (d)}
+                    <button type="button" aria-pressed={density.value === d} onclick={() => density.set(d)}>{d[0].toUpperCase() + d.slice(1)}</button>
+                  {/each}
+                </div>
+              </div>
+              <div class="menu-sep"></div>
+              <button type="button" role="menuitem" onclick={() => { close(); session.signOut(); }}><Icon name="log-out" />Sign out</button>
+            {/snippet}
+          </Menu>
+        </div>
       </header>
+
       <main id="main" class="content" tabindex="-1">
         {@render children()}
       </main>
     </div>
   </div>
+
+  <CommandPalette bind:open={paletteOpen} nav={paletteNav} {scope} initial={paletteInitial} />
+
+  <Modal bind:open={shortcutsOpen} title="Keyboard shortcuts" size="sm">
+    <dl class="kv shortcuts">
+      <dt><kbd>{isMac ? '⌘' : 'Ctrl'}</kbd> <kbd>K</kbd></dt>
+      <dd>Open search</dd>
+      <dt><kbd>/</kbd></dt>
+      <dd>Open search (when not typing)</dd>
+      <dt><kbd>↑</kbd> <kbd>↓</kbd> <kbd>↵</kbd></dt>
+      <dd>Move through and open results</dd>
+      <dt><kbd>Esc</kbd></dt>
+      <dd>Close search, menus and dialogs</dd>
+    </dl>
+  </Modal>
 {/if}
 
 <Toaster />
@@ -217,247 +484,396 @@
   }
 
   .shell {
-    display: grid;
-    grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
     min-height: 100dvh;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
   }
 
-  .sidebar {
+  /* ---- sidebar ---- */
+  .side {
+    flex: 0 0 var(--sidebar-w);
+    max-width: var(--sidebar-w);
     position: sticky;
     top: 0;
     height: 100dvh;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
+    gap: 20px;
+    padding: 16px 12px;
     border-right: 1px solid var(--border);
     background: var(--sidebar);
   }
-  .sidebar-head {
+  .brand {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    height: var(--topbar-h);
-    padding: 0 var(--space-4);
+    height: 32px;
+    padding: 0 6px;
+    color: var(--text);
   }
-  .brand-link:hover {
+  .brand:hover {
     text-decoration: none;
   }
-  .nav-close {
-    display: none;
+  .navgroups {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
   }
-  .nav {
-    flex: 1;
-    overflow-y: auto;
-    padding: var(--space-2) var(--space-3);
+  .navgroup {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
-  .nav-group + .nav-group {
-    margin-top: var(--space-4);
-  }
-  .nav-label {
-    padding: 0 var(--space-2) var(--space-1);
-    color: var(--text-subtle);
+  .grouplabel {
+    margin-bottom: 4px;
+    padding: 0 10px;
     font-size: var(--text-xs);
     font-weight: 600;
-    letter-spacing: 0.04em;
+    line-height: 16px;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
+    color: var(--text-subtle);
   }
-  .nav ul {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-  .nav-link {
+  .navi {
     display: flex;
     align-items: center;
-    gap: var(--space-3);
+    gap: 10px;
     height: 34px;
-    padding: 0 var(--space-2);
-    border-radius: var(--radius-sm);
+    padding: 0 10px;
+    border-radius: var(--radius-md);
     color: var(--text-muted);
-    font-size: var(--text-sm);
+    font-size: var(--text-base);
     font-weight: 500;
+    white-space: nowrap;
   }
-  .nav-link:hover {
-    background: var(--surface-hover);
+  .navi:hover {
+    background: var(--surface-pressed);
     color: var(--text);
     text-decoration: none;
   }
-  .nav-link[aria-current='page'] {
+  .navi:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+  .navi[aria-current='page'] {
     background: var(--surface);
     color: var(--text);
     box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--border);
   }
-  .nav-link[aria-current='page'] :global(svg) {
+  .navi[aria-current='page'] :global(svg) {
     color: var(--accent);
   }
-  .sidebar-foot {
-    padding: var(--space-3);
-    border-top: 1px solid var(--border);
+  .count {
+    margin-left: auto;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent-text);
+    font-size: var(--text-xs);
+    font-weight: 500;
+    line-height: 16px;
   }
-  .org {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    padding: var(--space-2);
-    color: var(--text-subtle);
-  }
-  .org-text {
+  .sidefoot {
+    margin-top: auto;
     display: flex;
     flex-direction: column;
-    line-height: 1.3;
-    color: var(--text);
+    gap: 10px;
   }
-
-  .scrim {
-    display: none;
+  .fips {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
   }
-
-  .main {
+  .fips > :global(svg) {
+    color: var(--accent);
+  }
+  .fips div {
     display: flex;
     flex-direction: column;
     min-width: 0;
   }
+  .fips-t {
+    font-size: var(--text-sm);
+    font-weight: 500;
+    line-height: 16px;
+  }
+  .fips .subtle {
+    font-size: 11.5px;
+    line-height: 16px;
+  }
+
+  /* ---- top bar ---- */
+  .col {
+    flex: 999 1 560px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
   .topbar {
     position: sticky;
     top: 0;
-    z-index: 20;
+    z-index: 30;
     display: flex;
     align-items: center;
-    gap: var(--space-2);
-    height: var(--topbar-h);
-    padding: 0 var(--space-6);
+    flex-wrap: wrap;
+    gap: 12px;
+    min-height: var(--topbar-h);
+    padding: 10px var(--pad-page);
     border-bottom: 1px solid var(--border);
     background: var(--surface);
   }
-  .nav-toggle {
-    display: none;
+  :global(.orgbtn) {
+    gap: 10px !important;
+    padding: 0 8px !important;
+    height: auto !important;
+    min-height: var(--ctl-h);
   }
-  .topbar-spacer {
+  :global(.orgbtn > svg) {
+    color: var(--text-subtle);
+  }
+  .orgmark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: var(--accent-soft);
+    color: var(--accent-text);
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .orgtext {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  .orgname {
+    color: var(--text);
+    font-size: var(--text-base);
+    font-weight: 600;
+    line-height: 1;
+  }
+  .orgacct {
+    font-size: 11px;
+    line-height: 1;
+  }
+  .acct {
+    display: flex;
+    flex-direction: column;
     flex: 1;
+    min-width: 0;
+    line-height: 1.35;
   }
-
-  .usermenu {
-    position: relative;
+  .search {
+    flex: 1 1 280px;
+    max-width: 560px;
+    margin: 0 auto;
   }
-  .usermenu summary {
+  .searchbox {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
-    padding: 4px var(--space-2) 4px 4px;
+    gap: 8px;
+    width: 100%;
+    height: var(--ctl-h);
+    padding: 0 8px 0 10px;
+    border: 1px solid var(--border-strong);
     border-radius: var(--radius-md);
-    cursor: pointer;
-    list-style: none;
-    color: var(--text-muted);
-  }
-  .usermenu summary::-webkit-details-marker {
-    display: none;
-  }
-  .usermenu summary:hover {
     background: var(--surface-hover);
+    color: var(--text-subtle);
+    font: inherit;
+    font-size: var(--text-base);
+    text-align: start;
+    cursor: text;
+  }
+  .searchbox:hover {
+    border-color: var(--text-subtle);
+  }
+  .searchbox:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: var(--focus-ring);
+  }
+  .ph {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sk {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .envchip {
+    height: 20px;
+    font-size: 11px;
+  }
+  .tools {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  :global(.tool) {
+    width: var(--ctl-h) !important;
+    height: var(--ctl-h) !important;
+    border-radius: var(--radius-md) !important;
+    position: relative;
+  }
+  :global(.bell) .dot {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--danger);
+    box-shadow: 0 0 0 2px var(--surface);
+  }
+  :global(.userbtn) {
+    gap: 8px !important;
+    margin-left: 4px;
+    padding: 0 6px 0 4px !important;
+  }
+  :global(.userbtn > svg) {
+    color: var(--text-subtle);
   }
   .avatar {
-    display: grid;
-    place-items: center;
-    width: 30px;
-    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 28px;
+    height: 28px;
     border-radius: 50%;
     background: var(--accent-soft);
     color: var(--accent-text);
-    font-size: var(--text-xs);
+    font-size: 11px;
     font-weight: 600;
   }
-  .user-text {
+  .usertext {
     display: flex;
     flex-direction: column;
-    line-height: 1.2;
+    align-items: flex-start;
+    gap: 2px;
   }
-  .user-name {
+  .username {
     color: var(--text);
-    font-size: var(--text-sm);
+    font-size: var(--text-base);
     font-weight: 500;
+    line-height: 1;
   }
-  .user-role {
-    font-size: var(--text-xs);
+  .userrole {
+    font-size: 11px;
+    line-height: 1;
     text-transform: capitalize;
   }
-  .menu {
-    position: absolute;
-    right: 0;
-    top: calc(100% + 6px);
-    min-width: 200px;
-    padding: var(--space-1);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--surface-raised);
-    box-shadow: var(--shadow-lg);
+  .cap {
+    text-transform: capitalize;
   }
-  .menu a,
-  .menu button {
+  .warn {
+    color: var(--warning);
+  }
+  .danger {
+    color: var(--danger);
+  }
+  .pref {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
-    width: 100%;
-    padding: var(--space-2) var(--space-3);
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 10px;
+  }
+  .seg {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: var(--radius-md);
+    background: var(--surface-pressed);
+  }
+  .seg button {
+    height: 26px;
+    padding: 0 8px;
     border: none;
     border-radius: var(--radius-sm);
-    background: none;
-    color: var(--text);
+    background: transparent;
+    color: var(--text-muted);
     font: inherit;
     font-size: var(--text-sm);
-    text-align: start;
+    font-weight: 500;
     cursor: pointer;
   }
-  .menu a:hover,
-  .menu button:hover {
-    background: var(--surface-hover);
-    text-decoration: none;
+  .seg button[aria-pressed='true'] {
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: var(--shadow-xs);
+  }
+  .shortcuts {
+    grid-template-columns: max-content 1fr;
+    align-items: center;
   }
 
   .content {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
     width: 100%;
-    max-width: var(--content-max);
+    max-width: 1440px;
     margin: 0 auto;
-    padding: var(--pad-page) var(--pad-page) var(--space-12);
+    padding: 24px var(--pad-page) 48px;
     outline: none;
   }
+  /* The main column spaces page sections with its gap (as in the mockups),
+     so PageHeader's own bottom margin would double it. */
+  .content > :global(.ph) {
+    margin-bottom: 0;
+  }
 
-  @media (max-width: 960px) {
-    .shell {
-      grid-template-columns: minmax(0, 1fr);
+  /* Narrow screens (mockup): the sidebar becomes a top strip whose nav
+     scrolls sideways; group labels, the footer and secondary text hide. */
+  @media (max-width: 820px) {
+    .side {
+      flex-basis: 100%;
+      max-width: none;
+      position: static;
+      height: auto;
+      gap: 8px;
+      padding: 10px 12px;
+      border-right: 0;
+      border-bottom: 1px solid var(--border);
     }
-    .sidebar {
-      position: fixed;
-      inset: 0 auto 0 0;
-      z-index: 60;
-      width: min(85vw, 300px);
-      transform: translateX(-100%);
-      transition: transform 180ms ease-out;
-      box-shadow: var(--shadow-lg);
+    .navgroups {
+      flex-direction: row;
+      gap: 4px;
+      overflow-x: auto;
+      scrollbar-width: none;
     }
-    .nav-open .sidebar {
-      transform: none;
+    .navgroup {
+      flex-direction: row;
     }
-    .nav-open .scrim {
-      display: block;
-      position: fixed;
-      inset: 0;
-      z-index: 50;
-      border: none;
-      background: var(--overlay);
-    }
-    .nav-close,
-    .nav-toggle {
-      display: inline-grid;
-    }
-    .topbar {
-      padding: 0 var(--space-4);
-    }
-    .user-text {
+    .grouplabel,
+    .sidefoot,
+    .hide-sm {
       display: none;
     }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .sidebar {
-      transition: none;
+    .topbar {
+      position: static;
+    }
+    .search {
+      order: 3;
+      flex-basis: 100%;
+      max-width: none;
+    }
+    .tools {
+      margin-left: auto;
     }
   }
 </style>

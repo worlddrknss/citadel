@@ -18,7 +18,8 @@
 
   let value = $state<string | null>(null);
   let loading = $state(false);
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let remaining = $state(0);
+  let timer: ReturnType<typeof setInterval> | undefined;
 
   async function fetchValue(): Promise<string> {
     if (value !== null) return value;
@@ -33,7 +34,11 @@
     loading = true;
     try {
       value = await load();
-      timer = setTimeout(hide, hideAfter * 1000);
+      remaining = hideAfter;
+      timer = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) hide();
+      }, 1000);
     } catch (e) {
       toast.error(e, 'Could not reveal value');
     } finally {
@@ -42,16 +47,17 @@
   }
 
   function hide() {
-    clearTimeout(timer);
+    clearInterval(timer);
     value = null;
   }
 
-  onDestroy(() => clearTimeout(timer));
+  onDestroy(() => clearInterval(timer));
 </script>
 
 <span class="secret">
   {#if value !== null}
     <code class="secret-value">{value}</code>
+    <span class="badge badge-warning secret-timer" aria-live="off">Hides in {remaining} s</span>
   {:else}
     <span class="secret-mask" aria-label="Hidden value">••••••••••••</span>
   {/if}
@@ -66,7 +72,7 @@
     >
       <Icon name={value !== null ? 'eye-off' : 'eye'} size={14} />
     </button>
-    <CopyButton value={fetchValue} label="Copy value" clearAfter={60} />
+    <CopyButton value={fetchValue} label="Copy value" clearAfter={30} />
   </span>
 </span>
 
@@ -83,11 +89,16 @@
     font-size: var(--text-sm);
     padding: 2px 6px;
     border-radius: var(--radius-sm);
-    background: var(--surface-sunken);
+    background: var(--warning-soft);
+    color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     min-width: 0;
+  }
+  .secret-timer {
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
   }
   .secret-mask {
     color: var(--text-subtle);

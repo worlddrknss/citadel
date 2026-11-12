@@ -1,287 +1,334 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { goto } from '$app/navigation';
   import { base } from '$app/paths';
-  import { api, ApiError, type Project } from '$lib/api';
+  import { api } from '$lib/api';
+  import DataTable, { type Column } from '$lib/components/DataTable.svelte';
+  import EmptyState from '$lib/components/EmptyState.svelte';
+  import Icon from '$lib/components/Icon.svelte';
+  import Modal from '$lib/components/Modal.svelte';
+  import PageHeader from '$lib/components/PageHeader.svelte';
+  import { confirm } from '$lib/stores/confirm.svelte';
+  import { session } from '$lib/stores/session.svelte';
+  import { toast } from '$lib/stores/toast.svelte';
+  import { param, setParams } from '$lib/url';
+  import { secretsApi, type ProjectInfo } from './api';
+  import { envLabel, envTier, sortEnvs, tierTone } from './lib';
 
-  let projects: Project[] = $state([]);
+  let projects = $state<ProjectInfo[]>([]);
   let loading = $state(true);
-  let flash = $state('');
-  let flashOk = $state(true);
+  let loadError = $state('');
 
-  let newProjectSlug = $state('');
+  let query = $state(param('q'));
+  let sortBy = $state(param('sort', 'project'));
+  let sortDir = $state<'asc' | 'desc'>(param('dir') === 'desc' ? 'desc' : 'asc');
+  $effect(() => {
+    setParams({ q: query, sort: sortBy === 'project' ? null : sortBy, dir: sortDir === 'asc' ? null : sortDir });
+  });
 
-  // Confirm modal
-  let confirmOpen = $state(false);
-  let confirmTitle = $state('');
-  let confirmBody = $state('');
-  let confirmLabel = $state('Confirm');
-  let confirmAction: (() => Promise<void>) | null = $state(null);
+  // Create / rename dialog
+  let formOpen = $state(false);
+  let formMode = $state<'create' | 'rename'>('create');
+  let formSlug = $state('');
+  let formName = $state('');
+  let formBusy = $state(false);
+  const slugOk = $derived(/^[A-Za-z0-9_.-]+$/.test(formSlug.trim()));
 
-  // Prompt modal
-  let promptOpen = $state(false);
-  let promptTitle = $state('');
-  let promptLabel = $state('');
-  let promptValue = $state('');
-  let promptAction: ((value: string) => Promise<void>) | null = $state(null);
+  const canEdit = $derived(session.can('editor'));
 
-  function notify(msg: string, ok = true) {
-    flash = msg;
-    flashOk = ok;
-    setTimeout(() => (flash = ''), 4000);
+  const columns: Column<ProjectInfo>[] = [
+    { id: 'project', label: 'Project', sort: (p) => p.name || p.slug },
+    { id: 'envs', label: 'Environments' },
+    { id: 'secrets', label: 'Secrets', sort: (p) => totalSecrets(p), align: 'end', width: '110px', hideOnMobile: true },
+    { id: 'actions', label: '', width: '1%' }
+  ];
+
+  function totalSecrets(p: ProjectInfo): number | null {
+    if (!p.environmentCounts) return null;
+    return Object.values(p.environmentCounts).reduce((a, b) => a + b, 0);
   }
 
-  function err(e: unknown) {
-    if (e instanceof ApiError) notify(e.message, false);
-    else notify('Unexpected error', false);
-  }
-
-  function askConfirm(opts: { title: string; body: string; label?: string; action: () => Promise<void> }) {
-    confirmTitle = opts.title;
-    confirmBody = opts.body;
-    confirmLabel = opts.label ?? 'Confirm';
-    confirmAction = opts.action;
-    confirmOpen = true;
-  }
-
-  async function runConfirm() {
-    const action = confirmAction;
-    confirmOpen = false;
-    if (action) await action();
-    confirmAction = null;
-  }
-
-  function askPrompt(opts: { title: string; label: string; value?: string; action: (v: string) => Promise<void> }) {
-    promptTitle = opts.title;
-    promptLabel = opts.label;
-    promptValue = opts.value ?? '';
-    promptAction = opts.action;
-    promptOpen = true;
-  }
-
-  async function runPrompt() {
-    const action = promptAction;
-    const value = promptValue;
-    promptOpen = false;
-    if (action) await action(value);
-    promptAction = null;
+  function projectHref(slug: string) {
+    return `${base}/secrets/${encodeURIComponent(slug)}`;
   }
 
   async function load() {
     loading = true;
+    loadError = '';
     try {
-      projects = (await api.projects()).projects;
+      projects = await secretsApi.projects();
     } catch (e) {
-      err(e);
+      loadError = e instanceof Error ? e.message : 'Could not load projects.';
+      toast.error(e, 'Could not load projects');
     } finally {
       loading = false;
     }
   }
 
-  async function createProject() {
-    const slug = newProjectSlug.trim();
-    if (!slug) {
-      notify('enter a project name', false);
-      return;
-    }
+  function openCreate() {
+    formMode = 'create';
+    formSlug = '';
+    formName = '';
+    formOpen = true;
+  }
+
+  function openRename(p: ProjectInfo) {
+    formMode = 'rename';
+    formSlug = p.slug;
+    formName = p.name || p.slug;
+    formOpen = true;
+  }
+
+  async function submitForm(e: SubmitEvent) {
+    e.preventDefault();
+    const slug = formSlug.trim();
+    const name = formName.trim() || slug;
+    if (formMode === 'create' && !slugOk) return;
+    formBusy = true;
     try {
-      await api.createProject(slug, slug);
-      notify(`Created project ${slug}`);
-      newProjectSlug = '';
+      if (formMode === 'create') {
+        await api.createProject(slug, name);
+        toast.success(`Created project ${slug}`);
+      } else {
+        await api.renameProject(slug, name);
+        toast.success(`Renamed ${slug} to “${name}”`);
+      }
+      formOpen = false;
+      await load();
+    } catch (err) {
+      toast.error(err, formMode === 'create' ? 'Could not create project' : 'Could not rename project');
+    } finally {
+      formBusy = false;
+    }
+  }
+
+  async function deleteProject(p: ProjectInfo) {
+    const ok = await confirm({
+      title: `Delete project ${p.slug}?`,
+      message:
+        'This removes the project and its empty environments and folders. It is refused while any secret still exists under it.',
+      confirmLabel: 'Delete project',
+      danger: true,
+      typeToConfirm: p.slug
+    });
+    if (!ok) return;
+    try {
+      await api.deleteProject(p.slug);
+      toast.success(`Deleted project ${p.slug}`);
       await load();
     } catch (e) {
-      err(e);
+      toast.error(e, 'Could not delete project');
     }
-  }
-
-  function renameProject(slug: string) {
-    askPrompt({
-      title: `Rename project "${slug}"`,
-      label: 'Display name',
-      value: slug,
-      action: async (name) => {
-        try {
-          await api.renameProject(slug, name.trim());
-          notify(`Renamed project ${slug}`);
-          await load();
-        } catch (e) {
-          err(e);
-        }
-      }
-    });
-  }
-
-  function deleteProject(slug: string) {
-    askConfirm({
-      title: `Delete project "${slug}"?`,
-      body: 'This removes the project and its empty environments/folders. It is refused while any secret still exists under it.',
-      label: 'Delete project',
-      action: async () => {
-        try {
-          await api.deleteProject(slug);
-          notify(`Deleted project ${slug}`);
-          await load();
-        } catch (e) {
-          err(e);
-        }
-      }
-    });
-  }
-
-  function openProject(slug: string) {
-    goto(`${base}/secrets/${encodeURIComponent(slug)}`);
   }
 
   onMount(load);
 </script>
 
-<div class="ph">
-  <h1 class="ph-title">Secrets</h1>
-  <p class="ph-sub">
-    Organize secrets by project, environment, and folder. Items remain readable through the
-    AWS Secrets Manager API for ESO and SDK clients.
-  </p>
-</div>
+<svelte:head><title>Secrets · Citadel</title></svelte:head>
 
-{#if flash}
-  <div class="flash {flashOk ? 'ok' : 'err'}">{flash}</div>
+<PageHeader
+  title="Secrets"
+  description="Projects group secrets by environment and folder. Every item stays readable through the AWS Secrets Manager API for External Secrets and SDK clients."
+>
+  {#snippet actions()}
+    {#if canEdit}
+      <button type="button" class="btn btn-primary" onclick={openCreate}>
+        <Icon name="plus" size={16} />New project
+      </button>
+    {/if}
+  {/snippet}
+</PageHeader>
+
+{#if loadError && !loading && projects.length === 0}
+  <div class="callout callout-danger" role="alert">
+    <Icon name="alert-circle" size={16} />
+    <div class="grow">
+      <strong>Couldn't load projects.</strong>
+      <span class="muted">{loadError}</span>
+    </div>
+    <button type="button" class="btn btn-secondary btn-sm" onclick={load}>Try again</button>
+  </div>
+{:else}
+  <DataTable
+    rows={projects}
+    {columns}
+    key={(p) => p.slug}
+    {loading}
+    searchable={(p) => `${p.slug} ${p.name ?? ''} ${p.environments.join(' ')}`}
+    searchPlaceholder="Filter projects or environments"
+    bind:query
+    bind:sortBy
+    bind:sortDir
+    caption="Secret projects"
+  >
+    {#snippet row(p)}
+      <td>
+        <a class="proj" href={projectHref(p.slug)}>
+          <span class="proj-icon" aria-hidden="true"><Icon name="folder" size={16} /></span>
+          <span class="proj-text">
+            <span class="proj-name">{p.name || p.slug}</span>
+            {#if p.name && p.name !== p.slug}<span class="mono subtle small">{p.slug}</span>{/if}
+          </span>
+        </a>
+      </td>
+      <td>
+        {#if p.environments.length === 0}
+          <span class="subtle">No environments</span>
+        {:else}
+          <span class="envs">
+            {#each sortEnvs(p.environments) as env (env)}
+              <a
+                class="badge badge-{tierTone[envTier(env)]} env-chip"
+                href="{projectHref(p.slug)}/{encodeURIComponent(env)}"
+              >
+                <span class="badge-dot" aria-hidden="true"></span>{envLabel(env)}
+                {#if p.environmentCounts?.[env] !== undefined}
+                  <span class="num env-count">{p.environmentCounts[env]}</span>
+                {/if}
+              </a>
+            {/each}
+          </span>
+        {/if}
+      </td>
+      <td class="end num hide-mobile">{totalSecrets(p) ?? '—'}</td>
+      <td class="end">
+        <span class="cell-actions">
+          {#if canEdit}
+            <button type="button" class="btn btn-ghost btn-sm" onclick={() => openRename(p)}>
+              <Icon name="edit" size={14} />Rename
+            </button>
+            <button
+              type="button"
+              class="btn-icon"
+              aria-label="Delete project {p.slug}"
+              title="Delete project"
+              onclick={() => deleteProject(p)}
+            >
+              <Icon name="trash" size={14} />
+            </button>
+          {/if}
+          <a class="btn-icon" href={projectHref(p.slug)} aria-label="Open {p.slug}" title="Open">
+            <Icon name="chevron-right" size={16} />
+          </a>
+        </span>
+      </td>
+    {/snippet}
+    {#snippet empty()}
+      <EmptyState
+        icon="lock"
+        title="No projects yet"
+        description="Create a project, then add environments such as dev, staging and prod to hold its secrets."
+      >
+        {#if canEdit}
+          <button type="button" class="btn btn-primary" onclick={openCreate}>
+            <Icon name="plus" size={16} />New project
+          </button>
+        {/if}
+      </EmptyState>
+    {/snippet}
+  </DataTable>
 {/if}
 
-<div class="card">
-  <div class="toolbar" style="margin-bottom:0; align-items:flex-end">
-    <h3 style="margin:0; flex:1">Projects</h3>
-    <div class="field">
-      <label for="np">New project</label>
-      <input id="np" placeholder="prod" bind:value={newProjectSlug} onkeydown={(e) => e.key === 'Enter' && createProject()} />
-    </div>
-    <button class="btn btn-p" onclick={createProject}>+ Project</button>
-  </div>
-</div>
-
-<div class="card" style="margin-top:1.25rem">
-  {#if loading}
-    <div class="empty">Loading…</div>
-  {:else if projects.length === 0}
-    <div class="empty">No projects yet. Create one above.</div>
-  {:else}
-    <table>
-      <thead>
-        <tr><th>Project</th><th>Environments</th><th></th></tr>
-      </thead>
-      <tbody>
-        {#each projects as p}
-          <tr>
-            <td><button class="linklike" onclick={() => openProject(p.slug)}>{p.slug}</button></td>
-            <td>
-              {#if p.environments.length === 0}
-                <span class="muted">none</span>
-              {:else}
-                {#each p.environments as e}
-                  <span class="badge env">{e}</span>
-                {/each}
-              {/if}
-            </td>
-            <td>
-              <div class="rowact">
-                <button class="btn btn-sm" onclick={() => openProject(p.slug)}>Open</button>
-                <button class="btn btn-sm" onclick={() => renameProject(p.slug)}>Rename</button>
-                <button class="btn btn-sm btn-d" onclick={() => deleteProject(p.slug)}>Delete</button>
-              </div>
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  {/if}
-</div>
-
-<!-- confirm modal -->
-{#if confirmOpen}
-  <div class="modal-scrim" role="presentation" onclick={() => (confirmOpen = false)}></div>
-  <div class="modal" role="dialog" aria-modal="true">
-    <h3 style="margin-top:0">{confirmTitle}</h3>
-    <p class="muted">{confirmBody}</p>
-    <div class="modal-act">
-      <button class="btn" onclick={() => (confirmOpen = false)}>Cancel</button>
-      <button class="btn btn-d" onclick={runConfirm}>{confirmLabel}</button>
-    </div>
-  </div>
-{/if}
-
-<!-- prompt modal -->
-{#if promptOpen}
-  <div class="modal-scrim" role="presentation" onclick={() => (promptOpen = false)}></div>
-  <div class="modal" role="dialog" aria-modal="true">
-    <h3 style="margin-top:0">{promptTitle}</h3>
-    <div class="field block">
-      <label for="prompt-input">{promptLabel}</label>
-      <!-- svelte-ignore a11y_autofocus -->
-      <input
-        id="prompt-input"
-        bind:value={promptValue}
-        autofocus
-        onkeydown={(e) => e.key === 'Enter' && runPrompt()}
-      />
-    </div>
-    <div class="modal-act">
-      <button class="btn" onclick={() => (promptOpen = false)}>Cancel</button>
-      <button class="btn btn-p" onclick={runPrompt}>Save</button>
-    </div>
-  </div>
-{/if}
+<Modal
+  bind:open={formOpen}
+  title={formMode === 'create' ? 'New project' : `Rename ${formSlug}`}
+  description={formMode === 'create'
+    ? 'The slug is part of every secret name (project/env/folder/KEY) and cannot change later.'
+    : 'Changes the display name only. Secret names keep the slug.'}
+  size="sm"
+>
+  <form id="project-form" class="form" onsubmit={submitForm}>
+    {#if formMode === 'create'}
+      <label class="field">
+        <span class="field-label">Slug</span>
+        <!-- svelte-ignore a11y_autofocus -->
+        <input
+          class="input mono"
+          bind:value={formSlug}
+          placeholder="payments-api"
+          autocomplete="off"
+          spellcheck="false"
+          autofocus
+          aria-invalid={formSlug.trim() !== '' && !slugOk}
+          aria-describedby="slug-hint"
+        />
+        <span id="slug-hint" class={formSlug.trim() && !slugOk ? 'field-error' : 'field-hint'}>
+          Letters, digits, dots, dashes and underscores.
+        </span>
+      </label>
+    {/if}
+    <label class="field">
+      <span class="field-label">Display name</span>
+      <input class="input" bind:value={formName} placeholder={formSlug || 'Payments API'} autocomplete="off" />
+    </label>
+  </form>
+  {#snippet footer()}
+    <button type="button" class="btn btn-secondary" onclick={() => (formOpen = false)}>Cancel</button>
+    <button
+      type="submit"
+      form="project-form"
+      class="btn btn-primary"
+      disabled={formBusy || (formMode === 'create' && !slugOk)}
+    >
+      {formMode === 'create' ? 'Create project' : 'Save name'}
+    </button>
+  {/snippet}
+</Modal>
 
 <style>
-  .linklike {
-    background: none;
-    border: none;
-    color: var(--c-blue);
-    cursor: pointer;
-    padding: 0;
-    font: inherit;
-    font-weight: 600;
+  .grow {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
-  .linklike:hover {
+  .proj {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    color: var(--text);
+    font-weight: 500;
+  }
+  .proj:hover {
+    text-decoration: none;
+  }
+  .proj:hover .proj-name {
+    color: var(--accent-text);
     text-decoration: underline;
   }
-  .rowact {
-    white-space: nowrap;
+  .proj-icon {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+    color: var(--text-subtle);
+    flex-shrink: 0;
+  }
+  .proj-text {
     display: flex;
-    gap: 0.35rem;
-    justify-content: flex-end;
+    flex-direction: column;
+    min-width: 0;
   }
-  .badge.env {
-    margin-right: 0.3rem;
-  }
-  .field.block {
-    display: block;
-    margin-bottom: 0.75rem;
-  }
-  .field.block input {
-    width: 100%;
-  }
-  .modal-scrim {
-    position: fixed;
-    inset: 0;
-    background: rgba(15, 20, 30, 0.35);
-    z-index: 50;
-  }
-  .modal {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background: var(--c-surface);
-    border: 1px solid var(--c-border);
-    border-radius: var(--radius);
-    padding: 1.25rem;
-    width: min(460px, 92vw);
-    z-index: 51;
-    box-shadow: 0 12px 32px rgba(15, 20, 30, 0.2);
-  }
-  .modal-act {
+  .envs {
     display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    margin-top: 1rem;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .env-chip:hover {
+    text-decoration: none;
+    filter: brightness(0.97);
+  }
+  .env-count {
+    opacity: 0.8;
+  }
+  .form {
+    display: flex;
+    flex-direction: column;
+  }
+  @media (max-width: 720px) {
+    .hide-mobile {
+      display: none;
+    }
   }
 </style>

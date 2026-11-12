@@ -14,6 +14,8 @@
         try {
           var t = localStorage.getItem('citadel-theme');
           if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+          var d = localStorage.getItem('citadel-density');
+          if (d === 'compact') document.documentElement.setAttribute('data-density', d);
         } catch (e) {}
       })();
     </script>

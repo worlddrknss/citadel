@@ -157,7 +157,9 @@
     color-scheme: dark;
   }
 }
-:root[data-theme='dark'] {
+/* Also valid on any element, e.g. an always-dark panel. */
+:root[data-theme='dark'],
+[data-theme='dark'] {
   --bg: #0b0f0d;
   --sidebar: #080b0a;
   --surface: #121715;
