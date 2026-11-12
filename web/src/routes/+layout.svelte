@@ -298,8 +298,9 @@
 
     <div class="col">
       <header class="topbar">
-        <Menu label="Switch organization or account. Current: {orgName}, account {me?.accountId}" triggerClass="btn btn-ghost orgbtn" width={300}>
+        <Menu label="Switch organization or account" labelTrigger={false} triggerClass="btn btn-ghost orgbtn" width={300}>
           {#snippet trigger()}
+            <span class="sr-only">Switch organization or account. Current:</span>
             <span class="orgmark" aria-hidden="true">{orgInitials}</span>
             <span class="orgtext">
               <span class="orgname">{orgName}</span>
@@ -376,8 +377,9 @@
             {/snippet}
           </Menu>
 
-          <Menu label="Account menu for {me?.displayName || me?.username}, {me?.role}" triggerClass="btn btn-ghost userbtn" align="end" width={280} role="dialog">
+          <Menu label="Account menu" labelTrigger={false} triggerClass="btn btn-ghost userbtn" align="end" width={280} role="dialog">
             {#snippet trigger()}
+              <span class="sr-only">Account menu:</span>
               <span class="avatar" aria-hidden="true">{userInitials}</span>
               <span class="usertext hide-sm">
                 <span class="username">{me?.displayName || me?.username}</span>
