@@ -141,6 +141,18 @@ func (rp *RelyingParty) Start(ctx context.Context, providerID, returnTo string) 
 	return authURL.String(), rp.cookie(value, int(rp.cfg.StateTTL/time.Second)), nil
 }
 
+// Discover fetches (or returns the cached) discovery document of providerID
+// and checks it, without starting a sign-in. Hosts use it to test a provider
+// configuration.
+func (rp *RelyingParty) Discover(ctx context.Context, providerID string) (*Discovery, error) {
+	p, ok := rp.providers[providerID]
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownProvider, providerID)
+	}
+	doc, _, _, err := rp.discover(ctx, p)
+	return doc, err
+}
+
 // Callback completes a sign-in at the redirect URL. It validates the state
 // cookie against the state parameter, consumes the state, exchanges the code
 // (with the PKCE verifier), verifies the ID token and builds the Identity.

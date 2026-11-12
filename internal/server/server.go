@@ -110,6 +110,7 @@ func New(ctx context.Context, cfg config.Config, st store.Store, webFS fs.FS) (*
 	}
 	if posture.Bootstrap {
 		log.Printf("No console users exist: %s is in bootstrap mode and its API is closed until setup completes. Open %s to create the organization and the first admin.", AppName, bootstrapURL(cfg))
+		s.initBootstrapToken()
 	}
 	s.jobs.Every("console-session-purge", 10*time.Minute, s.purgeExpiredSessions)
 	s.jobs.Every("sts-session-purge", 15*time.Minute, s.purgeExpiredSTSSessions)
@@ -248,6 +249,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/iam/roles", s.handleV1DeleteRole)
 
 	s.registerAuthRoutes(mux)
+	s.registerIdentityRoutes(mux)
 
 	// Modern Svelte single-page control plane, embedded into the binary.
 	mux.Handle("/app/", http.HandlerFunc(s.handleApp))
