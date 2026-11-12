@@ -1,7 +1,6 @@
 package main
 
 import (
-	"embed"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -9,22 +8,20 @@ import (
 	"strings"
 )
 
-// webDistFS holds the compiled Svelte (SvelteKit static adapter) control plane.
-// The build output is copied into cmd/server/webdist (by scripts/build-web.sh
-// or the Dockerfile) and embedded so Citadel ships as one executable. It is not
-// committed: a plain `go build` without it serves a "console not built" page.
-//
-//go:embed all:webdist
-var webDistFS embed.FS
-
-// webDistSub returns the embedded build directory rooted at its contents.
-func webDistSub() fs.FS {
-	sub, err := fs.Sub(webDistFS, "webdist")
-	if err != nil {
-		// Should never happen: webdist is embedded at build time.
-		panic(err)
+// webDist returns the web console build the server was given, or an empty
+// file system when it was started without one.
+func (s *server) webDist() fs.FS {
+	if s.webFS == nil {
+		return emptyFS{}
 	}
-	return sub
+	return s.webFS
+}
+
+// emptyFS is a file system with no files.
+type emptyFS struct{}
+
+func (emptyFS) Open(name string) (fs.File, error) {
+	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 }
 
 // handleApp serves the Svelte single-page application under /app/. Files are
@@ -33,7 +30,7 @@ func webDistSub() fs.FS {
 // non-asset paths fall back to index.html so client-side routing works on deep
 // links and refreshes.
 func (s *server) handleApp(w http.ResponseWriter, r *http.Request) {
-	dist := webDistSub()
+	dist := s.webDist()
 
 	reqPath := strings.TrimPrefix(r.URL.Path, "/app")
 	reqPath = strings.TrimPrefix(reqPath, "/")

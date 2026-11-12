@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/http/pprof"
@@ -47,6 +48,8 @@ type server struct {
 	// allows trusting a private or test ACME CA (e.g. Pebble). When nil the
 	// default HTTP client (public trust store) is used.
 	acmeHTTPClient *http.Client
+	// webFS is the built web console served under /app/; nil when absent.
+	webFS fs.FS
 
 	secretsOnce sync.Once
 	secretsSvcV *secretsService
@@ -413,34 +416,53 @@ func main() {
 	}
 	defer cleanup()
 
-	if err := maybeBootstrapFromLegacy(context.Background(), cfg, store); err != nil {
-		log.Fatalf("failed to bootstrap key material: %v", err)
+	s, err := newServer(context.Background(), cfg, store, webDistSub())
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := run(cfg, s.handler()); err != nil {
+		log.Fatalf("server exited with error: %v", err)
+	}
+}
+
+// newServer readies st for serving (legacy key bootstrap, per-account default
+// keys, console users merged from the database), refuses configurations that
+// would leave Citadel open, and returns the server. webFS holds the built web
+// console; nil serves a "console not built" page.
+func newServer(ctx context.Context, cfg config.Config, st store.Store, webFS fs.FS) (*server, error) {
+	if err := maybeBootstrapFromLegacy(ctx, cfg, st); err != nil {
+		return nil, fmt.Errorf("failed to bootstrap key material: %w", err)
 	}
 
 	// Provision the immutable per-account default key (alias/default) for every
 	// known account. Idempotent; best-effort so a transient failure does not
 	// block startup (ResolveDefault still falls back to legacy resolution).
-	if err := ensureManagedDefaultKeys(context.Background(), store); err != nil {
+	if err := ensureManagedDefaultKeys(ctx, st); err != nil {
 		log.Printf("warning: failed to ensure per-account default keys: %v", err)
 	}
 
 	// Merge admin-console users from the database (RBAC tied into the DB) with
 	// any env-configured users, seeding env users into the DB on first run.
-	if mergedUsers, err := mergeDBUIUsers(context.Background(), store, cfg.UIUsers); err != nil {
+	if mergedUsers, err := mergeDBUIUsers(ctx, st, cfg.UIUsers); err != nil {
 		log.Printf("warning: failed to load admin users from database: %v", err)
 	} else {
 		cfg.UIUsers = mergedUsers
 	}
 
-	_, dbBacked := store.(*postgres.Store)
+	_, dbBacked := st.(*postgres.Store)
 	if err := config.CheckSecurityPosture(cfg, dbBacked); err != nil {
-		log.Fatalf("refusing to start: %v", err)
+		return nil, fmt.Errorf("refusing to start: %w", err)
 	}
 	if cfg.InsecureDev {
 		log.Printf("WARNING: KMS_INSECURE_DEV=true — authentication is DISABLED. Never use this outside local development.")
 	}
 
-	s := &server{cfg: cfg, store: store, acmeChallenges: newACMEChallengeStore()}
+	return &server{cfg: cfg, store: st, acmeChallenges: newACMEChallengeStore(), webFS: webFS}, nil
+}
+
+// handler returns the HTTP handler serving every route, wrapped in the
+// middleware chain.
+func (s *server) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/healthz", s.handleHealth)
@@ -574,8 +596,13 @@ func main() {
 
 	// Middleware chain (outermost first): panic recovery, security headers,
 	// request logging.
-	h := withPanicRecovery(withSecurityHeaders(withRequestLogging(mux)))
+	return withPanicRecovery(withSecurityHeaders(withRequestLogging(mux)))
+}
 
+// run serves h on cfg.Addr (TLS when a certificate is configured), plus the
+// optional pprof listener, until the listener fails or SIGINT/SIGTERM asks
+// for a graceful shutdown.
+func run(cfg config.Config, h http.Handler) error {
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           h,
@@ -626,7 +653,7 @@ func main() {
 	select {
 	case err := <-serveErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("server exited with error: %v", err)
+			return err
 		}
 	case sig := <-sigCh:
 		log.Printf("received %s, shutting down gracefully", sig)
@@ -636,6 +663,7 @@ func main() {
 			log.Printf("graceful shutdown error: %v", err)
 		}
 	}
+	return nil
 }
 
 func buildStore(cfg config.Config) (store.Store, func(), error) {
