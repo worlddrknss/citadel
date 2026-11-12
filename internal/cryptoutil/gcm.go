@@ -71,7 +71,7 @@ func EncryptBlob(masterKey []byte, keyID string, plaintext, aad []byte) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-	return EncodeCipherBlob(keyID, raw), nil
+	return encodeCipherBlob(keyID, raw), nil
 }
 
 func EncryptLegacyBlob(masterKey, plaintext, aad []byte) ([]byte, error) {
@@ -98,7 +98,7 @@ func DecodeCipherBlob(blob []byte) (string, []byte, error) {
 	return keyID, raw, nil
 }
 
-func EncodeCipherBlob(keyID string, raw []byte) []byte {
+func encodeCipherBlob(keyID string, raw []byte) []byte {
 	if keyID == "" {
 		return raw
 	}

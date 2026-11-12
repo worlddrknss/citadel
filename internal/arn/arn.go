@@ -16,9 +16,9 @@ const (
 	PlaceholderAccountID = "000000000000"
 )
 
-// Regions is the set of regions selectable in the master admin console. It is
+// regions is the set of regions selectable in the master admin console. It is
 // intentionally a curated subset of common AWS commercial regions.
-var Regions = []string{
+var regions = []string{
 	"us-east-1",
 	"us-east-2",
 	"us-west-1",
@@ -73,7 +73,7 @@ func IsValidAccountID(s string) bool {
 // IsValidRegion reports whether region is one of the supported AWS regions.
 func IsValidRegion(region string) bool {
 	region = strings.TrimSpace(region)
-	for _, r := range Regions {
+	for _, r := range regions {
 		if r == region {
 			return true
 		}

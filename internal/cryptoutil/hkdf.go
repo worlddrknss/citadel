@@ -21,7 +21,7 @@ func DeriveWrappingKey(legacyMasterKey []byte) []byte {
 	return out
 }
 
-func HKDFSHA256(secret, salt, info []byte, length int) []byte {
+func hkdfSHA256(secret, salt, info []byte, length int) []byte {
 	if len(salt) == 0 {
 		salt = make([]byte, sha256.Size)
 	}
@@ -50,5 +50,5 @@ func HKDFSHA256(secret, salt, info []byte, length int) []byte {
 // HKDF-SHA256 with a fixed info label. This replaces a bare single SHA-256 so a
 // leaked master key does not trivially reveal the wrapping key.
 func DeriveWrappingKeyHKDF(masterKey []byte) []byte {
-	return HKDFSHA256(masterKey, []byte("go-kms/wrap/salt/v2"), []byte("go-kms-wrapping-key-v2"), 32)
+	return hkdfSHA256(masterKey, []byte("go-kms/wrap/salt/v2"), []byte("go-kms-wrapping-key-v2"), 32)
 }

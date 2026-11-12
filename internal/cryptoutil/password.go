@@ -27,7 +27,7 @@ const (
 // $pbkdf2-sha256$i=<iterations>$<salt b64>$<hash b64>
 func HashPassword(password string) (string, error) {
 	salt := make([]byte, pbkdf2SaltLen)
-	if err := ReadRandom(salt); err != nil {
+	if err := readRandom(salt); err != nil {
 		return "", err
 	}
 	digest, err := pbkdf2.Key(sha256.New, password, salt, pbkdf2Iterations, pbkdf2KeyLen)
@@ -40,7 +40,7 @@ func HashPassword(password string) (string, error) {
 	), nil
 }
 
-func LooksLikePBKDF2Hash(stored string) bool {
+func looksLikePBKDF2Hash(stored string) bool {
 	return strings.HasPrefix(stored, pbkdf2Prefix)
 }
 
@@ -48,7 +48,7 @@ func LooksLikePBKDF2Hash(stored string) bool {
 // replaced with a current PBKDF2 hash: legacy plaintext values, and PBKDF2
 // hashes with fewer iterations than today's setting.
 func NeedsRehash(stored string) bool {
-	if !LooksLikePBKDF2Hash(stored) {
+	if !looksLikePBKDF2Hash(stored) {
 		return true
 	}
 	iterations, _, _, err := parsePBKDF2(stored)
@@ -62,11 +62,11 @@ func NeedsRehash(stored string) bool {
 // timing side channels.
 func VerifyPassword(stored, candidate string) bool {
 	switch {
-	case LooksLikePBKDF2Hash(stored):
+	case looksLikePBKDF2Hash(stored):
 		ok, err := verifyPBKDF2(stored, candidate)
 		return err == nil && ok
 	}
-	return CompareSecret(stored, candidate)
+	return compareSecret(stored, candidate)
 }
 
 func parsePBKDF2(encoded string) (iterations int, salt, want []byte, err error) {

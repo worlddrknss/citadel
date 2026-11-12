@@ -13,7 +13,7 @@ func TestHashAndVerifyPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hashPassword: %v", err)
 	}
-	if !LooksLikePBKDF2Hash(hash) {
+	if !looksLikePBKDF2Hash(hash) {
 		t.Fatalf("expected pbkdf2 hash, got %q", hash)
 	}
 	if NeedsRehash(hash) {

@@ -20,14 +20,14 @@ func RandomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-func CompareSecret(a, b string) bool {
+func compareSecret(a, b string) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-func ReadRandom(b []byte) error {
+func readRandom(b []byte) error {
 	_, err := io.ReadFull(rand.Reader, b)
 	return err
 }

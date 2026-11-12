@@ -93,7 +93,7 @@ func GenerateKeyMaterial(keyUsage, keySpec string) ([]byte, []byte, string, stri
 		}
 		return raw, nil, KeyUsageEncryptDecrypt, KeySpecSymmetricDefault, nil
 	case KeyUsageSignVerify:
-		priv, pub, err := GenerateSigningKey(normalizedSpec)
+		priv, pub, err := generateSigningKey(normalizedSpec)
 		if err != nil {
 			return nil, nil, "", "", err
 		}
@@ -111,7 +111,7 @@ func GenerateKeyMaterial(keyUsage, keySpec string) ([]byte, []byte, string, stri
 	}
 }
 
-func GenerateSigningKey(keySpec string) (crypto.PrivateKey, crypto.PublicKey, error) {
+func generateSigningKey(keySpec string) (crypto.PrivateKey, crypto.PublicKey, error) {
 	switch keySpec {
 	case KeySpecRSA2048:
 		priv, err := rsa.GenerateKey(rand.Reader, 2048)
