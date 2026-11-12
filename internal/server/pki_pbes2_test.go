@@ -70,9 +70,13 @@ func TestEncryptedPKCS8OpenSSL(t *testing.T) {
 	if err != nil {
 		t.Skipf("openssl could not run: %v", err)
 	}
-	parsed, err := x509.ParsePKCS8PrivateKey(out)
-	if err != nil {
-		t.Fatalf("openssl output: %v", err)
+	// openssl versions differ in the DER they print for EC keys: PKCS#8 or
+	// the traditional SEC 1 form. Either proves it decrypted our blob.
+	var parsed any
+	if parsed, err = x509.ParsePKCS8PrivateKey(out); err != nil {
+		if parsed, err = x509.ParseECPrivateKey(out); err != nil {
+			t.Fatalf("openssl output: %v", err)
+		}
 	}
 	if !key.Equal(parsed) {
 		t.Fatal("openssl decrypted a different key")

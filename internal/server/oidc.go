@@ -114,7 +114,7 @@ type oidcDiscovery struct {
 
 // verifyWebIdentityToken validates a JWT against the issuer's published JWKS and
 // returns its claims. The HTTP client is used for OIDC discovery and key fetch.
-func verifyWebIdentityToken(ctx context.Context, client *http.Client, token string) (oidcClaims, error) {
+func verifyWebIdentityToken(ctx context.Context, client *http.Client, token, expectedIssuer string) (oidcClaims, error) {
 	parts := strings.Split(strings.TrimSpace(token), ".")
 	if len(parts) != 3 {
 		return oidcClaims{}, errors.New("malformed JWT: expected 3 segments")
@@ -141,6 +141,12 @@ func verifyWebIdentityToken(ctx context.Context, client *http.Client, token stri
 	}
 	if strings.TrimSpace(raw.Issuer) == "" {
 		return oidcClaims{}, errors.New("JWT missing iss claim")
+	}
+	// The issuer comes from an unverified token. Only fetch discovery and keys
+	// for the issuer the caller already trusts (the role's registered
+	// provider); otherwise anyone could make Citadel request arbitrary URLs.
+	if expectedIssuer == "" || store.NormalizeIssuerURL(raw.Issuer) != store.NormalizeIssuerURL(expectedIssuer) {
+		return oidcClaims{}, errIssuerNotTrusted
 	}
 	if strings.TrimSpace(raw.Subject) == "" {
 		return oidcClaims{}, errors.New("JWT missing sub claim")
@@ -367,6 +373,9 @@ func (k jwk) publicKey() (crypto.PublicKey, error) {
 		return nil, fmt.Errorf("unsupported JWK kty: %s", k.Kty)
 	}
 }
+
+// errIssuerNotTrusted rejects a token whose issuer isn't the expected provider.
+var errIssuerNotTrusted = errors.New("token issuer is not the role's identity provider")
 
 // httpGetJSON fetches a URL and decodes the JSON body into T.
 func httpGetJSON[T any](ctx context.Context, client *http.Client, url string) (T, error) {

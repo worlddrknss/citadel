@@ -7,7 +7,7 @@ import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 // paint). SvelteKit only hashes its own scripts, so hash this one here and
 // add it to script-src; it stays correct whenever the script is edited.
 const appHtml = readFileSync(new URL('./src/app.html', import.meta.url), 'utf8');
-const themeScript = appHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+const themeScript = appHtml.match(/<script>([\s\S]*?)<\/script>/i)?.[1];
 const themeHash = themeScript ? [`sha256-${createHash('sha256').update(themeScript).digest('base64')}`] : [];
 
 /** @type {import('@sveltejs/kit').Config} */

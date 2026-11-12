@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -191,8 +192,9 @@ func TestSDKSSM(t *testing.T) {
 // fakeOIDCIssuer serves discovery and a JWKS for one ES256 key and mints
 // tokens signed by it.
 type fakeOIDCIssuer struct {
-	srv *httptest.Server
-	key *ecdsa.PrivateKey
+	srv  *httptest.Server
+	key  *ecdsa.PrivateKey
+	hits atomic.Int64 // requests the issuer has served
 }
 
 func newFakeOIDCIssuer(t *testing.T) *fakeOIDCIssuer {
@@ -213,7 +215,10 @@ func newFakeOIDCIssuer(t *testing.T) *fakeOIDCIssuer {
 			"x": b(key.PublicKey.X.FillBytes(make([]byte, 32))), "y": b(key.PublicKey.Y.FillBytes(make([]byte, 32))),
 		}}})
 	})
-	iss.srv = httptest.NewServer(mux)
+	iss.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		iss.hits.Add(1)
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(iss.srv.Close)
 	return iss
 }
@@ -296,6 +301,15 @@ func TestSDKSTS(t *testing.T) {
 		wantCode(t, err, "AccessDenied")
 		_, err = h.sts.AssumeRoleWithWebIdentity(ctx, &sts.AssumeRoleWithWebIdentityInput{RoleArn: aws.String(roleARN), RoleSessionName: aws.String("x"), WebIdentityToken: aws.String(iss.token(t, "system:serviceaccount:app:api", "wrong-aud"))})
 		wantCode(t, err, "AccessDenied")
+
+		// A forged token naming another issuer is refused without Citadel
+		// ever contacting that issuer (no request forgery to arbitrary URLs).
+		attacker := newFakeOIDCIssuer(t)
+		_, err = h.sts.AssumeRoleWithWebIdentity(ctx, &sts.AssumeRoleWithWebIdentityInput{RoleArn: aws.String(roleARN), RoleSessionName: aws.String("x"), WebIdentityToken: aws.String(attacker.token(t, "system:serviceaccount:app:api", "sts.amazonaws.com"))})
+		wantCode(t, err, "AccessDenied")
+		if n := attacker.hits.Load(); n != 0 {
+			t.Fatalf("Citadel made %d request(s) to an untrusted issuer named in an unverified token", n)
+		}
 	})
 }
 
