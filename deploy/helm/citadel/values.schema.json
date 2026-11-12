@@ -120,7 +120,8 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "tokenReview": { "type": "boolean" }
+            "tokenReview": { "type": "boolean" },
+            "reviewerTokenFile": { "type": "string" }
           }
         }
       }

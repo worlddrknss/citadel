@@ -210,6 +210,11 @@ workloadIdentity:
     # binds it to the system:auth-delegator ClusterRole. Leave off unless you
     # federate in-cluster workloads; otherwise no API token is mounted.
     tokenReview: false
+    # -- KMS_WORKLOAD_K8S_REVIEWER_TOKEN_FILE: the bearer token Citadel
+    # presents to TokenReview. Defaults to its own mounted service account
+    # token, which the auth-delegator binding authorizes. For a remote
+    # cluster, mount a reviewer token there with extraVolumes instead.
+    reviewerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
 
 # -- Pod port the server listens on (KMS_LISTEN_ADDR=":<port>").
 containerPort: 8080

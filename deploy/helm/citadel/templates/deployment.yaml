@@ -99,6 +99,10 @@ spec:
             - name: KMS_PPROF_ADDR
               value: {{ . | quote }}
             {{- end }}
+            {{- if and .Values.workloadIdentity.kubernetes.tokenReview .Values.workloadIdentity.kubernetes.reviewerTokenFile }}
+            - name: KMS_WORKLOAD_K8S_REVIEWER_TOKEN_FILE
+              value: {{ .Values.workloadIdentity.kubernetes.reviewerTokenFile | quote }}
+            {{- end }}
             {{- if .Values.tls.enabled }}
             - name: KMS_TLS_CERT_FILE
               value: /etc/citadel/tls/tls.crt
