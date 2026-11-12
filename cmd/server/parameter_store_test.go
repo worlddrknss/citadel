@@ -6,10 +6,11 @@ import (
 
 	"github.com/worlddrknss/citadel/internal/config"
 	"github.com/worlddrknss/citadel/internal/store"
+	"github.com/worlddrknss/citadel/internal/store/memory"
 )
 
 func newParamTestServer() *server {
-	store := &inMemoryStore{k: sampleKey(1)}
+	store := &memory.Store{DefaultKey: sampleKey(1)}
 	return &server{cfg: config.Config{InsecureDev: true}, store: store}
 }
 

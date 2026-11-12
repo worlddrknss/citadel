@@ -209,37 +209,3 @@ ORDER BY created_at DESC
 	}
 	return out, rows.Err()
 }
-
-// inMemoryStore ACME (Let's Encrypt) implementations are unsupported: the
-// feature requires the database-backed wrapping path.
-func (s *inMemoryStore) GetACMELEAccount(_ context.Context, _ string) (store.ACMELEAccount, error) {
-	return store.ACMELEAccount{}, store.ErrUnsupported
-}
-
-func (s *inMemoryStore) UpsertACMELEAccount(_ context.Context, _ store.ACMELEAccount) error {
-	return store.ErrUnsupported
-}
-
-func (s *inMemoryStore) CreateACMELECertificate(_ context.Context, _ store.ACMELECertificate) error {
-	return store.ErrUnsupported
-}
-
-func (s *inMemoryStore) GetACMELECertificate(_ context.Context, _ string) (store.ACMELECertificate, error) {
-	return store.ACMELECertificate{}, store.ErrUnsupported
-}
-
-func (s *inMemoryStore) ListACMELECertificates(_ context.Context) ([]store.ACMELECertificate, error) {
-	return nil, store.ErrUnsupported
-}
-
-func (s *inMemoryStore) CreateACMELEOrder(_ context.Context, _ store.ACMELEOrder) error {
-	return store.ErrUnsupported
-}
-
-func (s *inMemoryStore) GetACMELEOrder(_ context.Context, _ string) (store.ACMELEOrder, error) {
-	return store.ACMELEOrder{}, store.ErrUnsupported
-}
-
-func (s *inMemoryStore) DeleteACMELEOrder(_ context.Context, _ string) error {
-	return store.ErrUnsupported
-}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/worlddrknss/citadel/internal/store"
+	"github.com/worlddrknss/citadel/internal/store/memory"
 )
 
 func TestACMEChallengeStoreRoundTrip(t *testing.T) {
@@ -93,7 +94,7 @@ func TestLEDirectoryEnvLabel(t *testing.T) {
 }
 
 func TestACMELEStoreUnsupportedInMemory(t *testing.T) {
-	var st store.Store = &inMemoryStore{}
+	var st store.Store = &memory.Store{}
 	ctx := context.Background()
 	if _, err := st.GetACMELEAccount(ctx, leStagingDirectoryURL); err != store.ErrUnsupported {
 		t.Fatalf("GetACMELEAccount err = %v, want errUnsupported", err)

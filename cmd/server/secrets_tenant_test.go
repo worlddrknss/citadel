@@ -8,11 +8,12 @@ import (
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/store"
+	"github.com/worlddrknss/citadel/internal/store/memory"
 )
 
 // newTenantTestStore returns an in-memory store wired with a usable default KMS
 // key so secret values can be envelope-encrypted during the test.
-func newTenantTestStore() *inMemoryStore {
+func newTenantTestStore() *memory.Store {
 	k := store.KMSKey{
 		ID:           "go-kms-default-key",
 		ARN:          "arn:aws:kms:local:000000000000:key/go-kms-default-key",
@@ -21,7 +22,7 @@ func newTenantTestStore() *inMemoryStore {
 		CreatedAt:    time.Unix(1, 0).UTC(),
 		Enabled:      true,
 	}
-	return &inMemoryStore{k: k, accountID: "000000000000"}
+	return &memory.Store{DefaultKey: k, AccountID: "000000000000"}
 }
 
 // TestSecretsPerAccountIsolation asserts the P1 multi-tenant guarantee: two

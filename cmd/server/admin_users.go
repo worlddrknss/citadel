@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"sort"
 	"strings"
 
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
@@ -72,50 +71,6 @@ func (s *dbStore) DeleteUIUser(ctx context.Context, username string) error {
 	if affected == 0 {
 		return store.ErrUIUserNotFound
 	}
-	return nil
-}
-
-// ListUIUsers returns admin-console users held in memory.
-func (s *inMemoryStore) ListUIUsers(_ context.Context) ([]store.UIUser, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	users := make([]store.UIUser, 0, len(s.uiUsers))
-	for _, user := range s.uiUsers {
-		users = append(users, user)
-	}
-	sort.Slice(users, func(i, j int) bool { return users[i].Username < users[j].Username })
-	return users, nil
-}
-
-// UpsertUIUser stores an admin-console user in memory.
-func (s *inMemoryStore) UpsertUIUser(_ context.Context, user store.UIUser) error {
-	username := strings.TrimSpace(user.Username)
-	if username == "" {
-		return errors.New("ui user requires a username")
-	}
-	if strings.TrimSpace(user.PasswordHash) == "" {
-		return errors.New("ui user requires a password hash")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.uiUsers == nil {
-		s.uiUsers = map[string]store.UIUser{}
-	}
-	user.Username = username
-	user.Role = store.NormalizeUIRole(user.Role)
-	s.uiUsers[username] = user
-	return nil
-}
-
-// DeleteUIUser removes an admin-console user from memory.
-func (s *inMemoryStore) DeleteUIUser(_ context.Context, username string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	username = strings.TrimSpace(username)
-	if _, ok := s.uiUsers[username]; !ok {
-		return store.ErrUIUserNotFound
-	}
-	delete(s.uiUsers, username)
 	return nil
 }
 

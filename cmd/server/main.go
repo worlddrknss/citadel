@@ -13,7 +13,6 @@ import (
 	"net/http/pprof"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -23,6 +22,7 @@ import (
 	"github.com/worlddrknss/citadel/internal/config"
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
 	"github.com/worlddrknss/citadel/internal/store"
+	"github.com/worlddrknss/citadel/internal/store/memory"
 
 	_ "github.com/lib/pq"
 )
@@ -67,25 +67,6 @@ type dbStore struct {
 	auditHMACKey      []byte
 	region            string
 	accountID         string
-}
-
-type inMemoryStore struct {
-	mu           sync.Mutex
-	k            store.KMSKey
-	keys         []store.KMSKey
-	aliases      []store.KMSAlias
-	grants       []store.KMSGrant
-	policies     map[string]string
-	secrets      map[string]*inMemorySecret
-	audit        []store.AuditRecord
-	auditSeq     int64
-	auditHMACKey []byte
-	uiUsers      map[string]store.UIUser
-	uiAccounts   map[string]struct{}
-	region       string
-	accountID    string
-	hier         map[string]*memProject
-	params       map[string]*memParameter
 }
 
 type awsError struct {
@@ -691,7 +672,7 @@ func buildStore(cfg config.Config) (store.Store, func(), error) {
 			CreatedAt:    time.Now().UTC(),
 			Enabled:      true,
 		}
-		return &inMemoryStore{k: k, auditHMACKey: cfg.AuditHMACKey, region: region, accountID: accountID}, func() {}, nil
+		return &memory.Store{DefaultKey: k, AuditHMACKey: cfg.AuditHMACKey, Region: region, AccountID: accountID}, func() {}, nil
 	}
 
 	db, err := sql.Open("postgres", cfg.DBConnString)
@@ -2800,215 +2781,6 @@ LIMIT $1
 		out = append(out, entry)
 	}
 	return out, rows.Err()
-}
-
-func (s *inMemoryStore) ResolveByID(_ context.Context, keyID string) (store.KMSKey, error) {
-	for _, key := range s.keysSnapshot() {
-		if keyID == "" || keyID == key.ID {
-			return key, nil
-		}
-	}
-	return store.KMSKey{}, sql.ErrNoRows
-}
-
-func (s *inMemoryStore) ResolveDefault(_ context.Context) (store.KMSKey, error) {
-	keys := s.keysSnapshot()
-	if len(keys) == 0 {
-		return store.KMSKey{}, sql.ErrNoRows
-	}
-	return keys[0], nil
-}
-
-func (s *inMemoryStore) EnsureBootstrap(_ context.Context, _ store.KMSKey) error {
-	return nil
-}
-
-func (s *inMemoryStore) EnsureAccountDefaultKey(_ context.Context, _ string) (store.KMSKey, error) {
-	return store.KMSKey{}, store.ErrUnsupported
-}
-
-func (s *inMemoryStore) CreateKey(_ context.Context, _ string, _ string, _ string) (store.KMSKey, error) {
-	return store.KMSKey{}, store.ErrUnsupported
-}
-
-func (s *inMemoryStore) ImportSigningKey(_ context.Context, _ string, _, _ []byte, _ string) (store.KMSKey, error) {
-	return store.KMSKey{}, store.ErrUnsupported
-}
-
-func (s *inMemoryStore) ListKeys(_ context.Context) ([]store.KMSKey, error) {
-	return s.keysSnapshot(), nil
-}
-
-func (s *inMemoryStore) GetKeyPolicy(_ context.Context, keyID, policyName string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if keyID != "" && keyID != s.k.ID {
-		return "", sql.ErrNoRows
-	}
-	if policyName == "" {
-		policyName = "default"
-	}
-	if s.policies == nil {
-		s.policies = map[string]string{}
-	}
-	if doc, ok := s.policies[policyName]; ok {
-		return doc, nil
-	}
-	return store.DefaultKeyPolicy(s.k), nil
-}
-
-func (s *inMemoryStore) PutKeyPolicy(_ context.Context, keyID, policyName, policyDocument string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if keyID != "" && keyID != s.k.ID {
-		return sql.ErrNoRows
-	}
-	if policyName == "" {
-		policyName = "default"
-	}
-	if s.policies == nil {
-		s.policies = map[string]string{}
-	}
-	s.policies[policyName] = policyDocument
-	return nil
-}
-
-func (s *inMemoryStore) CreateAlias(_ context.Context, _, _ string) error {
-	return store.ErrUnsupported
-}
-
-func (s *inMemoryStore) UpdateAlias(_ context.Context, _, _ string) error {
-	return store.ErrUnsupported
-}
-
-func (s *inMemoryStore) DeleteAlias(_ context.Context, _ string) error {
-	return store.ErrUnsupported
-}
-
-func (s *inMemoryStore) ListAliases(_ context.Context) ([]store.KMSAlias, error) {
-	if len(s.aliases) == 0 {
-		return nil, nil
-	}
-	out := make([]store.KMSAlias, len(s.aliases))
-	copy(out, s.aliases)
-	return out, nil
-}
-
-func (s *inMemoryStore) keysSnapshot() []store.KMSKey {
-	if len(s.keys) == 0 {
-		if strings.TrimSpace(s.k.ID) == "" {
-			return nil
-		}
-		return []store.KMSKey{s.k}
-	}
-	out := make([]store.KMSKey, len(s.keys))
-	copy(out, s.keys)
-	return out
-}
-
-func (s *inMemoryStore) SetKeyEnabled(_ context.Context, _ string, _ bool) error {
-	return store.ErrUnsupported
-}
-
-func (s *inMemoryStore) ScheduleKeyDeletion(_ context.Context, _ string, _ int) (time.Time, error) {
-	return time.Time{}, store.ErrUnsupported
-}
-
-func (s *inMemoryStore) CancelKeyDeletion(_ context.Context, _ string) error {
-	return store.ErrUnsupported
-}
-
-func (s *inMemoryStore) ForceDeleteKey(_ context.Context, _ string) error {
-	return store.ErrUnsupported
-}
-
-func (s *inMemoryStore) CreateGrant(_ context.Context, req store.CreateGrantRequest) (store.KMSGrant, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	grant := store.KMSGrant{
-		GrantID:           "grant-" + cryptoutil.RandomHex(12),
-		GrantToken:        cryptoutil.RandomHex(16),
-		KeyID:             req.KeyID,
-		GranteePrincipal:  strings.TrimSpace(req.GranteePrincipal),
-		RetiringPrincipal: strings.TrimSpace(req.RetiringPrincipal),
-		Operations:        append([]string(nil), req.Operations...),
-		Name:              strings.TrimSpace(req.Name),
-		CreatedAt:         time.Now().UTC(),
-	}
-	s.grants = append(s.grants, grant)
-	return grant, nil
-}
-
-func (s *inMemoryStore) ListGrants(_ context.Context, keyID string) ([]store.KMSGrant, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]store.KMSGrant, 0)
-	for _, grant := range s.grants {
-		if grant.KeyID == keyID {
-			grantCopy := grant
-			grantCopy.Operations = append([]string(nil), grant.Operations...)
-			out = append(out, grantCopy)
-		}
-	}
-	return out, nil
-}
-
-func (s *inMemoryStore) RevokeGrant(_ context.Context, keyID, grantID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i, grant := range s.grants {
-		if grant.KeyID == keyID && grant.GrantID == grantID {
-			s.grants = append(s.grants[:i], s.grants[i+1:]...)
-			return nil
-		}
-	}
-	return sql.ErrNoRows
-}
-
-func (s *inMemoryStore) RetireGrant(_ context.Context, grantID, grantToken string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i, grant := range s.grants {
-		if (grantID != "" && grant.GrantID == grantID) || (grantToken != "" && grant.GrantToken == grantToken) {
-			s.grants = append(s.grants[:i], s.grants[i+1:]...)
-			return nil
-		}
-	}
-	return sql.ErrNoRows
-}
-
-func (s *inMemoryStore) RecordAudit(_ context.Context, event store.AuditEvent) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.auditSeq++
-	createdAt := time.Now().UTC()
-	entry := store.AuditRecord{ID: s.auditSeq, Action: event.Action, KeyID: event.KeyID, Result: event.Result, ErrorType: event.ErrorType, Actor: event.Actor, CreatedAt: createdAt}
-	if len(s.audit) > 0 {
-		entry.PrevHash = s.audit[len(s.audit)-1].EventHash
-	}
-	entry.EventHash = store.HashAuditRecord(s.auditHMACKey, entry.PrevHash, event, createdAt.Format(time.RFC3339Nano))
-	s.audit = append(s.audit, entry)
-	return nil
-}
-
-func (s *inMemoryStore) ListAuditEvents(_ context.Context, limit int) ([]store.AuditRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if limit <= 0 || limit > 500 {
-		limit = 200
-	}
-	if len(s.audit) == 0 {
-		return nil, nil
-	}
-	items := make([]store.AuditRecord, len(s.audit))
-	copy(items, s.audit)
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].ID > items[j].ID
-	})
-	if len(items) > limit {
-		items = items[:limit]
-	}
-	return items, nil
 }
 
 func (s *dbStore) resolveKeyMaterial(ctx context.Context, keyID, masterB64, wrappedB64, nonceB64 string) ([]byte, error) {

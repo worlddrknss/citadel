@@ -282,37 +282,3 @@ func (s *dbStore) DeleteExpiredSTSSessions(ctx context.Context) (int64, error) {
 }
 
 // ---- in-memory store: unsupported -----------------------------------------
-
-func (s *inMemoryStore) CreateOIDCProvider(context.Context, store.OIDCProvider) error {
-	return store.ErrUnsupported
-}
-func (s *inMemoryStore) ListOIDCProviders(context.Context, string) ([]store.OIDCProvider, error) {
-	return nil, store.ErrUnsupported
-}
-func (s *inMemoryStore) GetOIDCProviderByURL(context.Context, string, string) (store.OIDCProvider, error) {
-	return store.OIDCProvider{}, store.ErrUnsupported
-}
-func (s *inMemoryStore) DeleteOIDCProvider(context.Context, string, string) error {
-	return store.ErrUnsupported
-}
-func (s *inMemoryStore) CreateIAMRole(context.Context, store.IAMRole) error {
-	return store.ErrUnsupported
-}
-func (s *inMemoryStore) ListIAMRoles(context.Context, string) ([]store.IAMRole, error) {
-	return nil, store.ErrUnsupported
-}
-func (s *inMemoryStore) GetIAMRole(context.Context, string, string) (store.IAMRole, error) {
-	return store.IAMRole{}, store.ErrUnsupported
-}
-func (s *inMemoryStore) GetIAMRoleByARN(context.Context, string) (store.IAMRole, error) {
-	return store.IAMRole{}, store.ErrUnsupported
-}
-func (s *inMemoryStore) DeleteIAMRole(context.Context, string, string) error {
-	return store.ErrUnsupported
-}
-func (s *inMemoryStore) CreateSTSSession(context.Context, store.STSSession, string, string) error {
-	return store.ErrUnsupported
-}
-func (s *inMemoryStore) DeleteExpiredSTSSessions(context.Context) (int64, error) {
-	return 0, store.ErrUnsupported
-}

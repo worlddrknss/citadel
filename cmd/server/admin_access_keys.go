@@ -198,27 +198,3 @@ func (s *dbStore) TouchAccessKeyLastUsed(ctx context.Context, keyID string) erro
 }
 
 // In-memory store implementations
-
-func (s *inMemoryStore) CreateAccessKey(_ context.Context, username, accountID string) (store.AccessKeySecret, error) {
-	return store.AccessKeySecret{}, store.ErrUnsupported
-}
-
-func (s *inMemoryStore) ListAccessKeys(_ context.Context, username, accountID string) ([]store.AccessKeyInfo, error) {
-	return nil, store.ErrUnsupported
-}
-
-func (s *inMemoryStore) GetAccessKeyByID(_ context.Context, keyID string) (username, accountID, secret string, status string, err error) {
-	return "", "", "", "", store.ErrUnsupported
-}
-
-func (s *inMemoryStore) SetAccessKeyStatus(_ context.Context, keyID, newStatus string) error {
-	return store.ErrUnsupported
-}
-
-func (s *inMemoryStore) DeleteAccessKey(_ context.Context, keyID string) error {
-	return store.ErrUnsupported
-}
-
-func (s *inMemoryStore) TouchAccessKeyLastUsed(_ context.Context, keyID string) error {
-	return store.ErrUnsupported
-}

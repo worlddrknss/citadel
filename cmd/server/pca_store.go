@@ -201,32 +201,3 @@ func (s *dbStore) RevokeCertificate(ctx context.Context, certID, reason string) 
 	}
 	return nil
 }
-
-// inMemoryStore CA implementations (unsupported)
-func (s *inMemoryStore) CreateCertificateAuthority(_ context.Context, _ store.PCACertificateAuthority) error {
-	return store.ErrUnsupported
-}
-
-func (s *inMemoryStore) DescribeCertificateAuthority(_ context.Context, _ string) (store.PCACertificateAuthority, error) {
-	return store.PCACertificateAuthority{}, store.ErrUnsupported
-}
-
-func (s *inMemoryStore) ListCertificateAuthorities(_ context.Context) ([]store.PCACertificateAuthority, error) {
-	return nil, store.ErrUnsupported
-}
-
-func (s *inMemoryStore) CreateCertificate(_ context.Context, _ store.PCACertificate) error {
-	return store.ErrUnsupported
-}
-
-func (s *inMemoryStore) GetCertificate(_ context.Context, _ string) (store.PCACertificate, error) {
-	return store.PCACertificate{}, store.ErrUnsupported
-}
-
-func (s *inMemoryStore) ListCertificates(_ context.Context, _ string) ([]store.PCACertificate, error) {
-	return nil, store.ErrUnsupported
-}
-
-func (s *inMemoryStore) RevokeCertificate(_ context.Context, _, _ string) error {
-	return store.ErrUnsupported
-}

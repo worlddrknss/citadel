@@ -15,6 +15,7 @@ import (
 	"github.com/worlddrknss/citadel/internal/config"
 	"github.com/worlddrknss/citadel/internal/sigv4"
 	"github.com/worlddrknss/citadel/internal/store"
+	"github.com/worlddrknss/citadel/internal/store/memory"
 )
 
 // sigV4Sign signs req with SigV4 the way an AWS SDK does for JSON-protocol
@@ -61,7 +62,7 @@ func postSigned(t *testing.T, h http.Handler, target string, body map[string]any
 }
 
 func staticKeyServer() (*server, *http.ServeMux) {
-	s := &server{cfg: config.Config{ExpectedAccessKey: "AKIASTATIC", SecretAccessKey: "static-secret"}, store: &inMemoryStore{k: sampleKey(1)}}
+	s := &server{cfg: config.Config{ExpectedAccessKey: "AKIASTATIC", SecretAccessKey: "static-secret"}, store: &memory.Store{DefaultKey: sampleKey(1)}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 	return s, mux
@@ -114,7 +115,7 @@ func TestAWSAuthCallerReachesPolicyPrincipal(t *testing.T) {
 }
 
 func TestNativeSessionRequiresUsersOutsideDevMode(t *testing.T) {
-	s := &server{cfg: config.Config{}, store: &inMemoryStore{k: sampleKey(1)}}
+	s := &server{cfg: config.Config{}, store: &memory.Store{DefaultKey: sampleKey(1)}}
 	rec := httptest.NewRecorder()
 	if _, _, ok := s.nativeSession(rec, httptest.NewRequest(http.MethodGet, "/v1/me", nil), "viewer"); ok {
 		t.Fatal("got a session with no users configured and insecure dev off")
@@ -123,14 +124,14 @@ func TestNativeSessionRequiresUsersOutsideDevMode(t *testing.T) {
 		t.Fatalf("status %d, want 401", rec.Code)
 	}
 
-	dev := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: sampleKey(1)}}
+	dev := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: sampleKey(1)}}
 	if _, _, ok := dev.nativeSession(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/me", nil), "admin"); !ok {
 		t.Fatal("insecure dev mode should get the local admin session")
 	}
 }
 
 func TestNativeTokenRejectsTemporaryCredentials(t *testing.T) {
-	s := &server{cfg: config.Config{}, store: &inMemoryStore{k: sampleKey(1)}}
+	s := &server{cfg: config.Config{}, store: &memory.Store{DefaultKey: sampleKey(1)}}
 	req := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 	req.Header.Set("Authorization", "Bearer ASIAEXAMPLEEXAMPLE12:secret")
 	rec := httptest.NewRecorder()

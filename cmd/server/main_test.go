@@ -15,6 +15,7 @@ import (
 	"github.com/worlddrknss/citadel/internal/config"
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
 	"github.com/worlddrknss/citadel/internal/store"
+	"github.com/worlddrknss/citadel/internal/store/memory"
 )
 
 func TestEncryptDecryptRoundTrip(t *testing.T) {
@@ -26,7 +27,7 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 		CreatedAt:    time.Unix(1, 0).UTC(),
 		Enabled:      true,
 	}
-	s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: k}}
+	s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: k}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 
@@ -71,7 +72,7 @@ func TestEncryptRejectsUnknownKeyID(t *testing.T) {
 		CreatedAt:    time.Unix(1, 0).UTC(),
 		Enabled:      true,
 	}
-	s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: k}}
+	s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: k}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 
@@ -94,7 +95,7 @@ func TestDecryptLegacyBlobCompatibility(t *testing.T) {
 		CreatedAt:    time.Unix(1, 0).UTC(),
 		Enabled:      true,
 	}
-	s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: k}}
+	s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: k}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 
@@ -133,7 +134,7 @@ func TestGetKeyPolicyReturnsDefaultPolicy(t *testing.T) {
 		CreatedAt:    time.Unix(1, 0).UTC(),
 		Enabled:      true,
 	}
-	s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: k}}
+	s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: k}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 
@@ -160,7 +161,7 @@ func TestPutAndGetKeyPolicy(t *testing.T) {
 		CreatedAt:    time.Unix(1, 0).UTC(),
 		Enabled:      true,
 	}
-	s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: k}}
+	s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: k}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 
@@ -187,7 +188,7 @@ func TestPutAndGetKeyPolicy(t *testing.T) {
 
 func TestKeyPolicyDeniesEncrypt(t *testing.T) {
 	k := sampleKey(1)
-	s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: k}}
+	s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: k}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 
@@ -210,7 +211,7 @@ func TestKeyPolicyDeniesEncrypt(t *testing.T) {
 
 func TestGrantLifecycle(t *testing.T) {
 	k := sampleKey(1)
-	s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: k}}
+	s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: k}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 
@@ -304,7 +305,7 @@ func TestListKeysPagination(t *testing.T) {
 			Enabled:      true,
 		},
 	}
-	s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{keys: keys}}
+	s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{Keys: keys}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 
@@ -352,7 +353,7 @@ func TestListKeysRejectsInvalidMarker(t *testing.T) {
 		CreatedAt:    time.Unix(1, 0).UTC(),
 		Enabled:      true,
 	}
-	s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: k}}
+	s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: k}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 
@@ -376,7 +377,7 @@ func TestListAliasesPagination(t *testing.T) {
 		{AliasName: "alias/app-2", TargetKeyID: "key-1"},
 		{AliasName: "alias/app-3", TargetKeyID: "key-1"},
 	}
-	s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: k, aliases: aliases}}
+	s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: k, Aliases: aliases}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 
@@ -417,7 +418,7 @@ func TestListKeysAllowsEmptyBody(t *testing.T) {
 		CreatedAt:    time.Unix(1, 0).UTC(),
 		Enabled:      true,
 	}
-	s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: k}}
+	s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: k}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 
@@ -441,7 +442,7 @@ func TestListKeysAllowsEmptyBody(t *testing.T) {
 
 func TestPhaseACompatibilitySuite(t *testing.T) {
 	t.Run("unsupported target returns InvalidAction", func(t *testing.T) {
-		s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: sampleKey(1)}}
+		s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: sampleKey(1)}}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", s.handleKMS)
 
@@ -453,7 +454,7 @@ func TestPhaseACompatibilitySuite(t *testing.T) {
 	})
 
 	t.Run("non-post requests are rejected", func(t *testing.T) {
-		s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: sampleKey(1)}}
+		s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: sampleKey(1)}}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", s.handleKMS)
 
@@ -468,7 +469,7 @@ func TestPhaseACompatibilitySuite(t *testing.T) {
 	})
 
 	t.Run("unsigned request returns MissingAuthenticationToken", func(t *testing.T) {
-		s := &server{cfg: config.Config{}, store: &inMemoryStore{k: sampleKey(1)}}
+		s := &server{cfg: config.Config{}, store: &memory.Store{DefaultKey: sampleKey(1)}}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", s.handleKMS)
 
@@ -480,7 +481,7 @@ func TestPhaseACompatibilitySuite(t *testing.T) {
 	})
 
 	t.Run("unknown access key returns UnrecognizedClientException", func(t *testing.T) {
-		s := &server{cfg: config.Config{ExpectedAccessKey: "vault", SecretAccessKey: "vault-secret-0123456789"}, store: &inMemoryStore{k: sampleKey(1)}}
+		s := &server{cfg: config.Config{ExpectedAccessKey: "vault", SecretAccessKey: "vault-secret-0123456789"}, store: &memory.Store{DefaultKey: sampleKey(1)}}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", s.handleKMS)
 
@@ -494,7 +495,7 @@ func TestPhaseACompatibilitySuite(t *testing.T) {
 	t.Run("disabled key returns DisabledException on encrypt", func(t *testing.T) {
 		key := sampleKey(1)
 		key.Enabled = false
-		s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: key}}
+		s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: key}}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", s.handleKMS)
 
@@ -510,7 +511,7 @@ func TestPhaseACompatibilitySuite(t *testing.T) {
 
 	t.Run("describe key returns expected metadata", func(t *testing.T) {
 		key := sampleKey(1)
-		s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: key}}
+		s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: key}}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", s.handleKMS)
 
@@ -528,7 +529,7 @@ func TestPhaseACompatibilitySuite(t *testing.T) {
 	})
 
 	t.Run("create key in memory mode returns UnsupportedOperationException", func(t *testing.T) {
-		s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: sampleKey(1)}}
+		s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: sampleKey(1)}}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", s.handleKMS)
 
@@ -541,7 +542,7 @@ func TestPhaseACompatibilitySuite(t *testing.T) {
 
 	t.Run("put key policy rejects malformed policy documents", func(t *testing.T) {
 		key := sampleKey(1)
-		s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: key}}
+		s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: key}}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", s.handleKMS)
 
@@ -558,7 +559,7 @@ func TestPhaseACompatibilitySuite(t *testing.T) {
 
 	t.Run("list aliases allows empty body", func(t *testing.T) {
 		key := sampleKey(1)
-		s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: key, aliases: []store.KMSAlias{{AliasName: "alias/app", TargetKeyID: key.ID}}}}
+		s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: key, Aliases: []store.KMSAlias{{AliasName: "alias/app", TargetKeyID: key.ID}}}}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", s.handleKMS)
 
@@ -576,7 +577,7 @@ func TestPhaseACompatibilitySuite(t *testing.T) {
 
 func TestSecretsManagerLifecycle(t *testing.T) {
 	key := sampleKey(1)
-	s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: key}}
+	s := &server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: key}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 
@@ -722,7 +723,7 @@ func TestSecretsManagerLifecycle(t *testing.T) {
 
 func TestSecretResourcePolicyDeniesGetSecretValue(t *testing.T) {
 	key := sampleKey(1)
-	store := &inMemoryStore{k: key}
+	store := &memory.Store{DefaultKey: key}
 	s := &server{cfg: config.Config{InsecureDev: true}, store: store}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
