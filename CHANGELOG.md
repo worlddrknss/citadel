@@ -52,5 +52,23 @@ All notable changes to Citadel are documented here. The format follows
 
 ### Security
 
+- `AssumeRoleWithWebIdentity` fetched OIDC discovery for the issuer named in
+  an unverified token before checking it against the role's provider, letting
+  unauthenticated callers make Citadel send requests to arbitrary URLs. The
+  provider is now checked first.
+- Closed cross-tenant access: CAs and certificates, KMS aliases, grants and
+  key policies, parameters, audit events, and secret names were not fully
+  scoped to the caller's account.
+- Approvals can't be self-approved, double-counted, or made with access keys.
 - Release images are built with `GOFIPS140=certified`, as the Dockerfile
   already claimed but did not do.
+
+### Upgrading from 1.x
+
+- Take a database backup first. 1.x can read a 2.0 database but can't write
+  secrets to it, so a full rollback means restoring the backup.
+- Admins that exist at upgrade time become platform admins.
+- Existing secrets keep their accounts; External Secrets Operator keeps
+  working unchanged.
+- If the console is served over plain HTTP, set `KMS_UI_SECURE_COOKIES=false`.
+- Remove `KMS_SIGV4_STRICT`, and point readiness probes at `/readyz`.
