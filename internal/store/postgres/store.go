@@ -12,6 +12,9 @@ import (
 
 	"github.com/worlddrknss/citadel/internal/arn"
 	"github.com/worlddrknss/citadel/internal/store"
+
+	// Registers the "postgres" database/sql driver this backend uses.
+	_ "github.com/lib/pq"
 )
 
 // Store is the PostgreSQL store backend.

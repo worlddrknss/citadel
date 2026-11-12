@@ -26,8 +26,6 @@ import (
 	"sync"
 	"testing"
 
-	_ "github.com/lib/pq"
-
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
 	"github.com/worlddrknss/citadel/internal/store"
 )
