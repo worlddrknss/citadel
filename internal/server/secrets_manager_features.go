@@ -82,45 +82,45 @@ func (s *Server) handleListSecretVersionIDs(w http.ResponseWriter, r *http.Reque
 	var req listSecretVersionIDsRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if strings.TrimSpace(req.SecretID) == "" {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", "SecretId is required")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	limit, err := normalizeSecretListLimit(req.MaxResults)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:ListSecretVersionIds"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	versions, err := s.store.ListSecretVersionIDs(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	versions, nextToken, _, err := paginateList(versions, req.NextToken, limit, func(item store.SecretVersionListEntry) string { return item.VersionID })
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	writeJSON(w, http.StatusOK, listSecretVersionIDsResponse{Versions: versions, NextToken: nextToken, SecretName: meta.Name, ARN: meta.ARN})
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 }
 
 func (s *Server) handleTagSecret(w http.ResponseWriter, r *http.Request) {
@@ -128,27 +128,27 @@ func (s *Server) handleTagSecret(w http.ResponseWriter, r *http.Request) {
 	var req tagSecretRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:TagResource"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.store.TagSecret(r.Context(), req.SecretID, toSecretTags(req.Tags)); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 }
 
 func (s *Server) handleUntagSecret(w http.ResponseWriter, r *http.Request) {
@@ -156,27 +156,27 @@ func (s *Server) handleUntagSecret(w http.ResponseWriter, r *http.Request) {
 	var req untagSecretRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:UntagResource"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.store.UntagSecret(r.Context(), req.SecretID, req.TagKeys); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 }
 
 func (s *Server) handleGetSecretResourcePolicy(w http.ResponseWriter, r *http.Request) {
@@ -184,28 +184,28 @@ func (s *Server) handleGetSecretResourcePolicy(w http.ResponseWriter, r *http.Re
 	var req secretPolicyRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:GetResourcePolicy"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	policy, err := s.store.GetSecretResourcePolicy(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	writeJSON(w, http.StatusOK, getSecretResourcePolicyResponse{ARN: meta.ARN, Name: meta.Name, ResourcePolicy: policy})
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 }
 
 func (s *Server) handlePutSecretResourcePolicy(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +213,7 @@ func (s *Server) handlePutSecretResourcePolicy(w http.ResponseWriter, r *http.Re
 	var req secretPolicyRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if strings.TrimSpace(req.ResourcePolicy) == "" {
@@ -223,12 +223,12 @@ func (s *Server) handlePutSecretResourcePolicy(w http.ResponseWriter, r *http.Re
 	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:PutResourcePolicy"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	policy, err := normalizePolicyDocument(req.ResourcePolicy)
@@ -241,7 +241,7 @@ func (s *Server) handlePutSecretResourcePolicy(w http.ResponseWriter, r *http.Re
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 }
 
 func (s *Server) handleValidateSecretResourcePolicy(w http.ResponseWriter, r *http.Request) {
@@ -276,7 +276,7 @@ func (s *Server) handleRotateSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:RotateSecret"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	result, err := s.store.RotateSecret(r.Context(), req.SecretID, req.RotationLambdaARN, req.AutomaticallyAfterDays, rotateImmediately, req.ClientRequestToken)
@@ -285,7 +285,7 @@ func (s *Server) handleRotateSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rotateSecretResponse{ARN: result.Metadata.ARN, Name: result.Metadata.Name, VersionID: result.VersionID})
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: result.Metadata.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: result.Metadata.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 }
 
 func (s *Server) handleCancelRotateSecret(w http.ResponseWriter, r *http.Request) {
@@ -302,7 +302,7 @@ func (s *Server) handleCancelRotateSecret(w http.ResponseWriter, r *http.Request
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:CancelRotateSecret"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	meta, err = s.store.CancelRotateSecret(r.Context(), req.SecretID)
@@ -311,7 +311,7 @@ func (s *Server) handleCancelRotateSecret(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, restoreSecretResponse{ARN: meta.ARN, Name: meta.Name})
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 }
 
 func (s *Server) handleUpdateSecretVersionStage(w http.ResponseWriter, r *http.Request) {
@@ -328,7 +328,7 @@ func (s *Server) handleUpdateSecretVersionStage(w http.ResponseWriter, r *http.R
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:UpdateSecretVersionStage"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	meta, err = s.store.UpdateSecretVersionStage(r.Context(), req.SecretID, req.VersionStage, req.MoveToVersionID, req.RemoveFromVersionID)
@@ -337,7 +337,7 @@ func (s *Server) handleUpdateSecretVersionStage(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 }
 
 func toSecretTags(tags []tagEntry) []store.SecretTag {

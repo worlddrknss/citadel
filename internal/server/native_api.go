@@ -38,12 +38,12 @@ import (
 // separator used to encode the hierarchy can never be confused with data.
 var nativeSegmentRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
-// nativeSession resolves the caller's UI session for the native API. Unlike
+// resolveNativeSession resolves the caller's UI session for the native API. Unlike
 // requireUISession (which redirects browsers to the login page), it returns a
 // JSON 401 so the SPA can react programmatically. It also returns a context
 // scoped to the session's account so the underlying store applies per-account
 // isolation via the existing accountFilter plumbing.
-func (s *Server) nativeSession(w http.ResponseWriter, r *http.Request, minRole string) (*uiSession, context.Context, bool) {
+func (s *Server) resolveNativeSession(w http.ResponseWriter, r *http.Request, minRole string) (*uiSession, context.Context, bool) {
 	runtime := s.uiRuntime()
 	// Bearer token auth (machine identities) takes precedence over cookies so
 	// native SDKs and CI can talk to /v1 without a browser session.
@@ -402,7 +402,7 @@ func (s *Server) handleV1DeleteShadowing(w http.ResponseWriter, r *http.Request)
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteShadowing", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteShadowing", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true, "forced": force})
 }
 
@@ -455,7 +455,7 @@ func (s *Server) handleV1PutSecret(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "put_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PutItem", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PutItem", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"project": coord.Project, "env": coord.Env, "path": store.FolderPath(folder), "key": coord.Key, "created": created})
 }
 
@@ -488,7 +488,7 @@ func (s *Server) handleV1RevealSecret(w http.ResponseWriter, r *http.Request) {
 	} else {
 		resp["binaryValue"] = value.SecretBinary
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RevealItem", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RevealItem", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, resp)
 }
 
@@ -520,7 +520,7 @@ func (s *Server) handleV1DeleteSecret(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteItem", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteItem", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true, "forced": force})
 }
 
@@ -568,7 +568,7 @@ func (s *Server) handleV1CreateProject(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateProject", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateProject", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"slug": strings.TrimSpace(req.Slug), "created": true})
 }
 
@@ -593,7 +593,7 @@ func (s *Server) handleV1CreateEnvironment(w http.ResponseWriter, r *http.Reques
 		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateEnvironment", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateEnvironment", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"project": strings.TrimSpace(req.Project), "slug": strings.TrimSpace(req.Slug), "created": true})
 }
 
@@ -623,7 +623,7 @@ func (s *Server) handleV1CreateFolder(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateFolder", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateFolder", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"project": strings.TrimSpace(req.Project), "env": strings.TrimSpace(req.Env), "path": store.FolderPath(folder), "created": true})
 }
 
@@ -648,7 +648,7 @@ func (s *Server) handleV1RenameProject(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "rename_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RenameProject", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RenameProject", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"slug": strings.TrimSpace(req.Slug), "renamed": true})
 }
 
@@ -667,7 +667,7 @@ func (s *Server) handleV1RenameEnvironment(w http.ResponseWriter, r *http.Reques
 		writeNativeError(w, http.StatusBadRequest, "rename_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RenameEnvironment", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RenameEnvironment", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"project": strings.TrimSpace(req.Project), "slug": strings.TrimSpace(req.Slug), "renamed": true})
 }
 
@@ -683,7 +683,7 @@ func (s *Server) handleV1DeleteProject(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "delete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteProject", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteProject", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"slug": slug, "deleted": true})
 }
 
@@ -701,7 +701,7 @@ func (s *Server) handleV1DeleteEnvironment(w http.ResponseWriter, r *http.Reques
 		writeNativeError(w, http.StatusBadRequest, "delete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteEnvironment", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteEnvironment", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"project": project, "env": slug, "deleted": true})
 }
 
@@ -724,7 +724,7 @@ func (s *Server) handleV1DeleteFolder(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "delete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteFolder", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteFolder", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"project": project, "env": env, "path": store.FolderPath(folder), "deleted": true})
 }
 
@@ -769,7 +769,7 @@ func (s *Server) handleV1RestoreSecret(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusNotFound, "not_found", "item not found")
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RestoreItem", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RestoreItem", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"restored": true})
 }
 
@@ -837,7 +837,7 @@ func (s *Server) handleV1CreateChangeRequest(w http.ResponseWriter, r *http.Requ
 		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateChangeRequest", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateChangeRequest", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, changeRequestJSON(*cr))
 }
 
@@ -870,7 +870,7 @@ func (s *Server) handleV1ApproveChangeRequest(w http.ResponseWriter, r *http.Req
 		writeNativeError(w, http.StatusBadRequest, "approve_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ApproveChangeRequest", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ApproveChangeRequest", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"approved": true, "id": strings.TrimSpace(req.ID)})
 }
 
@@ -889,6 +889,6 @@ func (s *Server) handleV1RejectChangeRequest(w http.ResponseWriter, r *http.Requ
 		writeNativeError(w, http.StatusBadRequest, "reject_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RejectChangeRequest", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RejectChangeRequest", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"rejected": true, "id": strings.TrimSpace(req.ID)})
 }

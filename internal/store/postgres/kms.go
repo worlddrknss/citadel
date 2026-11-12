@@ -573,51 +573,6 @@ func (s *Store) RetireGrant(ctx context.Context, grantID, grantToken string) err
 	return nil
 }
 
-func (s *Store) RecordAudit(ctx context.Context, event store.AuditEvent) error {
-	var prevHash sql.NullString
-	if err := s.db.QueryRowContext(ctx, `SELECT event_hash FROM kms_audit_events ORDER BY id DESC LIMIT 1`).Scan(&prevHash); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-	prev := ""
-	if prevHash.Valid {
-		prev = prevHash.String
-	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	eventHash := store.HashAuditRecord(s.auditHMACKey, prev, event, now)
-	const q = `
-INSERT INTO kms_audit_events (action, key_id, result, error_type, actor, prev_hash, event_hash, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-`
-	_, err := s.db.ExecContext(ctx, q, event.Action, event.KeyID, event.Result, event.ErrorType, event.Actor, prev, eventHash, now)
-	return err
-}
-
-func (s *Store) ListAuditEvents(ctx context.Context, limit int) ([]store.AuditRecord, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 200
-	}
-	const q = `
-SELECT id, action, COALESCE(key_id, ''), result, COALESCE(error_type, ''), COALESCE(actor, ''), COALESCE(prev_hash, ''), COALESCE(event_hash, ''), created_at
-FROM kms_audit_events
-ORDER BY id DESC
-LIMIT $1
-`
-	rows, err := s.db.QueryContext(ctx, q, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]store.AuditRecord, 0, limit)
-	for rows.Next() {
-		var entry store.AuditRecord
-		if err := rows.Scan(&entry.ID, &entry.Action, &entry.KeyID, &entry.Result, &entry.ErrorType, &entry.Actor, &entry.PrevHash, &entry.EventHash, &entry.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, entry)
-	}
-	return out, rows.Err()
-}
-
 func (s *Store) resolveKeyMaterial(ctx context.Context, keyID, masterB64, wrappedB64, nonceB64 string) ([]byte, error) {
 	if strings.TrimSpace(wrappedB64) != "" && strings.TrimSpace(nonceB64) != "" {
 		return s.unwrapKeyMaterial(keyID, wrappedB64, nonceB64)

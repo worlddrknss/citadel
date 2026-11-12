@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"database/sql"
-	"sort"
 	"strings"
 	"time"
 
@@ -184,38 +183,4 @@ func (s *Store) RetireGrant(_ context.Context, grantID, grantToken string) error
 		}
 	}
 	return sql.ErrNoRows
-}
-
-func (s *Store) RecordAudit(_ context.Context, event store.AuditEvent) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.auditSeq++
-	createdAt := time.Now().UTC()
-	entry := store.AuditRecord{ID: s.auditSeq, Action: event.Action, KeyID: event.KeyID, Result: event.Result, ErrorType: event.ErrorType, Actor: event.Actor, CreatedAt: createdAt}
-	if len(s.audit) > 0 {
-		entry.PrevHash = s.audit[len(s.audit)-1].EventHash
-	}
-	entry.EventHash = store.HashAuditRecord(s.AuditHMACKey, entry.PrevHash, event, createdAt.Format(time.RFC3339Nano))
-	s.audit = append(s.audit, entry)
-	return nil
-}
-
-func (s *Store) ListAuditEvents(_ context.Context, limit int) ([]store.AuditRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if limit <= 0 || limit > 500 {
-		limit = 200
-	}
-	if len(s.audit) == 0 {
-		return nil, nil
-	}
-	items := make([]store.AuditRecord, len(s.audit))
-	copy(items, s.audit)
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].ID > items[j].ID
-	})
-	if len(items) > limit {
-		items = items[:limit]
-	}
-	return items, nil
 }
