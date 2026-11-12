@@ -76,6 +76,19 @@ export function errorMessage(e: unknown, fallback = 'Something went wrong.'): st
   return fallback;
 }
 
+export interface ChangeRequest {
+  id: string;
+  project: string;
+  env: string;
+  path: string;
+  key: string;
+  requester: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+  decidedBy?: string;
+  decidedAt?: string;
+}
+
 export interface Me {
   username: string;
   displayName: string;
@@ -697,6 +710,15 @@ export const api = {
     req<{ removed: boolean }>(`/v1/admin/accounts/assign?${qs({ username, accountId })}`, {
       method: 'DELETE'
     }),
+
+  // Change requests (approvals)
+  changeRequests: () => req<{ changeRequests: ChangeRequest[] }>('/v1/change-requests'),
+  createChangeRequest: (body: { project: string; env: string; path: string; key: string; value: string }) =>
+    req<ChangeRequest>('/v1/change-requests', { method: 'POST', body: JSON.stringify(body) }),
+  approveChangeRequest: (id: string) =>
+    req<unknown>('/v1/change-requests/approve', { method: 'POST', body: JSON.stringify({ id }) }),
+  rejectChangeRequest: (id: string) =>
+    req<unknown>('/v1/change-requests/reject', { method: 'POST', body: JSON.stringify({ id }) }),
 
   // IAM identity federation (OIDC providers + roles consumed by STS)
   oidcProviders: () => req<{ providers: OIDCProvider[] }>('/v1/iam/oidc-providers'),

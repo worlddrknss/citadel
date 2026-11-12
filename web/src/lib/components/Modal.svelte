@@ -72,7 +72,7 @@
 <style>
   .modal {
     border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-xl);
     background: var(--surface);
     color: var(--text);
     padding: 0;
