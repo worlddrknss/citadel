@@ -151,18 +151,19 @@ INSERT INTO acme_le_certificates (
 
 // GetACMELECertificate loads a Let's Encrypt certificate, unwrapping its key.
 func (s *Store) GetACMELECertificate(ctx context.Context, certID string) (store.ACMELECertificate, error) {
-	const q = `
+	q := `
 SELECT cert_id, directory_url, domains, serial, cert_b64, chain_b64,
        key_wrapped_b64, key_nonce_b64, status, not_before, not_after, created_at, updated_at
 FROM acme_le_certificates
-WHERE cert_id = $1
-`
+WHERE cert_id = $1`
+	cond, args := andAccount(ctx, "account_id", 2)
+	q += cond
 	var (
 		c          store.ACMELECertificate
 		wrappedB64 string
 		nonceB64   string
 	)
-	err := s.db.QueryRowContext(ctx, q, certID).Scan(
+	err := s.db.QueryRowContext(ctx, q, append([]any{certID}, args...)...).Scan(
 		&c.CertID, &c.DirectoryURL, &c.Domains, &c.Serial, &c.CertB64, &c.ChainB64,
 		&wrappedB64, &nonceB64, &c.Status, &c.NotBefore, &c.NotAfter, &c.CreatedAt, &c.UpdatedAt,
 	)
@@ -184,13 +185,18 @@ WHERE cert_id = $1
 // ListACMELECertificates returns all Let's Encrypt certificates (without key
 // material) newest first.
 func (s *Store) ListACMELECertificates(ctx context.Context) ([]store.ACMELECertificate, error) {
-	const q = `
+	where, args := store.AccountFilter(ctx, "account_id", 1)
+	if where != "" {
+		where = "WHERE " + where
+	}
+	q := `
 SELECT cert_id, directory_url, domains, serial, cert_b64, chain_b64,
        status, not_before, not_after, created_at, updated_at
 FROM acme_le_certificates
+` + where + `
 ORDER BY created_at DESC
 `
-	rows, err := s.db.QueryContext(ctx, q)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query acme certificates: %w", err)
 	}

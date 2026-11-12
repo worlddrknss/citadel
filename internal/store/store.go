@@ -29,6 +29,7 @@ type Store interface {
 	AccessKeyStore
 	FederationStore
 	PKIStore
+	PKIExtStore
 	ACMEStore
 	ParameterStore
 	HierarchyStore

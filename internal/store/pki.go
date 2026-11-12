@@ -17,8 +17,13 @@ type PCACertificateAuthority struct {
 	NotAfter    time.Time
 	Description string
 	Account     string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// ParentCAID is the Citadel CA that signed a subordinate CA ("" for
+	// roots and imported CAs).
+	ParentCAID string
+	// AccountID is the owning tenant; set by the store on reads.
+	AccountID string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type PCACertificate struct {
@@ -33,6 +38,8 @@ type PCACertificate struct {
 	RevokedAt        *time.Time
 	RevocationReason string
 	Template         string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// AccountID is the owning tenant; set by the store on reads.
+	AccountID string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }

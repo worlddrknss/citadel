@@ -37,6 +37,7 @@ type Store struct {
 	hier         map[string]*memProject
 	params       map[string]*memParameter
 	appr         memApprovals
+	pki          pkiState
 }
 
 var _ store.Store = (*Store)(nil)
