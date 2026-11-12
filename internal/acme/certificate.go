@@ -40,9 +40,8 @@ func checkCSR(der []byte, order *Order, acctKey any) (*x509.CertificateRequest, 
 	if !approvedSignatureAlgorithm(csr.SignatureAlgorithm) {
 		return nil, badCSR("CSR signature algorithm %s is not allowed", csr.SignatureAlgorithm)
 	}
-	if err := csr.CheckSignature(); err != nil {
-		return nil, badCSR("CSR signature is invalid")
-	}
+	// Check the key before the signature so weak keys never reach the
+	// FIPS module's verifier.
 	switch k := csr.PublicKey.(type) {
 	case *ecdsa.PublicKey:
 		if k.Curve != elliptic.P256() && k.Curve != elliptic.P384() {
@@ -54,6 +53,9 @@ func checkCSR(der []byte, order *Order, acctKey any) (*x509.CertificateRequest, 
 		}
 	default:
 		return nil, badCSR("CSR key type is not supported (want RSA or ECDSA P-256/P-384)")
+	}
+	if err := csr.CheckSignature(); err != nil {
+		return nil, badCSR("CSR signature is invalid")
 	}
 	if publicKeysEqual(csr.PublicKey, acctKey) {
 		return nil, badCSR("CSR key must not be the account key")
