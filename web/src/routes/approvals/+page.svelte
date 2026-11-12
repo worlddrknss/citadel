@@ -356,7 +356,9 @@
           <h3>Requested changes</h3>
           <span class="badge outline">{detail.changes.length} secret{detail.changes.length === 1 ? '' : 's'}</span>
         </div>
-        <div class="scroll">
+        <!-- Focusable so keyboard users can scroll the diff sideways (axe scrollable-region-focusable). -->
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+        <div class="scroll" role="region" aria-label="Requested changes" tabindex="0">
           <table class="table diff">
             <thead><tr><th scope="col">Key</th><th scope="col">Change</th><th scope="col">Before</th><th scope="col">After</th></tr></thead>
             <tbody>

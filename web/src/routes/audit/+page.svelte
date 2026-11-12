@@ -287,7 +287,7 @@
     {/snippet}
   </Menu>
 
-  <Menu label="Filter by actor" triggerClass="btn btn-secondary" width={280} role="dialog">
+  <Menu label="Filter by actor" labelTrigger={false} triggerClass="btn btn-secondary" width={280} role="dialog">
     {#snippet trigger()}<Icon name="user" />Actor: {actor || 'anyone'}<Icon name="chevron-down" size={14} />{/snippet}
     {#snippet children(close)}
       <form class="pop-form" onsubmit={(e) => { e.preventDefault(); setFilter({ actor: actorDraft.trim() || null }); close(); }}>
@@ -300,7 +300,7 @@
     {/snippet}
   </Menu>
 
-  <Menu label="Filter by action" triggerClass="btn btn-secondary" width={300} role="dialog">
+  <Menu label="Filter by action" labelTrigger={false} triggerClass="btn btn-secondary" width={300} role="dialog">
     {#snippet trigger()}Action: <span class:mono={!!action}>{action || 'any'}</span><Icon name="chevron-down" size={14} />{/snippet}
     {#snippet children(close)}
       <form class="pop-form" onsubmit={(e) => { e.preventDefault(); setFilter({ action: actionDraft.trim() || null }); close(); }}>
@@ -314,7 +314,7 @@
     {/snippet}
   </Menu>
 
-  <Menu label="Filter by result" triggerClass="btn btn-secondary" width={200}>
+  <Menu label="Filter by result" labelTrigger={false} triggerClass="btn btn-secondary" width={200}>
     {#snippet trigger()}Result: {RESULTS.find((r) => r.id === result)?.label ?? 'any'}<Icon name="chevron-down" size={14} />{/snippet}
     {#snippet children(close)}
       {#each RESULTS as r (r.id)}

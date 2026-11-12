@@ -339,8 +339,8 @@
   <section class="card card-flush activity" aria-labelledby="act-title">
     <div class="sec-head">
       <h2 id="act-title">Recent activity</h2>
-      <Menu label="Filter activity by environment" triggerClass="btn btn-ghost btn-sm" align="end" width={220}>
-        {#snippet trigger()}{envFilter || 'All environments'}<Icon name="chevron-down" size={14} />{/snippet}
+      <Menu label="Filter activity by environment" labelTrigger={false} triggerClass="btn btn-ghost btn-sm" align="end" width={220}>
+        {#snippet trigger()}<span class="sr-only">Filter activity by environment: </span>{envFilter || 'All environments'}<Icon name="chevron-down" size={14} />{/snippet}
         {#snippet children(close)}
           <button type="button" role="menuitemradio" aria-checked={!envFilter} onclick={() => { envFilter = ''; close(); }}>All environments{#if !envFilter}<Icon name="check" />{/if}</button>
           {#each envOptions as env (env)}

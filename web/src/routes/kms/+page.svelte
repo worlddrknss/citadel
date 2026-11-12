@@ -325,8 +325,7 @@
         {@const alias = primaryAlias(k)}
         {@const status = statusOf(k)}
         <td>
-          <button type="button" class="key-open" data-key-open={k.keyId} onclick={() => openKey(k.keyId)}
-            aria-label="Open {alias ?? k.keyId}">
+          <button type="button" class="key-open" data-key-open={k.keyId} onclick={() => openKey(k.keyId)}>
             <span class="mono key-name">
               {alias ?? k.keyId}
               {#if isManaged(k)}<span class="managed" title="Account default key"><Icon name="lock" size={12} /><span class="sr-only">(account default key)</span></span>{/if}

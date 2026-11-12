@@ -15,10 +15,16 @@
     width = 260,
     triggerClass = 'btn btn-ghost',
     open = $bindable(false),
-    role = 'menu'
+    role = 'menu',
+    labelTrigger = true
   }: {
-    /** Accessible name for the trigger. */
+    /** Accessible name for the trigger (and the popover). */
     label: string;
+    /**
+     * false: the trigger is named by its own content (add sr-only text to it)
+     * rather than `label`, so the name includes the visible text (WCAG 2.5.3).
+     */
+    labelTrigger?: boolean;
     trigger: Snippet;
     children: Snippet<[() => void]>;
     align?: 'start' | 'end';
@@ -90,7 +96,7 @@
     class={triggerClass}
     aria-haspopup={role === 'menu' ? 'menu' : 'dialog'}
     aria-expanded={open}
-    aria-label={label}
+    aria-label={labelTrigger ? label : undefined}
     onclick={toggle}
   >
     {@render trigger()}
