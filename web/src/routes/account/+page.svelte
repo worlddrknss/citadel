@@ -70,7 +70,9 @@
     pwError = '';
     try {
       await api.changePassword(current, next);
-      toast.success('Password changed');
+      // The server signs out your other sessions when the password changes.
+      toast.success('Password changed. Your other sessions were signed out.');
+      void loadSessions();
       current = next = confirmPw = '';
       pwTouched = false;
     } catch (err) {
@@ -271,6 +273,9 @@ export AWS_ENDPOINT_URL=${typeof location !== 'undefined' ? location.origin : ''
 
   <section class="card" aria-labelledby="pw-title">
     <div class="card-head"><h2 id="pw-title">Password</h2></div>
+    {#if sessions.find((x) => x.current)?.method === 'sso'}
+      <p class="card-pad muted">You signed in with single sign-on. Your identity provider manages your password.</p>
+    {:else}
     <form class="card-pad pw" onsubmit={changePassword} novalidate>
       <!-- Lets password managers associate the new password with this account. -->
       <input type="text" name="username" autocomplete="username" value={me?.username ?? ''} readonly hidden />
@@ -298,6 +303,7 @@ export AWS_ENDPOINT_URL=${typeof location !== 'undefined' ? location.origin : ''
       {/if}
       <div class="actions"><button type="submit" class="btn btn-primary" disabled={changing}>{changing ? 'Changing…' : 'Change password'}</button></div>
     </form>
+    {/if}
   </section>
 </div>
 
