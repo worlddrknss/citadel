@@ -49,8 +49,14 @@ func (s *server) nativeSession(w http.ResponseWriter, r *http.Request, minRole s
 		return sess, ctx, ok
 	}
 	if !runtime.enabled {
-		sess := &uiSession{Username: "local", Role: "admin", DisplayName: "Local Admin"}
-		return sess, r.Context(), true
+		// No console users: only insecure dev mode gets the implicit local
+		// admin. Startup refuses this state otherwise; this is the backstop.
+		if s.cfg.insecureDev {
+			sess := &uiSession{Username: "local", Role: "admin", DisplayName: "Local Admin"}
+			return sess, r.Context(), true
+		}
+		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "no console users are configured")
+		return nil, nil, false
 	}
 	cookie, err := r.Cookie(adminSessionCookieName)
 	if err != nil || strings.TrimSpace(cookie.Value) == "" {
@@ -106,7 +112,13 @@ func (s *server) nativeTokenSession(w http.ResponseWriter, r *http.Request, minR
 		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid bearer token format")
 		return nil, nil, false, true
 	}
-	_, accountID, storedSecret, status, err := s.store.GetAccessKeyByID(r.Context(), keyID)
+	// STS temporary credentials are for the AWS APIs only, where their session
+	// token is checked; they are never a /v1 bearer token.
+	if isTempAccessKeyID(keyID) {
+		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid or inactive token")
+		return nil, nil, false, true
+	}
+	owner, accountID, storedSecret, status, err := s.store.GetAccessKeyByID(r.Context(), keyID)
 	if err != nil || strings.ToLower(status) != "active" {
 		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid or inactive token")
 		return nil, nil, false, true
@@ -115,9 +127,18 @@ func (s *server) nativeTokenSession(w http.ResponseWriter, r *http.Request, minR
 		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid or inactive token")
 		return nil, nil, false, true
 	}
-	// Machine identities act as account-scoped administrators for the native
-	// API; the role gate below still applies for completeness.
-	const tokenRole = "admin"
+	// A token acts with its owner's role, never more: otherwise any viewer
+	// could mint a key and act as admin. A key whose owner no longer exists
+	// grants nothing.
+	runtime := s.uiRuntime()
+	runtime.mu.Lock()
+	ownerCfg, ownerExists := runtime.users[owner]
+	runtime.mu.Unlock()
+	if !ownerExists {
+		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid or inactive token")
+		return nil, nil, false, true
+	}
+	tokenRole := ownerCfg.Role
 	if !uiRoleAtLeast(tokenRole, minRole) {
 		writeNativeError(w, http.StatusForbidden, "forbidden", "insufficient role")
 		return nil, nil, false, true

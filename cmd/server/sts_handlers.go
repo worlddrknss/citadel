@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/xml"
-	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -79,23 +78,19 @@ func isSTSRequest(r *http.Request) bool {
 
 // ---- caller resolution -----------------------------------------------------
 
-// resolveSignedSTSCaller verifies the request's SigV4 signature (DB-backed) and
-// returns the caller's account. When strict SigV4 is disabled and no signature
-// is present, it falls back to the deployment identity so local/dev use keeps
-// working.
+// resolveSignedSTSCaller verifies the request's SigV4 signature and returns
+// the caller's account and principal. Only KMS_INSECURE_DEV accepts unsigned
+// requests, attributing them to the deployment account.
 func (s *server) resolveSignedSTSCaller(r *http.Request, bodyHash string) (accountID, principalARN string, err error) {
-	if strings.TrimSpace(r.Header.Get("Authorization")) != "" && s.isDBBacked() {
-		username, acct, verr := s.verifyDBBackedSigV4(r, bodyHash)
-		if verr != nil {
-			return "", "", verr
-		}
-		return acct, arnFor("iam", "", acct, "user/"+username), nil
+	if s.cfg.insecureDev && strings.TrimSpace(r.Header.Get("Authorization")) == "" {
+		_, acct := s.store.DeploymentIdentity()
+		return acct, arnFor("iam", "", acct, "user/local"), nil
 	}
-	if s.cfg.strictSigV4 {
-		return "", "", errors.New("request is not signed")
+	caller, err := s.verifyAWSRequest(r, bodyHash)
+	if err != nil {
+		return "", "", err
 	}
-	_, acct := s.store.DeploymentIdentity()
-	return acct, arnFor("iam", "", acct, "user/local"), nil
+	return caller.AccountID, caller.PrincipalARN(), nil
 }
 
 // ---- GetCallerIdentity -----------------------------------------------------

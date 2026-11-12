@@ -31,6 +31,10 @@ type nativeLoginRequest struct {
 // for the legacy /login html form.
 func (s *server) handleV1Login(w http.ResponseWriter, r *http.Request) {
 	runtime := s.uiRuntime()
+	if !runtime.enabled && !s.cfg.insecureDev {
+		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "no console users are configured")
+		return
+	}
 	if !runtime.enabled {
 		// Auth disabled (local dev / bootstrap): every caller is the local
 		// admin, so report success without a cookie.

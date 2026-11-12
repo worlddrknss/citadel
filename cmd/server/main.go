@@ -44,10 +44,11 @@ var (
 type config struct {
 	addr              string
 	dbConnString      string
-	requireAccessKey  bool
 	expectedAccessKey string
 	secretAccessKey   string
-	strictSigV4       bool
+	// insecureDev disables every authentication check (AWS SigV4, console
+	// login). Local development only; set with KMS_INSECURE_DEV=true.
+	insecureDev       bool
 	defaultDenyPolicy bool
 	wrappingKey       []byte
 	legacyWrappingKey []byte
@@ -676,6 +677,14 @@ func main() {
 		cfg.uiUsers = mergedUsers
 	}
 
+	_, dbBacked := store.(*dbStore)
+	if err := checkSecurityPosture(cfg, dbBacked); err != nil {
+		log.Fatalf("refusing to start: %v", err)
+	}
+	if cfg.insecureDev {
+		log.Printf("WARNING: KMS_INSECURE_DEV=true — authentication is DISABLED. Never use this outside local development.")
+	}
+
 	s := &server{cfg: cfg, store: store, acmeChallenges: newACMEChallengeStore()}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRoot)
@@ -874,19 +883,45 @@ func main() {
 	}
 }
 
+// checkSecurityPosture refuses configurations that would leave Citadel open.
+// Outside insecure dev mode the console needs at least one user, and the AWS
+// APIs need a source of credentials to verify signatures against.
+func checkSecurityPosture(cfg config, dbBacked bool) error {
+	if cfg.insecureDev {
+		return nil
+	}
+	if len(cfg.uiUsers) == 0 {
+		return errors.New("no console users are configured: set KMS_UI_USERS_JSON or KMS_UI_PASSWORD (or KMS_INSECURE_DEV=true for local development)")
+	}
+	if !dbBacked && cfg.expectedAccessKey == "" {
+		return errors.New("the in-memory store has no access keys: set KMS_ACCESS_KEY_ID and KMS_SECRET_ACCESS_KEY, use KMS_DB_URL, or set KMS_INSECURE_DEV=true for local development")
+	}
+	return nil
+}
+
 func loadConfig() (config, error) {
 	cfg := config{
 		addr:         envOrDefault("KMS_LISTEN_ADDR", ":8080"),
 		dbConnString: os.Getenv("KMS_DB_URL"),
 	}
 
-	expectedAccessKey := os.Getenv("KMS_ACCESS_KEY_ID")
-	cfg.expectedAccessKey = expectedAccessKey
-	cfg.requireAccessKey = expectedAccessKey != ""
+	cfg.expectedAccessKey = strings.TrimSpace(os.Getenv("KMS_ACCESS_KEY_ID"))
 	cfg.secretAccessKey = os.Getenv("KMS_SECRET_ACCESS_KEY")
-	cfg.strictSigV4 = strings.EqualFold(envOrDefault("KMS_SIGV4_STRICT", "false"), "true")
+	if (cfg.expectedAccessKey == "") != (cfg.secretAccessKey == "") {
+		return config{}, errors.New("KMS_ACCESS_KEY_ID and KMS_SECRET_ACCESS_KEY must be set together")
+	}
+	cfg.insecureDev = strings.EqualFold(os.Getenv("KMS_INSECURE_DEV"), "true")
+	if v := os.Getenv("KMS_SIGV4_STRICT"); v != "" {
+		log.Printf("warning: KMS_SIGV4_STRICT is no longer read; SigV4 is always verified unless KMS_INSECURE_DEV=true")
+	}
 	cfg.defaultDenyPolicy = strings.EqualFold(envOrDefault("KMS_POLICY_DEFAULT_DENY", "false"), "true")
-	cfg.uiSecureCookies = strings.EqualFold(envOrDefault("KMS_UI_SECURE_COOKIES", "false"), "true")
+	// Session cookies are Secure unless explicitly turned off, or in insecure
+	// dev mode where the console is usually served over plain http://localhost.
+	secureDefault := "true"
+	if cfg.insecureDev {
+		secureDefault = "false"
+	}
+	cfg.uiSecureCookies = strings.EqualFold(envOrDefault("KMS_UI_SECURE_COOKIES", secureDefault), "true")
 	cfg.sessionIdleTTL = envDurationOrDefault("KMS_UI_SESSION_IDLE_TTL", 30*time.Minute)
 	cfg.sessionAbsTTL = envDurationOrDefault("KMS_UI_SESSION_MAX_TTL", 12*time.Hour)
 	cfg.tlsCertFile = os.Getenv("KMS_TLS_CERT_FILE")
@@ -1613,32 +1648,12 @@ func (s *server) handleKMS(w http.ResponseWriter, r *http.Request) {
 		writeAWSJSONError(w, http.StatusMethodNotAllowed, "InvalidAction", "method not allowed")
 		return
 	}
-	if s.cfg.strictSigV4 {
-		if err := validateSigV4Request(r); err != nil {
-			writeAWSJSONError(w, http.StatusForbidden, "IncompleteSignature", "request signature is invalid")
-			return
-		}
-		// When a secret access key is configured, verify the signature
-		// cryptographically rather than only checking header presence.
-		if s.cfg.secretAccessKey != "" {
-			bodyHash, err := drainAndHashBody(r, 1<<20)
-			if err != nil {
-				writeAWSJSONError(w, http.StatusBadRequest, "InvalidSignatureException", "request signature is invalid")
-				return
-			}
-			if err := verifyAWSV4Signature(r, bodyHash, s.cfg.secretAccessKey); err != nil {
-				log.Printf("sigv4 verification failed: %v", err)
-				writeAWSJSONError(w, http.StatusForbidden, "InvalidSignatureException", "request signature is invalid")
-				return
-			}
-		}
-	}
-
-	if s.cfg.requireAccessKey {
-		if !hasAccessKey(r.Header.Get("Authorization"), s.cfg.expectedAccessKey) {
-			writeAWSJSONError(w, http.StatusForbidden, "UnrecognizedClientException", "invalid access key")
-			return
-		}
+	// Identity comes only from a verified signature, never from headers.
+	r.Header.Del("X-KMS-Username")
+	r.Header.Del("X-KMS-Account-ID")
+	r, ok := s.authenticateAWSJSON(w, r)
+	if !ok {
+		return
 	}
 
 	target := r.Header.Get("X-Amz-Target")
@@ -2489,28 +2504,6 @@ func pendingDeletionDays(deletionDate *time.Time) int {
 		return 0
 	}
 	return days
-}
-
-func validateSigV4Request(r *http.Request) error {
-	auth := r.Header.Get("Authorization")
-	if auth == "" {
-		return errors.New("missing Authorization header")
-	}
-	if !strings.HasPrefix(auth, "AWS4-HMAC-SHA256 ") {
-		return errors.New("unsupported authorization algorithm")
-	}
-	for _, part := range []string{"Credential=", "SignedHeaders=", "Signature="} {
-		if !strings.Contains(auth, part) {
-			return fmt.Errorf("authorization header missing %s", strings.TrimSuffix(part, "="))
-		}
-	}
-	if r.Header.Get("X-Amz-Date") == "" {
-		return errors.New("missing X-Amz-Date header")
-	}
-	if r.Header.Get("X-Amz-Target") == "" {
-		return errors.New("missing X-Amz-Target header")
-	}
-	return nil
 }
 
 func (s *server) recordAudit(ctx context.Context, event auditEvent) {
@@ -3479,14 +3472,6 @@ func withRequestLogging(next http.Handler) http.Handler {
 	})
 }
 
-func hasAccessKey(authHeader, accessKey string) bool {
-	if accessKey == "" {
-		return true
-	}
-	needle := "Credential=" + accessKey + "/"
-	return strings.Contains(authHeader, needle)
-}
-
 func canonicalContext(ctx map[string]string) []byte {
 	if len(ctx) == 0 {
 		return nil
@@ -3736,6 +3721,9 @@ func (s *server) authorizeKeyAction(ctx context.Context, r *http.Request, key km
 }
 
 func requestPrincipal(r *http.Request) string {
+	if c, ok := awsCallerFromContext(r.Context()); ok {
+		return c.PrincipalARN()
+	}
 	auth := r.Header.Get("Authorization")
 	if idx := strings.Index(auth, "Credential="); idx >= 0 {
 		rest := auth[idx+len("Credential="):]

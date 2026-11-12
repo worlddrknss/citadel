@@ -16,8 +16,7 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if strings.TrimSpace(r.Header.Get("X-Amz-Target")) != "" || strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/x-amz-json") {
-			// Use DB-backed SigV4 verification if available
-			s.handleKMSWithDBBackedAuth(w, r)
+			s.handleKMS(w, r)
 			return
 		}
 	}

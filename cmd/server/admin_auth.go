@@ -142,7 +142,11 @@ func (s *server) uiRuntime() *uiRuntime {
 func (s *server) requireUISession(w http.ResponseWriter, r *http.Request, minRole string) (*uiSession, bool) {
 	runtime := s.uiRuntime()
 	if !runtime.enabled {
-		return &uiSession{Username: "local", Role: "admin", DisplayName: "Local Admin"}, true
+		if s.cfg.insecureDev {
+			return &uiSession{Username: "local", Role: "admin", DisplayName: "Local Admin"}, true
+		}
+		http.Error(w, "no console users are configured", http.StatusUnauthorized)
+		return nil, false
 	}
 	cookie, err := r.Cookie(adminSessionCookieName)
 	if err != nil || strings.TrimSpace(cookie.Value) == "" {

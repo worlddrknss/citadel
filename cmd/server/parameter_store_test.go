@@ -7,7 +7,7 @@ import (
 
 func newParamTestServer() *server {
 	store := &inMemoryStore{k: sampleKey(1)}
-	return &server{cfg: config{}, store: store}
+	return &server{cfg: config{insecureDev: true}, store: store}
 }
 
 func TestNormalizeParameterName(t *testing.T) {
