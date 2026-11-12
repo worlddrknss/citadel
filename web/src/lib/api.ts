@@ -268,6 +268,8 @@ export interface AdminUser {
   displayName: string;
   role: string;
   accounts: string[];
+  /** Organization-wide admin; only platform admins can change such users. */
+  platformAdmin?: boolean;
 }
 
 export interface Account {
@@ -694,6 +696,8 @@ export const api = {
     role: string;
     password?: string;
     accounts?: string[];
+    /** Platform admins only; omit to keep the current flag. */
+    platformAdmin?: boolean;
   }) =>
     req<{ username: string; created: boolean }>('/v1/admin/users', {
       method: 'POST',

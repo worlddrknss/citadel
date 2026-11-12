@@ -5,6 +5,7 @@
   import Icon from '$lib/components/Icon.svelte';
   import { api, errorMessage } from '$lib/api';
   import { toast } from '$lib/stores/toast.svelte';
+  import { session } from '$lib/stores/session.svelte';
   import { confirm } from '$lib/stores/confirm.svelte';
   import { adminApi, fmtDate, type OrgSettings } from './api';
 
@@ -14,6 +15,8 @@
   let loading = $state(true);
   let loadError = $state('');
   let saving = $state(false);
+  // Any admin can read these; only platform admins can change them.
+  const readOnly = $derived(!session.platformAdmin);
 
   async function load() {
     loading = true;
@@ -65,7 +68,7 @@
 
   async function save(e: SubmitEvent) {
     e.preventDefault();
-    if (!form || idleError || maxError) return;
+    if (!form || readOnly || idleError || maxError) return;
     const removed = (saved?.approvalEnvironments ?? []).filter((x) => !form!.approvalEnvironments.includes(x));
     if (removed.length) {
       const ok = await confirm({
@@ -97,12 +100,16 @@
       {#if saved?.updatedAt}<p class="subtle small sub">Last changed {fmtDate(saved.updatedAt)}{saved.updatedBy ? ` by ${saved.updatedBy}` : ''}</p>{/if}
     </div>
   </div>
+  {#if readOnly && !loadError}
+    <div class="card-pad ro"><div class="callout callout-info"><Icon name="lock" size={16} /><span>These apply to the whole organization. Only platform admins can change them.</span></div></div>
+  {/if}
   {#if loadError}
     <div class="card-pad"><div class="callout callout-danger" role="alert"><Icon name="alert-circle" size={16} /><span>{loadError}</span><button type="button" class="btn btn-ghost btn-sm push" onclick={load}>Retry</button></div></div>
   {:else if loading || !form}
     <div class="card-pad sk" aria-busy="true"><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span></div>
   {:else}
     <form onsubmit={save} novalidate>
+      <fieldset class="plain" disabled={readOnly}>
       <div class="group">
         <div class="gtext">
           <h3>Change approvals</h3>
@@ -122,7 +129,7 @@
             <div class="field">
               <label class="field-label" for="s-min">Approvals needed</label>
               <select id="s-min" class="select" bind:value={form.approvalMinApprovers}>
-                {#each [1, 2, 3] as n (n)}<option value={n}>{n} approver{n > 1 ? 's' : ''}</option>{/each}
+                {#each [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as n (n)}<option value={n}>{n} approver{n > 1 ? 's' : ''}</option>{/each}
               </select>
             </div>
           </div>
@@ -151,11 +158,14 @@
         </div>
       </div>
 
+      </fieldset>
+      {#if !readOnly}
       <div class="foot">
         {#if dirty}<span class="subtle small">Unsaved changes</span>{/if}
         <button type="button" class="btn btn-ghost" disabled={!dirty || saving} onclick={() => saved && (form = { ...saved, approvalEnvironments: [...saved.approvalEnvironments] })}>Discard</button>
         <button type="submit" class="btn btn-primary" disabled={!dirty || saving}>{saving ? 'Saving…' : 'Save settings'}</button>
       </div>
+      {/if}
     </form>
   {/if}
 </section>
@@ -168,6 +178,15 @@
   }
   .sub {
     margin: 2px 0 0;
+  }
+  .plain {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    min-width: 0;
+  }
+  .ro {
+    padding-bottom: 0;
   }
   .sk {
     display: flex;

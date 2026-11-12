@@ -39,12 +39,28 @@ export interface SsoProvider {
   roleMappings: RoleMapping[];
   defaultRole: RoleName | 'none';
   enabled: boolean;
+  /**
+   * `<KMS_PUBLIC_URL>/v1/auth/oidc/{id}/callback`, from the server. Empty
+   * when KMS_PUBLIC_URL is unset (single sign-on then can't work).
+   */
   redirectUri: string;
+  /** The provider's home account: where its default role is granted. */
+  accountId: string;
+  /** Email domains allowed to sign in; empty allows any. Lowercase. */
+  allowedEmailDomains: string[];
   createdAt: string;
   updatedAt: string;
 }
 
-export type SsoInput = Omit<SsoProvider, 'id' | 'clientSecretSet' | 'redirectUri' | 'createdAt' | 'updatedAt'> & {
+/**
+ * Whether the provider grants roles outside its own account. Only platform
+ * admins can manage such providers (the server answers 403 otherwise).
+ */
+export function ssoOrgWide(p: Pick<SsoProvider, 'accountId' | 'roleMappings'>): boolean {
+  return p.roleMappings.some((m) => m.accountId !== p.accountId);
+}
+
+export type SsoInput = Omit<SsoProvider, 'id' | 'clientSecretSet' | 'redirectUri' | 'accountId' | 'createdAt' | 'updatedAt'> & {
   /** Omit to keep the stored secret on update. */
   clientSecret?: string;
 };
