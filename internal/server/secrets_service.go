@@ -25,11 +25,10 @@ import (
 type secretsService struct {
 	store     store.Store
 	hierarchy store.HierarchyStore
-	approvals *approvalRegistry
 }
 
 func newSecretsService(st store.Store) *secretsService {
-	svc := &secretsService{store: st, approvals: newApprovalRegistry()}
+	svc := &secretsService{store: st}
 	if hs, ok := st.(store.HierarchyStore); ok {
 		svc.hierarchy = hs
 	}
@@ -67,6 +66,11 @@ func (c itemCoord) validate() error {
 type projectSummary struct {
 	Slug         string
 	Environments []string
+	// Name is the display name registered in the hierarchy store, if any.
+	Name string
+	// EnvCounts is the number of live (not deletion-scheduled) items in each
+	// environment, at any depth.
+	EnvCounts map[string]int
 }
 
 // itemSummary is an item without its (secret) value.
@@ -78,6 +82,34 @@ type itemSummary struct {
 	ARN          string
 	UpdatedAt    time.Time
 	DeletionDate *time.Time
+	// Version is the number of stored versions (0 when unknown).
+	Version     int
+	UpdatedBy   string
+	Tags        []store.SecretTag
+	RotationDue bool
+}
+
+// rotationDue reports whether a secret's rotation schedule has come due.
+// Citadel cannot run rotation Lambdas, so a schedule is metadata only: when
+// it is due the console shows it and an operator rotates the value.
+func rotationDue(meta store.SecretMetadataRecord, now time.Time) bool {
+	return meta.RotationEnabled && meta.DeletedDate == nil && meta.NextRotationDate != nil && !meta.NextRotationDate.After(now)
+}
+
+func summaryFromMeta(pi parsedItem, sec store.SecretMetadataRecord, now time.Time) itemSummary {
+	return itemSummary{
+		Project:      pi.Project,
+		Env:          pi.Env,
+		Path:         store.FolderPath(pi.Folder),
+		Key:          pi.Key,
+		ARN:          sec.ARN,
+		UpdatedAt:    sec.LastChangedDate.UTC(),
+		DeletionDate: sec.DeletedDate,
+		Version:      sec.VersionCount,
+		UpdatedBy:    sec.UpdatedBy,
+		Tags:         sec.Tags,
+		RotationDue:  rotationDue(sec, now),
+	}
 }
 
 // itemDetail is the full metadata projection for a single item, backing the
@@ -101,6 +133,8 @@ type itemDetail struct {
 	RotationLambdaARN string
 	RotationDays      int
 	NextRotationDate  *time.Time
+	UpdatedBy         string
+	VersionCount      int
 }
 
 // itemVersion is one historical version of an item, newest first when sorted.
@@ -108,6 +142,9 @@ type itemVersion struct {
 	VersionID string
 	Stages    []string
 	CreatedAt time.Time
+	CreatedBy string
+	// Ordinal is the 1-based position of the version, oldest first.
+	Ordinal int
 }
 
 var errItemNotFound = errors.New("item not found")
@@ -129,16 +166,25 @@ func (svc *secretsService) ListProjects(ctx context.Context) ([]projectSummary, 
 			envsByProject[project][env] = struct{}{}
 		}
 	}
+	counts := map[string]map[string]int{}
 	for _, sec := range secrets {
 		if pi, ok := parseSecretName(sec.Name); ok {
 			addEnv(pi.Project, pi.Env)
+			if sec.DeletedDate == nil {
+				if counts[pi.Project] == nil {
+					counts[pi.Project] = map[string]int{}
+				}
+				counts[pi.Project][pi.Env]++
+			}
 		}
 	}
+	names := map[string]string{}
 	if svc.hierarchy != nil {
 		structure, err := svc.hierarchy.ListHierarchy(ctx)
 		if err == nil {
 			for _, p := range structure {
 				addEnv(p.Project, "")
+				names[p.Project] = p.Name
 				for _, e := range p.Environments {
 					addEnv(p.Project, e)
 				}
@@ -148,11 +194,13 @@ func (svc *secretsService) ListProjects(ctx context.Context) ([]projectSummary, 
 	out := make([]projectSummary, 0, len(envsByProject))
 	for project, envSet := range envsByProject {
 		envs := make([]string, 0, len(envSet))
+		envCounts := make(map[string]int, len(envSet))
 		for e := range envSet {
 			envs = append(envs, e)
+			envCounts[e] = counts[project][e]
 		}
 		sort.Strings(envs)
-		out = append(out, projectSummary{Slug: project, Environments: envs})
+		out = append(out, projectSummary{Slug: project, Environments: envs, Name: names[project], EnvCounts: envCounts})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
 	return out, nil
@@ -179,18 +227,37 @@ func shadowName(project, env string, folder []string) string {
 // console to suggest it existed. Returned separately rather than mixed into
 // items: it is not a key in this folder, it is a thing wearing the folder's name.
 func (svc *secretsService) ListFolder(ctx context.Context, project, env string, folder []string) (folders []string, items []itemSummary, shadowed []itemSummary, err error) {
-	if err = validateSegment("project", project); err != nil {
-		return nil, nil, nil, err
-	}
-	if err = validateSegment("env", env); err != nil {
-		return nil, nil, nil, err
-	}
-	secrets, err := svc.store.ListSecrets(ctx)
+	l, err := svc.listFolderDetailed(ctx, project, env, folder)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	items = make([]itemSummary, 0)
-	shadowed = make([]itemSummary, 0)
+	return l.Folders, l.Items, l.Shadowed, nil
+}
+
+// folderListing is ListFolder's result plus per-subfolder counts.
+type folderListing struct {
+	Folders  []string
+	Items    []itemSummary
+	Shadowed []itemSummary
+	// FolderCounts is the number of live items at or below each subfolder.
+	FolderCounts map[string]int
+}
+
+func (svc *secretsService) listFolderDetailed(ctx context.Context, project, env string, folder []string) (folderListing, error) {
+	if err := validateSegment("project", project); err != nil {
+		return folderListing{}, err
+	}
+	if err := validateSegment("env", env); err != nil {
+		return folderListing{}, err
+	}
+	secrets, err := svc.store.ListSecrets(ctx)
+	if err != nil {
+		return folderListing{}, err
+	}
+	now := time.Now().UTC()
+	counts := map[string]int{}
+	items := make([]itemSummary, 0)
+	shadowed := make([]itemSummary, 0)
 	subfolders := map[string]struct{}{}
 	wantShadow := shadowName(project, env, folder)
 	for _, sec := range secrets {
@@ -219,17 +286,13 @@ func (svc *secretsService) ListFolder(ctx context.Context, project, env string, 
 			continue
 		}
 		if len(pi.Folder) == len(folder) {
-			items = append(items, itemSummary{
-				Project:      pi.Project,
-				Env:          pi.Env,
-				Path:         store.FolderPath(pi.Folder),
-				Key:          pi.Key,
-				ARN:          sec.ARN,
-				UpdatedAt:    sec.LastChangedDate.UTC(),
-				DeletionDate: sec.DeletedDate,
-			})
+			items = append(items, summaryFromMeta(pi, sec, now))
 		} else {
-			subfolders[pi.Folder[len(folder)]] = struct{}{}
+			child := pi.Folder[len(folder)]
+			subfolders[child] = struct{}{}
+			if sec.DeletedDate == nil {
+				counts[child]++
+			}
 		}
 	}
 	if svc.hierarchy != nil {
@@ -241,12 +304,13 @@ func (svc *secretsService) ListFolder(ctx context.Context, project, env string, 
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Key < items[j].Key })
-	folders = make([]string, 0, len(subfolders))
+	folders := make([]string, 0, len(subfolders))
 	for f := range subfolders {
 		folders = append(folders, f)
+		counts[f] += 0
 	}
 	sort.Strings(folders)
-	return folders, items, shadowed, nil
+	return folderListing{Folders: folders, Items: items, Shadowed: shadowed, FolderCounts: counts}, nil
 }
 
 // PutItem creates or updates a single item, returning created=true on first
@@ -349,11 +413,13 @@ func (svc *secretsService) ListItemVersions(ctx context.Context, coord itemCoord
 		return nil, err
 	}
 	out := make([]itemVersion, 0, len(entries))
-	for _, e := range entries {
+	for i, e := range entries {
 		out = append(out, itemVersion{
 			VersionID: e.VersionID,
 			Stages:    e.VersionStages,
 			CreatedAt: time.Time(e.CreatedDate).UTC(),
+			CreatedBy: e.CreatedBy,
+			Ordinal:   i + 1,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
@@ -724,6 +790,8 @@ func (svc *secretsService) DescribeItem(ctx context.Context, coord itemCoord) (i
 		RotationLambdaARN: meta.RotationLambdaARN,
 		RotationDays:      meta.RotationDays,
 		NextRotationDate:  meta.NextRotationDate,
+		UpdatedBy:         meta.UpdatedBy,
+		VersionCount:      meta.VersionCount,
 	}, nil
 }
 

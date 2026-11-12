@@ -49,7 +49,7 @@ type nativeRotation struct {
 
 // handleV1SecretDetail returns the full metadata projection for one item.
 func (s *Server) handleV1SecretDetail(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "viewer")
+	_, ctx, ok := s.secretsSession(w, r, "viewer")
 	if !ok {
 		return
 	}
@@ -108,7 +108,7 @@ type nativeUpdateMetadataRequest struct {
 
 // handleV1UpdateSecretMetadata updates description and/or KMS key for an item.
 func (s *Server) handleV1UpdateSecretMetadata(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -123,7 +123,7 @@ func (s *Server) handleV1UpdateSecretMetadata(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := s.secretsSvc().UpdateItemMetadata(ctx, coord, req.Description, req.KMSKeyID); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "update_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "update_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpdateItemMetadata", KeyID: strings.TrimSpace(req.KMSKeyID), Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -142,7 +142,7 @@ type nativeReKeyRequest struct {
 // it rotates a single item; when key is empty it rotates every item in the
 // environment, re-encrypting each current value under the new key.
 func (s *Server) handleV1ReKeySecret(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -163,7 +163,7 @@ func (s *Server) handleV1ReKeySecret(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.secretsSvc().ReKeyItem(ctx, coord, newKey); err != nil {
-			writeNativeError(w, http.StatusBadRequest, "rekey_failed", err.Error())
+			writeSecretsFailure(w, http.StatusBadRequest, "rekey_failed", err)
 			return
 		}
 		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ReKeyItem", KeyID: newKey, Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -172,7 +172,7 @@ func (s *Server) handleV1ReKeySecret(w http.ResponseWriter, r *http.Request) {
 	}
 	rekeyed, failed, err := s.secretsSvc().ReKeyEnvironment(ctx, strings.TrimSpace(req.Project), strings.TrimSpace(req.Env), newKey)
 	if err != nil {
-		writeNativeError(w, http.StatusBadRequest, "rekey_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "rekey_failed", err)
 		return
 	}
 	result := "ok"
@@ -193,7 +193,7 @@ type nativePromoteVersionRequest struct {
 
 // handleV1PromoteVersion moves AWSCURRENT to the requested version.
 func (s *Server) handleV1PromoteVersion(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -208,7 +208,7 @@ func (s *Server) handleV1PromoteVersion(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.secretsSvc().PromoteItemVersion(ctx, coord, req.VersionID); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "promote_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "promote_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PromoteItemVersion", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -225,7 +225,7 @@ type nativeTagRequest struct {
 
 // handleV1TagSecret adds or updates tags on an item.
 func (s *Server) handleV1TagSecret(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -244,7 +244,7 @@ func (s *Server) handleV1TagSecret(w http.ResponseWriter, r *http.Request) {
 		tags = append(tags, store.SecretTag{Key: strings.TrimSpace(t.Key), Value: t.Value})
 	}
 	if err := s.secretsSvc().TagItem(ctx, coord, tags); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "tag_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "tag_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.TagItem", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -254,7 +254,7 @@ func (s *Server) handleV1TagSecret(w http.ResponseWriter, r *http.Request) {
 // handleV1UntagSecret removes tags from an item by key (query param tagKey,
 // repeatable).
 func (s *Server) handleV1UntagSecret(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -271,7 +271,7 @@ func (s *Server) handleV1UntagSecret(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.secretsSvc().UntagItem(ctx, coord, keys); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "untag_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "untag_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UntagItem", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -280,7 +280,7 @@ func (s *Server) handleV1UntagSecret(w http.ResponseWriter, r *http.Request) {
 
 // handleV1GetSecretPolicy returns the resource policy attached to an item.
 func (s *Server) handleV1GetSecretPolicy(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "viewer")
+	_, ctx, ok := s.secretsSession(w, r, "viewer")
 	if !ok {
 		return
 	}
@@ -307,7 +307,7 @@ type nativePolicyRequest struct {
 
 // handleV1PutSecretPolicy attaches (or clears, when empty) a resource policy.
 func (s *Server) handleV1PutSecretPolicy(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -322,7 +322,7 @@ func (s *Server) handleV1PutSecretPolicy(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := s.secretsSvc().PutItemPolicy(ctx, coord, req.PolicyDocument); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "policy_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "policy_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PutItemPolicy", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -341,7 +341,7 @@ type nativeRotationRequest struct {
 
 // handleV1ConfigureRotation enables or updates rotation configuration.
 func (s *Server) handleV1ConfigureRotation(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -356,7 +356,7 @@ func (s *Server) handleV1ConfigureRotation(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := s.secretsSvc().ConfigureItemRotation(ctx, coord, req.LambdaARN, req.AfterDays, req.RotateImmediately); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "rotation_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "rotation_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ConfigureItemRotation", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -365,7 +365,7 @@ func (s *Server) handleV1ConfigureRotation(w http.ResponseWriter, r *http.Reques
 
 // handleV1CancelRotation disables rotation for an item.
 func (s *Server) handleV1CancelRotation(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -375,7 +375,7 @@ func (s *Server) handleV1CancelRotation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.secretsSvc().CancelItemRotation(ctx, coord); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "rotation_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "rotation_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CancelItemRotation", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -413,7 +413,7 @@ type nativeBulkRequest struct {
 
 // handleV1BulkSecrets applies delete or restore to multiple items at once.
 func (s *Server) handleV1BulkSecrets(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}

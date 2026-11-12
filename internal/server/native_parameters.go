@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -55,16 +56,19 @@ func (s *Server) decryptParameterValue(ctx context.Context, keyID, cipherB64 str
 	return string(raw), nil
 }
 
-// nativeParameter is the list/detail projection of a parameter. Values are only
-// included by the reveal endpoint.
+// nativeParameter is the list/detail projection of a parameter. The list
+// includes Value for String and StringList parameters (they are not secret, and
+// this saves the console one reveal per row); SecureString values are only
+// ever returned by the reveal endpoint.
 type nativeParameter struct {
-	Name         string `json:"name"`
-	Type         string `json:"type"`
-	Tier         string `json:"tier"`
-	Version      int64  `json:"version"`
-	Description  string `json:"description"`
-	KMSKeyID     string `json:"kmsKeyId,omitempty"`
-	LastModified string `json:"lastModified"`
+	Name         string  `json:"name"`
+	Type         string  `json:"type"`
+	Tier         string  `json:"tier"`
+	Version      int64   `json:"version"`
+	Description  string  `json:"description"`
+	KMSKeyID     string  `json:"kmsKeyId,omitempty"`
+	LastModified string  `json:"lastModified"`
+	Value        *string `json:"value,omitempty"`
 }
 
 func nativeParameterFrom(rec store.ParameterRecord) nativeParameter {
@@ -82,7 +86,7 @@ func nativeParameterFrom(rec store.ParameterRecord) nativeParameter {
 // handleV1ListParameters returns every parameter for the caller's account. The
 // SPA builds the folder tree client-side from the slash-style names.
 func (s *Server) handleV1ListParameters(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "viewer")
+	_, ctx, ok := s.secretsSession(w, r, "viewer")
 	if !ok {
 		return
 	}
@@ -93,12 +97,18 @@ func (s *Server) handleV1ListParameters(w http.ResponseWriter, r *http.Request) 
 	}
 	recs, err := ps.ListParameters(ctx)
 	if err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "list_failed", err.Error())
+		log.Printf("list parameters: %v", err)
+		writeNativeError(w, http.StatusInternalServerError, "list_failed", "could not list parameters")
 		return
 	}
 	out := make([]nativeParameter, 0, len(recs))
 	for _, rec := range recs {
-		out = append(out, nativeParameterFrom(rec))
+		np := nativeParameterFrom(rec)
+		if !rec.IsEncrypted && rec.Type != parameterTypeSecureString {
+			v := rec.Value
+			np.Value = &v
+		}
+		out = append(out, np)
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{"parameters": out})
 }
@@ -115,7 +125,7 @@ type nativePutParameterRequest struct {
 
 // handleV1PutParameter creates or updates a parameter.
 func (s *Server) handleV1PutParameter(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -179,7 +189,7 @@ func (s *Server) buildParameterRecord(ctx context.Context, name, ptype, value, k
 
 // handleV1DeleteParameter removes a parameter and its history.
 func (s *Server) handleV1DeleteParameter(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -202,9 +212,11 @@ func (s *Server) handleV1DeleteParameter(w http.ResponseWriter, r *http.Request)
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": name})
 }
 
-// handleV1RevealParameter returns the decrypted value of a parameter.
+// handleV1RevealParameter returns the decrypted value of a parameter, or of
+// one of its versions with ?version=N. SecureString values follow the
+// account's viewersCanReveal setting.
 func (s *Server) handleV1RevealParameter(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "viewer")
+	sess, ctx, ok := s.secretsSession(w, r, "viewer")
 	if !ok {
 		return
 	}
@@ -221,6 +233,33 @@ func (s *Server) handleV1RevealParameter(w http.ResponseWriter, r *http.Request)
 	rec, err := ps.GetParameter(ctx, name)
 	if err != nil {
 		writeParameterNativeError(w, err)
+		return
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("version")); raw != "" {
+		version, perr := strconv.ParseInt(raw, 10, 64)
+		if perr != nil || version < 1 {
+			writeNativeError(w, http.StatusBadRequest, "invalid_request", "version must be a positive number")
+			return
+		}
+		history, herr := ps.GetParameterHistory(ctx, name)
+		if herr != nil {
+			writeParameterNativeError(w, herr)
+			return
+		}
+		found := false
+		for _, h := range history {
+			if h.Version == version {
+				rec = store.ParameterRecord{Name: rec.Name, Type: h.Type, Value: h.Value, IsEncrypted: h.IsEncrypted, KMSKeyID: h.KMSKeyID, Tier: h.Tier, Version: h.Version, Description: h.Description, CreatedAt: rec.CreatedAt, UpdatedAt: h.ModifiedAt}
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeNativeError(w, http.StatusNotFound, "not_found", "parameter version not found")
+			return
+		}
+	}
+	if rec.IsEncrypted && !s.requireReveal(w, r, ctx, sess, "citadel.GetParameter") {
 		return
 	}
 	value := rec.Value
@@ -241,7 +280,7 @@ func (s *Server) handleV1RevealParameter(w http.ResponseWriter, r *http.Request)
 
 // handleV1ParameterHistory returns the version history of a parameter.
 func (s *Server) handleV1ParameterHistory(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "viewer")
+	_, ctx, ok := s.secretsSession(w, r, "viewer")
 	if !ok {
 		return
 	}
@@ -287,7 +326,7 @@ type nativeLabelParameterRequest struct {
 
 // handleV1LabelParameterVersion attaches labels to a parameter version.
 func (s *Server) handleV1LabelParameterVersion(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -317,7 +356,7 @@ func (s *Server) handleV1LabelParameterVersion(w http.ResponseWriter, r *http.Re
 
 // handleV1ListParameterTags returns the tags on a parameter.
 func (s *Server) handleV1ListParameterTags(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "viewer")
+	_, ctx, ok := s.secretsSession(w, r, "viewer")
 	if !ok {
 		return
 	}
@@ -350,7 +389,7 @@ type nativeTagParameterRequest struct {
 
 // handleV1TagParameter adds or updates tags on a parameter.
 func (s *Server) handleV1TagParameter(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -387,7 +426,7 @@ func (s *Server) handleV1TagParameter(w http.ResponseWriter, r *http.Request) {
 // handleV1UntagParameter removes tags from a parameter. Keys are supplied as a
 // comma-separated "keys" query parameter.
 func (s *Server) handleV1UntagParameter(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -439,7 +478,8 @@ func writeParameterNativeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrParameterExists):
 		writeNativeError(w, http.StatusConflict, "already_exists", "parameter already exists; set overwrite to update")
 	default:
-		writeNativeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		log.Printf("parameter store: %v", err)
+		writeNativeError(w, http.StatusInternalServerError, "internal_error", "the parameter operation failed")
 	}
 }
 
