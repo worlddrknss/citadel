@@ -74,7 +74,8 @@
         </div>
         {#if current}
           <div class="snip">
-            <pre class="code">{current.code}</pre>
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable code must be keyboard-reachable) -->
+            <pre class="code" tabindex="0" aria-label="{current.label} example">{current.code}</pre>
             <span class="copy"><CopyButton value={current.code} label="Copy example" /></span>
           </div>
         {/if}

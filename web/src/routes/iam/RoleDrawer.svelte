@@ -70,7 +70,8 @@
           <h3 id="tp-title">Trust policy</h3>
           <CopyButton value={doc} label="Copy trust policy" />
         </div>
-        <pre class="code">{doc}</pre>
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable code must be keyboard-reachable) -->
+        <pre class="code" tabindex="0" aria-label="Trust policy document">{doc}</pre>
       </section>
 
       <section class="box" aria-labelledby="use-title">
@@ -80,7 +81,8 @@
         </div>
         {#if current}
           <div class="snip">
-            <pre class="code">{current.code}</pre>
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable code must be keyboard-reachable) -->
+            <pre class="code" tabindex="0" aria-label="{current.label} example">{current.code}</pre>
             <span class="copy"><CopyButton value={current.code} label="Copy example" /></span>
           </div>
         {/if}
