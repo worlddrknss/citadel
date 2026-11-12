@@ -33,6 +33,10 @@ type Store interface {
 	ParameterStore
 	HierarchyStore
 	AuthStore
+	ParameterVersionStore
+	ApprovalStore
+	SecretSettingsStore
+	SecretLifecycleStore
 }
 
 // KeyStore persists KMS keys, aliases, key policies and grants.

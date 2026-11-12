@@ -71,13 +71,13 @@ BEGIN
 		ON sm_secret_versions (account_id, secret_name, client_request_token);
 
 	ALTER TABLE sm_secret_versions ADD CONSTRAINT sm_secret_versions_secret_fkey
-		FOREIGN KEY (account_id, secret_name) REFERENCES sm_secrets (account_id, name) ON DELETE CASCADE;
+		FOREIGN KEY (account_id, secret_name) REFERENCES sm_secrets (account_id, name) ON DELETE CASCADE ON UPDATE CASCADE;
 	ALTER TABLE sm_secret_tags ADD CONSTRAINT sm_secret_tags_secret_fkey
-		FOREIGN KEY (account_id, secret_name) REFERENCES sm_secrets (account_id, name) ON DELETE CASCADE;
+		FOREIGN KEY (account_id, secret_name) REFERENCES sm_secrets (account_id, name) ON DELETE CASCADE ON UPDATE CASCADE;
 	ALTER TABLE sm_secret_policies ADD CONSTRAINT sm_secret_policies_secret_fkey
-		FOREIGN KEY (account_id, secret_name) REFERENCES sm_secrets (account_id, name) ON DELETE CASCADE;
+		FOREIGN KEY (account_id, secret_name) REFERENCES sm_secrets (account_id, name) ON DELETE CASCADE ON UPDATE CASCADE;
 	ALTER TABLE sm_secret_version_stages ADD CONSTRAINT sm_secret_version_stages_secret_fkey
-		FOREIGN KEY (account_id, secret_name) REFERENCES sm_secrets (account_id, name) ON DELETE CASCADE;
+		FOREIGN KEY (account_id, secret_name) REFERENCES sm_secrets (account_id, name) ON DELETE CASCADE ON UPDATE CASCADE;
 END $$;
 
 -- Who wrote a secret's current version, and each version (console usernames or
