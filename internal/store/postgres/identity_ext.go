@@ -17,7 +17,6 @@ const ssoProviderSelect = `SELECT id, name, issuer, client_id, scopes_json, grou
 created_at, updated_at, account_id, allowed_email_domains_json, client_secret_wrapped_b64 <> ''
 FROM console_sso_providers`
 
-
 func scanSSOProvider(row rowScanner) (store.SSOProvider, error) {
 	var (
 		p                                    store.SSOProvider

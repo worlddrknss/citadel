@@ -171,7 +171,7 @@ func (e *identityEnv) createProvider(cookie *http.Cookie, mut func(map[string]an
 		"name": "Acme IdP", "issuer": e.idp.srv.URL, "clientId": "citadel", "clientSecret": "s3cret",
 		"scopes": []string{"openid", "email", "profile"}, "groupClaim": "groups",
 		"roleMappings": []map[string]string{{"group": "eng", "accountId": e.acctA, "role": "editor"}, {"group": "ops", "accountId": "*", "role": "viewer"}},
-		"defaultRole": "none", "enabled": true, "allowedEmailDomains": []string{"example.com"},
+		"defaultRole":  "none", "enabled": true, "allowedEmailDomains": []string{"example.com"},
 	}
 	if mut != nil {
 		mut(in)
@@ -375,7 +375,10 @@ func TestSSOAdmin(t *testing.T) {
 		func(in map[string]any) { own(in); in["issuer"] = "ftp://x" },
 		func(in map[string]any) { own(in); delete(in, "clientSecret") },
 		func(in map[string]any) { own(in); in["defaultRole"] = "owner" },
-		func(in map[string]any) { own(in); in["roleMappings"] = []map[string]string{{"group": "g", "accountId": "999999999999", "role": "viewer"}} },
+		func(in map[string]any) {
+			own(in)
+			in["roleMappings"] = []map[string]string{{"group": "g", "accountId": "999999999999", "role": "viewer"}}
+		},
 		func(in map[string]any) { own(in); in["allowedEmailDomains"] = []string{"not a domain"} },
 	} {
 		rec, _ := e.createProvider(alice, mut)
@@ -569,9 +572,9 @@ func TestWorkloadClientsCRUD(t *testing.T) {
 	carol := e.session("carol", e.acctB)
 	wantStatus(t, e.do("POST", "/v1/workload-identity/clients", accessKeyClient(e, "bob"), bob), http.StatusForbidden)
 	for _, bad := range []map[string]any{
-		accessKeyClient(e, "carol"),   // not a member of A
-		accessKeyClient(e, "nobody"),  // unknown user
-		accessKeyClient(e),            // no users
+		accessKeyClient(e, "carol"),  // not a member of A
+		accessKeyClient(e, "nobody"), // unknown user
+		accessKeyClient(e),           // no users
 		func() map[string]any { c := accessKeyClient(e, "bob"); c["subjectFormat"] = "x:{namespace}"; return c }(),
 		func() map[string]any { c := accessKeyClient(e, "bob"); c["tokenTtlSeconds"] = 7200; return c }(),
 		func() map[string]any { c := accessKeyClient(e, "bob"); c["name"] = "a:b"; return c }(),
@@ -738,7 +741,7 @@ func TestWorkloadTokenKubernetes(t *testing.T) {
 	alice := e.session("alice", e.acctA)
 	client := map[string]any{"name": "k8s", "audiences": []string{"vault"}, "tokenTtlSeconds": 600,
 		"subjectFormat": "system:serviceaccount:{namespace}:{serviceAccount}",
-		"auth": map[string]any{"method": "k8s-token-review", "apiServer": k8s.URL, "serviceAccounts": []string{"ci:builder"}, "reviewAudience": "citadel"}}
+		"auth":          map[string]any{"method": "k8s-token-review", "apiServer": k8s.URL, "serviceAccounts": []string{"ci:builder"}, "reviewAudience": "citadel"}}
 	bad := map[string]any{}
 	for k, v := range client {
 		bad[k] = v
