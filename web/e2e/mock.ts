@@ -15,7 +15,8 @@ export const me = {
   displayName: 'Alice Admin',
   role: 'admin',
   accountId: ACCOUNT,
-  accounts: [ACCOUNT, '210987654321']
+  accounts: [ACCOUNT, '210987654321'],
+  platformAdmin: true
 };
 
 const projects = [

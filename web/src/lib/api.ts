@@ -97,6 +97,12 @@ export interface Me {
   role: string;
   accountId: string;
   accounts: string[];
+  /**
+   * Platform admins manage the whole organization: accounts, org settings,
+   * the workload identity issuer and SSO providers that reach other accounts.
+   * An account admin is `role: 'admin'` without this.
+   */
+  platformAdmin?: boolean;
 }
 
 export interface Project {

@@ -45,6 +45,10 @@ function createSession() {
       return expired;
     },
     refresh,
+    /** Organization-wide admin (accounts, org settings, issuer, cross-account SSO). */
+    get platformAdmin(): boolean {
+      return !!me?.platformAdmin;
+    },
     /** Whether the current user's role is at least `role`. */
     can(role: Role): boolean {
       const r = (me?.role ?? 'viewer') as Role;

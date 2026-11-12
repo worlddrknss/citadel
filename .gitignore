@@ -17,3 +17,8 @@ cmd/server/webdist/*
 /cmd/server/server
 # Agent worktrees (local tooling)
 /.claude/
+/web/test-results/
+/web/test-results-live/
+/web/playwright-report/
+/web/playwright-report-live/
+/web/e2e-live/.run/
