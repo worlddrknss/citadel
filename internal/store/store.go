@@ -33,6 +33,7 @@ type Store interface {
 	ParameterStore
 	HierarchyStore
 	AuthStore
+	AWSPageStore
 }
 
 // KeyStore persists KMS keys, aliases, key policies and grants.

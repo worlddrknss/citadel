@@ -36,6 +36,7 @@ type Store struct {
 	AccountID    string
 	hier         map[string]*memProject
 	params       map[string]*memParameter
+	awsCompatState
 }
 
 var _ store.Store = (*Store)(nil)
