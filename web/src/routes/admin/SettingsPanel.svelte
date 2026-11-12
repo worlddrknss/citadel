@@ -44,7 +44,6 @@
     return {
       approvalEnvironments: [...s.approvalEnvironments].sort(),
       approvalMinApprovers: s.approvalMinApprovers,
-      allowSelfApproval: s.allowSelfApproval,
       sessionIdleMinutes: s.sessionIdleMinutes,
       sessionMaxHours: s.sessionMaxHours
     };
@@ -127,10 +126,7 @@
               </select>
             </div>
           </div>
-          <label class="check">
-            <input type="checkbox" bind:checked={form.allowSelfApproval} />
-            <span>Let requesters approve their own changes <span class="subtle">(not recommended)</span></span>
-          </label>
+          <p class="subtle small">Requesters can never approve their own changes.</p>
         </div>
       </div>
 

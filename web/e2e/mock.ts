@@ -335,7 +335,6 @@ const GET: Record<string, Handler> = {
   '/v1/admin/settings': () => ({
     approvalEnvironments: ['prod'],
     approvalMinApprovers: 1,
-    allowSelfApproval: false,
     sessionIdleMinutes: 30,
     sessionMaxHours: 12
   }),

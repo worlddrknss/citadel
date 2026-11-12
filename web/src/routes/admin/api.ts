@@ -14,7 +14,6 @@ export interface UserRow extends AdminUser {
 export interface OrgSettings {
   approvalEnvironments: string[];
   approvalMinApprovers: number;
-  allowSelfApproval: boolean;
   sessionIdleMinutes: number;
   sessionMaxHours: number;
   updatedAt?: string;

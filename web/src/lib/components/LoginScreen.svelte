@@ -11,6 +11,9 @@
                                         or /app/?sso_error=<code>
     GET  /v1/bootstrap               → { required: boolean }
     POST /v1/bootstrap               → { accountId, organization, username }
+                                        (body includes the one-time bootstrapToken
+                                        printed in the server log; 401
+                                        invalid_bootstrap_token when wrong)
     GET  /v1/server/info             → { fips, sessionIdleMinutes?, ... }
 -->
 <script lang="ts">
@@ -64,6 +67,7 @@
   let accountName = $state('');
   let adminUser = $state('');
   let adminPassword = $state('');
+  let bootstrapToken = $state('');
   let frError = $state('');
   let frBusy = $state(false);
   let created = $state<{ accountId: string; organization: string; username: string } | null>(null);
@@ -160,7 +164,8 @@
           organizationName: orgName.trim(),
           accountName: accountName.trim(),
           username: adminUser.trim(),
-          password: adminPassword
+          password: adminPassword,
+          bootstrapToken: bootstrapToken.trim()
         })
       });
       const body = await res.json().catch(() => ({}));
@@ -173,6 +178,7 @@
       accountId = created.accountId;
       username = created.username;
       adminPassword = '';
+      bootstrapToken = '';
       step = 2;
     } catch (err) {
       frError = errorMessage(err, 'Could not create the organization.');
@@ -243,12 +249,17 @@
                 <div class="callout callout-danger" role="alert"><Icon name="alert-circle" /><span>{frError}</span></div>
               {/if}
               <label class="field">
+                <span class="field-label">Setup token</span>
+                <input class="input mono" bind:value={bootstrapToken} required autocomplete="off" spellcheck="false" aria-describedby="token-hint" />
+                <span class="field-hint" id="token-hint">One-time token printed in the server log at startup (or the value of KMS_BOOTSTRAP_TOKEN). It proves you run this server.</span>
+              </label>
+              <label class="field">
                 <span class="field-label">Organization name</span>
                 <input class="input" bind:value={orgName} required maxlength="100" autocomplete="organization" />
               </label>
               <label class="field">
                 <span class="field-label">First account name</span>
-                <input class="input mono" bind:value={accountName} required maxlength="64" pattern="[a-z0-9][a-z0-9-]*" title="Lowercase letters, digits and dashes" />
+                <input class="input mono" bind:value={accountName} required maxlength="64" pattern="[a-z0-9][a-z0-9\-]*" title="Lowercase letters, digits and dashes" />
                 <span class="field-hint">Gets a 12-digit account ID. Most teams make one account per environment tier.</span>
               </label>
               <div class="pair">
