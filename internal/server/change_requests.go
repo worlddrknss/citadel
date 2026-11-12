@@ -257,7 +257,7 @@ func (s *Server) handleV1ChangeRequestDetail(w http.ResponseWriter, r *http.Requ
 	if cr.RequesterRole != "" {
 		out["requesterRole"] = cr.RequesterRole
 	}
-	if name := s.displayNameOf(cr.Requester); name != "" {
+	if name := s.displayNameOf(ctx, cr.Requester); name != "" {
 		out["requesterDisplayName"] = name
 	}
 	if cr.DecisionComment != "" {
@@ -327,11 +327,8 @@ func (s *Server) previousValue(ctx context.Context, coord itemCoord, cr store.Ch
 }
 
 // displayNameOf returns a console user's display name, if known.
-func (s *Server) displayNameOf(username string) string {
-	rt := s.uiRuntime()
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	if u, ok := rt.users[username]; ok {
+func (s *Server) displayNameOf(ctx context.Context, username string) string {
+	if u, ok := s.lookupUser(ctx, username); ok {
 		return u.DisplayName
 	}
 	return ""

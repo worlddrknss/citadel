@@ -110,6 +110,7 @@ func New(ctx context.Context, cfg config.Config, st store.Store, webFS fs.FS) (*
 	}
 	s.jobs.Every("console-session-purge", 10*time.Minute, s.purgeExpiredSessions)
 	s.jobs.Every("sts-session-purge", 15*time.Minute, s.purgeExpiredSTSSessions)
+	s.jobs.Every("secrets-purge", secretsPurgeInterval, s.purgeExpiredSecretsJob)
 	s.startAuditStreamJob()
 	return s, nil
 }
