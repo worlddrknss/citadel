@@ -45,6 +45,8 @@ type nativeKMSKeyDetail struct {
 	Aliases              []string         `json:"aliases"`
 	Grants               []nativeKMSGrant `json:"grants"`
 	PublicKeyPEM         string           `json:"publicKeyPem,omitempty"`
+	UsedBy               *nativeKMSUsedBy `json:"usedBy,omitempty"`
+	nativeKMSKeyExtras
 }
 
 // handleV1KMSKeyDetail returns the full metadata projection for a single KMS
@@ -77,6 +79,7 @@ func (s *Server) handleV1KMSKeyDetail(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:            key.CreatedAt.UTC().Format(time.RFC3339),
 		EncryptionAlgorithms: meta.EncryptionAlgorithms,
 		SigningAlgorithms:    meta.SigningAlgorithms,
+		nativeKMSKeyExtras:   kmsKeyExtras(key),
 		Aliases:              []string{},
 		Grants:               []nativeKMSGrant{},
 	}
@@ -107,6 +110,10 @@ func (s *Server) handleV1KMSKeyDetail(w http.ResponseWriter, r *http.Request) {
 				CreatedAt:         g.CreatedAt.UTC().Format(time.RFC3339),
 			})
 		}
+	}
+
+	if used, uerr := s.store.CountKeyUsage(ctx, key); uerr == nil {
+		detail.UsedBy = &nativeKMSUsedBy{Secrets: used.Secrets, Parameters: used.Parameters}
 	}
 
 	if len(key.PublicKeyRaw) > 0 {

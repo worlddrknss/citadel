@@ -2,6 +2,7 @@ package server
 
 import (
 	"log"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -22,6 +23,7 @@ type nativeKMSKey struct {
 	CreatedAt    string   `json:"createdAt"`
 	DeletionDate string   `json:"deletionDate,omitempty"`
 	Aliases      []string `json:"aliases"`
+	nativeKMSKeyExtras
 }
 
 // handleV1ListKMSKeys returns the KMS keys visible to the caller.
@@ -32,7 +34,8 @@ func (s *Server) handleV1ListKMSKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	keys, err := s.store.ListKeys(ctx)
 	if err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "list_failed", err.Error())
+		slog.Error("v1 kms: list keys", "err", err)
+		writeNativeError(w, http.StatusInternalServerError, "list_failed", "listing keys failed")
 		return
 	}
 	aliasesByKey := map[string][]string{}
@@ -52,6 +55,8 @@ func (s *Server) handleV1ListKMSKeys(w http.ResponseWriter, r *http.Request) {
 			KeySpec:     k.KeySpec,
 			CreatedAt:   k.CreatedAt.UTC().Format(time.RFC3339),
 			Aliases:     aliasesByKey[k.ID],
+
+			nativeKMSKeyExtras: kmsKeyExtras(k),
 		}
 		if nk.Aliases == nil {
 			nk.Aliases = []string{}
