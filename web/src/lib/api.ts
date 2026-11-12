@@ -25,7 +25,7 @@ export function onUnauthorized(fn: () => void): () => void {
   return () => unauthorizedListeners.delete(fn);
 }
 
-async function req<T>(path: string, init?: RequestInit & { signal?: AbortSignal }): Promise<T> {
+export async function req<T>(path: string, init?: RequestInit & { signal?: AbortSignal }): Promise<T> {
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(), REQUEST_TIMEOUT_MS);
   const signal = init?.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal;
@@ -60,6 +60,8 @@ async function req<T>(path: string, init?: RequestInit & { signal?: AbortSignal 
     } catch {
       /* non-JSON error */
     }
+    // A bare 404 means this server build doesn't have the endpoint yet.
+    if (res.status === 404 && code === 'error') message = 'This feature is not available on this server yet.';
     if (res.status === 401 && path !== '/v1/login') {
       for (const fn of unauthorizedListeners) fn();
     }

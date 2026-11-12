@@ -1,604 +1,496 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import {
-    api,
-    ApiError,
-    type Parameter,
-    type ParameterType,
-    type ParameterHistoryEntry,
-    type ParameterTag,
-    type KMSKey
-  } from '$lib/api';
+  import { onMount, untrack } from 'svelte';
+  import { base } from '$app/paths';
+  import { api, errorMessage, type KMSKey } from '$lib/api';
+  import { param as urlParam, setParams } from '$lib/url';
+  import { session } from '$lib/stores/session.svelte';
+  import { toast } from '$lib/stores/toast.svelte';
+  import { confirm } from '$lib/stores/confirm.svelte';
+  import PageHeader from '$lib/components/PageHeader.svelte';
+  import DataTable, { type Column } from '$lib/components/DataTable.svelte';
+  import EmptyState from '$lib/components/EmptyState.svelte';
+  import Badge from '$lib/components/Badge.svelte';
+  import Icon from '$lib/components/Icon.svelte';
+  import SecretValue from '$lib/components/SecretValue.svelte';
+  import ActionMenu, { type MenuItem } from '../kms/ActionMenu.svelte';
+  import InlineValue from './InlineValue.svelte';
+  import ParamPanel from './ParamPanel.svelte';
+  import ParamForm from './ParamForm.svelte';
+  import { TYPES, TYPE_TONE, segments, prefixOf, leaf, fmtRelative, fmtDateTime, type Param } from './api';
 
-  let params: Parameter[] = $state([]);
-  let kmsKeys: KMSKey[] = $state([]);
-  let loading = $state(false);
+  const canEdit = $derived(session.can('editor'));
 
-  // Current folder path as segments, e.g. ["app", "prod"]. Root is [].
-  let pathSegs: string[] = $state([]);
+  let all = $state<Param[]>([]);
+  let loading = $state(true);
+  let loadError = $state('');
+  let kmsKeys = $state<KMSKey[]>([]);
 
-  let flash = $state('');
-  let flashOk = $state(true);
+  // ---- URL state ------------------------------------------------------------
+  const path = $derived(urlParam('path', '/'));
+  const prefix = $derived(prefixOf(path));
+  const crumbs = $derived(segments(path));
+  const typeFilter = $derived(urlParam('type'));
+  const selectedName = $derived(urlParam('p'));
+  let query = $state(urlParam('q'));
+  let tab = $state(urlParam('tab', 'overview'));
 
-  // Reveal cache: parameter name -> decrypted value.
-  let revealed: Record<string, string> = $state({});
-
-  // New-parameter form (shown in a modal).
-  let createOpen = $state(false);
-  let newName = $state('');
-  let newType: ParameterType = $state('String');
-  let newValue = $state('');
-  let newKms = $state('');
-  let newDescription = $state('');
-  let overwrite = $state(false);
-
-  // Detail drawer.
-  let detail: Parameter | null = $state(null);
-  let detailTab: 'history' | 'tags' = $state('history');
-  let history: ParameterHistoryEntry[] = $state([]);
-  let tags: ParameterTag[] = $state([]);
-  let tagKey = $state('');
-  let tagValue = $state('');
-  let labelVersion = $state('');
-  let labelText = $state('');
-
-  // Confirm modal (avoids native confirm per UX guidelines).
-  let confirmOpen = $state(false);
-  let confirmTitle = $state('');
-  let confirmBody = $state('');
-  let confirmLabel = $state('Confirm');
-  let confirmAction: (() => Promise<void>) | null = $state(null);
-
-  const prefix = $derived(pathSegs.length ? '/' + pathSegs.join('/') + '/' : '/');
-
-  // Subfolders directly under the current path.
-  const subfolders = $derived.by(() => {
-    const set = new Set<string>();
-    for (const p of params) {
-      if (!p.name.startsWith(prefix)) continue;
-      const rest = p.name.slice(prefix.length);
-      const slash = rest.indexOf('/');
-      if (slash > 0) set.add(rest.slice(0, slash));
-    }
-    return [...set].sort();
+  $effect(() => {
+    setParams({ q: query.trim() || null });
+  });
+  $effect(() => {
+    if (selectedName) setParams({ tab: tab === 'overview' ? null : tab });
   });
 
-  // Parameters directly at the current path (no further nesting).
-  const currentParams = $derived(
-    params
-      .filter((p) => p.name.startsWith(prefix) && !p.name.slice(prefix.length).includes('/'))
-      .sort((a, b) => a.name.localeCompare(b.name))
-  );
+  const hrefFor = (p: string) => {
+    const s = segments(p);
+    return s.length ? `${base}/parameters?path=${encodeURIComponent('/' + s.join('/'))}` : `${base}/parameters`;
+  };
 
-  function leaf(name: string): string {
-    const i = name.lastIndexOf('/');
-    return i >= 0 ? name.slice(i + 1) : name;
+  function openParam(name: string, nextTab = 'overview') {
+    tab = nextTab;
+    setParams({ p: name, tab: nextTab === 'overview' ? null : nextTab });
+  }
+  function closeParam() {
+    const n = selectedName;
+    setParams({ p: null, tab: null });
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-param-open="${CSS.escape(n)}"]`)?.focus());
   }
 
-  function notify(msg: string, ok = true) {
-    flash = msg;
-    flashOk = ok;
-    setTimeout(() => (flash = ''), 4000);
-  }
-
-  function err(e: unknown) {
-    if (e instanceof ApiError) notify(e.message, false);
-    else notify('Unexpected error', false);
-  }
-
-  function kmsLabel(k: KMSKey): string {
-    const alias = (k.aliases ?? []).find((a) => a && a.trim());
-    if (alias) {
-      const name = alias.replace(/^alias\//, '');
-      return `${name} · ${k.keyId.slice(0, 8)}…`;
-    }
-    return k.keyId;
-  }
-
-  function openFolder(name: string) {
-    pathSegs = [...pathSegs, name];
-  }
-
-  function crumbTo(idx: number) {
-    pathSegs = pathSegs.slice(0, idx);
-  }
-
-  async function loadParams() {
-    loading = true;
+  // ---- Data -----------------------------------------------------------------
+  async function load() {
+    loadError = '';
     try {
-      params = (await api.parameters()).parameters;
+      all = (await api.parameters()).parameters as Param[];
     } catch (e) {
-      err(e);
+      loadError = errorMessage(e);
     } finally {
       loading = false;
     }
   }
-
-  async function loadKms() {
+  async function loadKeys() {
     try {
-      kmsKeys = (await api.kmsKeys()).keys.filter((k) => k.enabled);
+      kmsKeys = (await api.kmsKeys()).keys;
     } catch {
       kmsKeys = [];
     }
   }
-
-  function openCreate() {
-    newName = '';
-    newType = 'String';
-    newValue = '';
-    newKms = '';
-    newDescription = '';
-    overwrite = false;
-    createOpen = true;
-  }
-
-  async function addParameter() {
-    const rel = newName.trim();
-    if (!rel) {
-      notify('Name is required', false);
-      return;
-    }
-    const fullName = (prefix + rel).replace(/\/+/g, '/');
-    try {
-      await api.putParameter({
-        name: fullName,
-        type: newType,
-        value: newValue,
-        kmsKeyId: newType === 'SecureString' ? newKms || undefined : undefined,
-        description: newDescription.trim() || undefined,
-        overwrite
-      });
-      notify(`Saved ${fullName}`);
-      createOpen = false;
-      newName = '';
-      newValue = '';
-      newDescription = '';
-      overwrite = false;
-      await loadParams();
-    } catch (e) {
-      err(e);
-    }
-  }
-
-  async function reveal(p: Parameter) {
-    try {
-      const res = await api.revealParameter(p.name);
-      revealed = { ...revealed, [p.name]: res.value };
-    } catch (e) {
-      err(e);
-    }
-  }
-
-  function hide(name: string) {
-    const next = { ...revealed };
-    delete next[name];
-    revealed = next;
-  }
-
-  function askDelete(p: Parameter) {
-    confirmTitle = 'Delete parameter';
-    confirmBody = `Permanently delete ${p.name} and its full version history? This cannot be undone.`;
-    confirmLabel = 'Delete';
-    confirmAction = async () => {
-      try {
-        await api.deleteParameter(p.name);
-        notify(`Deleted ${p.name}`);
-        if (detail?.name === p.name) closeDetail();
-        await loadParams();
-      } catch (e) {
-        err(e);
-      }
-    };
-    confirmOpen = true;
-  }
-
-  async function runConfirm() {
-    const action = confirmAction;
-    confirmOpen = false;
-    if (action) await action();
-    confirmAction = null;
-  }
-
-  async function openDetail(p: Parameter, tab: 'history' | 'tags' = 'history') {
-    detail = p;
-    detailTab = tab;
-    await refreshDetail();
-  }
-
-  async function refreshDetail() {
-    if (!detail) return;
-    try {
-      [history, tags] = await Promise.all([
-        api.parameterHistory(detail.name).then((r) => r.history),
-        api.parameterTags(detail.name).then((r) => r.tags)
-      ]);
-    } catch (e) {
-      err(e);
-    }
-  }
-
-  function closeDetail() {
-    detail = null;
-    history = [];
-    tags = [];
-  }
-
-  async function addTag() {
-    if (!detail || !tagKey.trim()) return;
-    try {
-      await api.tagParameter(detail.name, { [tagKey.trim()]: tagValue });
-      tagKey = '';
-      tagValue = '';
-      await refreshDetail();
-    } catch (e) {
-      err(e);
-    }
-  }
-
-  async function removeTag(key: string) {
-    if (!detail) return;
-    try {
-      await api.untagParameter(detail.name, [key]);
-      await refreshDetail();
-    } catch (e) {
-      err(e);
-    }
-  }
-
-  async function applyLabel() {
-    if (!detail) return;
-    const v = parseInt(labelVersion, 10);
-    const labels = labelText
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (!v || labels.length === 0) {
-      notify('Provide a version and at least one label', false);
-      return;
-    }
-    try {
-      await api.labelParameterVersion(detail.name, v, labels);
-      labelText = '';
-      await refreshDetail();
-      notify('Labels applied');
-    } catch (e) {
-      err(e);
-    }
-  }
-
-  function fmt(ts: string): string {
-    if (!ts) return '—';
-    const d = new Date(ts);
-    return Number.isNaN(d.getTime()) ? ts : d.toLocaleString();
-  }
-
   onMount(() => {
-    loadParams();
-    loadKms();
+    load();
+    loadKeys();
   });
+
+  const selected = $derived(all.find((p) => p.name === selectedName));
+  // Show a parameter's own folder when it's opened from a link (once per
+  // selection, so browsing other folders with the panel open still works).
+  const selectedLoaded = $derived(selected?.name ?? '');
+  $effect(() => {
+    const n = selectedLoaded;
+    if (!n) return;
+    untrack(() => {
+      if (query.trim() || typeFilter || n.startsWith(prefix)) return;
+      const i = n.lastIndexOf('/');
+      setParams({ path: i > 0 ? n.slice(0, i) : null });
+    });
+  });
+
+  type Row =
+    | { kind: 'folder'; id: string; name: string; count: number }
+    | { kind: 'param'; id: string; p: Param; rel: string };
+
+  const under = $derived(all.filter((p) => p.name.startsWith(prefix) || (prefix === '/' && !p.name.startsWith('/'))));
+  const relName = (p: Param) => (p.name.startsWith(prefix) ? p.name.slice(prefix.length) : p.name);
+
+  const typeCounts = $derived(
+    Object.fromEntries([['', under.length], ...TYPES.map((t) => [t, under.filter((p) => p.type === t).length])]) as Record<string, number>
+  );
+
+  const rows = $derived.by((): Row[] => {
+    const searching = query.trim() !== '';
+    const ofType = under.filter((p) => !typeFilter || p.type === typeFilter);
+    if (searching || typeFilter) {
+      // Search and type filters look through every level below this folder.
+      return ofType.map((p) => ({ kind: 'param', id: p.name, p, rel: relName(p) }));
+    }
+    const folders = new Map<string, number>();
+    const out: Row[] = [];
+    for (const p of ofType) {
+      const rel = relName(p);
+      const slash = rel.indexOf('/');
+      if (slash > 0) {
+        const f = rel.slice(0, slash);
+        folders.set(f, (folders.get(f) ?? 0) + 1);
+      } else {
+        out.push({ kind: 'param', id: p.name, p, rel });
+      }
+    }
+    const folderRows: Row[] = [...folders.entries()].map(([name, count]) => ({ kind: 'folder', id: `${prefix}${name}/`, name, count }));
+    return [...folderRows, ...out];
+  });
+  const folderCount = $derived(rows.filter((r) => r.kind === 'folder').length);
+  const paramCount = $derived(rows.length - folderCount);
+
+  // Folders always sort first.
+  const sortName = (r: Row) => (r.kind === 'folder' ? `0${r.name}` : `1${r.rel}`);
+  const columns: Column<Row>[] = [
+    { id: 'name', label: 'Name', sort: sortName },
+    { id: 'type', label: 'Type', sort: (r) => (r.kind === 'folder' ? '' : r.p.type) },
+    { id: 'value', label: 'Value' },
+    { id: 'version', label: 'Version', sort: (r) => (r.kind === 'folder' ? -1 : r.p.version), hideOnMobile: true },
+    { id: 'modified', label: 'Last modified', sort: (r) => (r.kind === 'folder' ? null : new Date(r.p.lastModified)), hideOnMobile: true },
+    { id: 'actions', label: '', width: '48px', align: 'end' }
+  ];
+  let sortBy = $state('name');
+  let sortDir = $state<'asc' | 'desc'>('asc');
+
+  // ---- Actions --------------------------------------------------------------
+  let formOpen = $state(false);
+  let editing = $state<Param | null>(null);
+
+  function startCreate() {
+    editing = null;
+    formOpen = true;
+  }
+  function startEdit(p: Param) {
+    editing = p;
+    formOpen = true;
+  }
+  async function saved(name: string) {
+    await load();
+    openParam(name);
+  }
+
+  async function remove(p: Param) {
+    const ok = await confirm({
+      title: `Delete ${p.name}?`,
+      message: `The parameter and all ${p.version} version${p.version === 1 ? '' : 's'} of its history are deleted permanently. Anything that reads it will start failing.`,
+      confirmLabel: 'Delete parameter',
+      danger: true,
+      typeToConfirm: leaf(p.name)
+    });
+    if (!ok) return;
+    try {
+      await api.deleteParameter(p.name);
+      toast.success(`Deleted ${p.name}`);
+      if (selectedName === p.name) setParams({ p: null, tab: null });
+      await load();
+    } catch (e) {
+      toast.error(e);
+    }
+  }
+
+  async function copy(text: string, what: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`Copied ${what}`);
+    } catch (e) {
+      toast.error(e, 'Copy failed');
+    }
+  }
+
+  function rowMenu(p: Param): MenuItem[] {
+    const items: MenuItem[] = [
+      { label: 'View details', icon: 'eye', onselect: () => openParam(p.name) },
+      { label: 'Version history', icon: 'history', onselect: () => openParam(p.name, 'history') },
+      { label: 'Copy name', icon: 'copy', onselect: () => copy(p.name, 'name') }
+    ];
+    if (canEdit) {
+      items.push({ label: 'Edit', icon: 'edit', onselect: () => startEdit(p) });
+      items.push({ label: 'Delete', icon: 'trash', danger: true, onselect: () => remove(p) });
+    }
+    return items;
+  }
 </script>
 
-{#if flash}
-  <div class="flash {flashOk ? 'ok' : 'err'}">{flash}</div>
-{/if}
+<svelte:head><title>Parameters · Citadel</title></svelte:head>
 
-<div class="ph">
-  <h1 class="ph-title">Parameter Store</h1>
-  <p class="ph-sub">Hierarchical configuration and secrets, encrypted at rest with KMS.</p>
-</div>
+<PageHeader
+  title="Parameters"
+  description="Hierarchical configuration and secrets{session.me ? ` for ${session.me.accountId}` : ''}. Compatible with the AWS Systems Manager Parameter Store API."
+>
+  {#snippet actions()}
+    {#if canEdit}
+      <button type="button" class="btn btn-primary" onclick={startCreate}><Icon name="plus" size={16} />Create parameter</button>
+    {/if}
+  {/snippet}
+</PageHeader>
 
-<div class="crumbs">
-  <span onclick={() => crumbTo(0)} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && crumbTo(0)}>
-    /
-  </span>
-  {#each pathSegs as seg, i}
-    <span
-      onclick={() => crumbTo(i + 1)}
-      role="button"
-      tabindex="0"
-      onkeydown={(e) => e.key === 'Enter' && crumbTo(i + 1)}>{seg}</span
+<div class="layout">
+  <div class="main-col">
+    <div class="pathbar">
+      <span class="crumb-box">
+        <Icon name="folder" size={14} />
+        <nav aria-label="Folder">
+          <ol class="crumbs mono">
+            <li>
+              {#if crumbs.length}<a href={hrefFor('/')}>/</a>{:else}<span aria-current="page">/</span>{/if}
+            </li>
+            {#each crumbs as seg, i (i)}
+              <li aria-hidden="true" class="sep">›</li>
+              <li>
+                {#if i < crumbs.length - 1}
+                  <a href={hrefFor(crumbs.slice(0, i + 1).join('/'))}>{seg}</a>
+                {:else}
+                  <span aria-current="page">{seg}</span>
+                {/if}
+              </li>
+            {/each}
+          </ol>
+        </nav>
+      </span>
+      {#if crumbs.length}
+        <a class="btn btn-ghost btn-sm" href={hrefFor(crumbs.slice(0, -1).join('/'))}><Icon name="arrow-up" size={14} />Up one level</a>
+      {/if}
+    </div>
+
+    {#if loadError}
+      <div class="callout callout-danger" role="alert">
+        <Icon name="alert-circle" size={16} />
+        <span class="grow">Couldn't load parameters. {loadError}</span>
+        <button type="button" class="btn btn-ghost btn-sm" onclick={() => { loading = true; load(); }}>Retry</button>
+      </div>
+    {/if}
+
+    <DataTable
+      {rows}
+      {columns}
+      key={(r) => r.id}
+      {loading}
+      caption="Parameters in {prefix}"
+      searchable={(r) => (r.kind === 'folder' ? r.name : `${r.p.name} ${r.p.description}`)}
+      searchPlaceholder="Search this folder and below"
+      bind:query
+      bind:sortBy
+      bind:sortDir
+      selected={selectedName ? [selectedName] : []}
     >
-  {/each}
-</div>
+      {#snippet toolbar()}
+        <div class="seg" role="group" aria-label="Type filter">
+          <button type="button" aria-pressed={!typeFilter} onclick={() => setParams({ type: null })}>All<span class="count">{typeCounts[''] ?? 0}</span></button>
+          {#each TYPES as t (t)}
+            <button type="button" aria-pressed={typeFilter === t} onclick={() => setParams({ type: t })}>{t}<span class="count">{typeCounts[t] ?? 0}</span></button>
+          {/each}
+        </div>
+      {/snippet}
 
-<div class="card">
-  <div class="toolbar" style="margin-bottom:0; align-items:center">
-    <h3 style="margin:0; flex:1">Parameters</h3>
-    <button class="btn btn-p" onclick={openCreate}>+ Parameter</button>
-  </div>
-</div>
-
-<div class="card" style="margin-top:1.25rem">
-  {#if loading}
-    <div class="empty">Loading…</div>
-  {:else if subfolders.length === 0 && currentParams.length === 0}
-    <div class="empty">No parameters at this path.</div>
-  {:else}
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Type</th>
-          <th>Version</th>
-          <th>Value</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each subfolders as f}
-          <tr>
-            <td>
-              <button class="link-btn" onclick={() => openFolder(f)}>📁 {f}/</button>
-            </td>
-            <td class="muted" colspan="4">folder</td>
-          </tr>
-        {/each}
-        {#each currentParams as p}
-          <tr>
-            <td class="mono">{leaf(p.name)}</td>
-            <td><span class="badge">{p.type}</span></td>
-            <td class="muted">v{p.version}</td>
-            <td class="mono">
-              {#if revealed[p.name] !== undefined}
-                <code>{revealed[p.name]}</code>
-                <button class="btn btn-sm" onclick={() => hide(p.name)}>Hide</button>
+      {#snippet row(r)}
+        {#if r.kind === 'folder'}
+          <td colspan="5">
+            <a class="folder" href={hrefFor(prefix + r.name)}>
+              <Icon name="folder" size={16} /><span class="mono">{r.name}/</span>
+              <span class="subtle small">{r.count} parameter{r.count === 1 ? '' : 's'}</span>
+            </a>
+          </td>
+          <td class="end"></td>
+        {:else}
+          {@const p = r.p}
+          <td>
+            <button type="button" class="row-link mono name" data-param-open={p.name} onclick={() => openParam(p.name)}>{r.rel}</button>
+            {#if p.description}<span class="subtle desc">{p.description}</span>{/if}
+          </td>
+          <td>
+            <Badge tone={TYPE_TONE[p.type]} dot={false}>{#if p.type === 'SecureString'}<Icon name="lock" size={12} />{/if}{p.type}</Badge>
+          </td>
+          <td class="value">
+            {#key `${p.name}:${p.version}`}
+              {#if p.type === 'SecureString'}
+                <SecretValue load={async () => (await api.revealParameter(p.name)).value} />
               {:else}
-                <button class="btn btn-sm" onclick={() => reveal(p)}>Reveal</button>
+                <InlineValue auto list={p.type === 'StringList'} initial={p.value} load={async () => (await api.revealParameter(p.name)).value} />
               {/if}
-            </td>
-            <td style="white-space:nowrap">
-              <button class="btn btn-sm" onclick={() => openDetail(p)}>Details</button>
-              <button class="btn btn-sm btn-d" onclick={() => askDelete(p)}>Delete</button>
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
+            {/key}
+          </td>
+          <td class="hide-sm"><span class="mono subtle">v{p.version}</span></td>
+          <td class="subtle hide-sm nowrap" title={fmtDateTime(p.lastModified)}>{fmtRelative(p.lastModified)}</td>
+          <td class="end"><ActionMenu label="More actions for {p.name}" items={rowMenu(p)} /></td>
+        {/if}
+      {/snippet}
+
+      {#snippet empty()}
+        {#if all.length === 0}
+          <EmptyState icon="sliders" title="No parameters yet" description="Store configuration as String or StringList, and secrets as SecureString encrypted with KMS.">
+            {#if canEdit}<button type="button" class="btn btn-primary btn-sm" onclick={startCreate}><Icon name="plus" size={14} />Create parameter</button>{/if}
+          </EmptyState>
+        {:else}
+          <EmptyState icon="folder" title={typeFilter ? `No ${typeFilter} parameters in ${prefix}` : `Nothing in ${prefix}`} description="Create a parameter here, or go back up a level.">
+            {#if typeFilter}<button type="button" class="btn btn-secondary btn-sm" onclick={() => setParams({ type: null })}>Show all types</button>{/if}
+            {#if canEdit}<button type="button" class="btn btn-primary btn-sm" onclick={startCreate}><Icon name="plus" size={14} />Create parameter</button>{/if}
+          </EmptyState>
+        {/if}
+      {/snippet}
+    </DataTable>
+
+    {#if !loading && rows.length > 0}
+      <div class="table-foot">
+        <span>
+          {paramCount} parameter{paramCount === 1 ? '' : 's'}{folderCount ? ` and ${folderCount} folder${folderCount === 1 ? '' : 's'}` : ''}
+          in <span class="mono">{prefix}</span>{query.trim() || typeFilter ? ' and below' : ''}
+        </span>
+        <span class="note"><Icon name="shield-check" size={14} />SecureString values hide after 30 s and every reveal is logged</span>
+      </div>
+    {/if}
+  </div>
+
+  {#if selected}
+    <ParamPanel
+      param={selected}
+      {kmsKeys}
+      bind:tab
+      {canEdit}
+      onclose={closeParam}
+      onedit={() => startEdit(selected)}
+      ondelete={() => remove(selected)}
+    />
+  {:else if selectedName && !loading && !loadError}
+    <aside class="missing card" aria-live="polite">
+      <EmptyState icon="alert-circle" title="Parameter not found" description="{selectedName} doesn't exist or was deleted.">
+        <button type="button" class="btn btn-secondary btn-sm" onclick={() => setParams({ p: null, tab: null })}>Close</button>
+      </EmptyState>
+    </aside>
   {/if}
 </div>
 
-{#if detail}
-  <div class="drawer-back" onclick={closeDetail} role="presentation"></div>
-  <aside class="drawer">
-    <div class="drawer-head">
-      <div>
-        <div class="mono" style="font-weight:600">{detail.name}</div>
-        <div class="muted">{detail.type} · v{detail.version}</div>
-      </div>
-      <button class="btn" onclick={closeDetail}>Close</button>
-    </div>
-    <div class="tabs">
-      <button class="tab" class:active={detailTab === 'history'} onclick={() => (detailTab = 'history')}>
-        History
-      </button>
-      <button class="tab" class:active={detailTab === 'tags'} onclick={() => (detailTab = 'tags')}>
-        Tags
-      </button>
-    </div>
-
-    {#if detailTab === 'history'}
-      <table class="table">
-        <thead>
-          <tr><th>Version</th><th>Type</th><th>Labels</th><th>Modified</th></tr>
-        </thead>
-        <tbody>
-          {#each history as h}
-            <tr>
-              <td>v{h.version}</td>
-              <td>{h.type}</td>
-              <td>
-                {#each h.labels as l}<span class="badge">{l}</span>{/each}
-              </td>
-              <td class="muted">{fmt(h.modifiedAt)}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-      <div class="card" style="margin-top:1rem">
-        <h4 style="margin-top:0">Label a version</h4>
-        <div class="field">
-          <label for="lbl-ver">Version</label>
-          <input id="lbl-ver" class="mono" placeholder={String(detail.version)} bind:value={labelVersion} />
-        </div>
-        <div class="field">
-          <label for="lbl-txt">Labels (comma-separated)</label>
-          <input id="lbl-txt" placeholder="stable, release-1" bind:value={labelText} />
-        </div>
-        <button class="btn btn-p" onclick={applyLabel}>Apply labels</button>
-      </div>
-    {:else}
-      {#if tags.length === 0}
-        <div class="empty">No tags.</div>
-      {:else}
-        <table class="table">
-          <thead><tr><th>Key</th><th>Value</th><th></th></tr></thead>
-          <tbody>
-            {#each tags as t}
-              <tr>
-                <td class="mono">{t.key}</td>
-                <td>{t.value}</td>
-                <td><button class="btn btn-sm btn-d" onclick={() => removeTag(t.key)}>Remove</button></td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      {/if}
-      <div class="card" style="margin-top:1rem">
-        <h4 style="margin-top:0">Add tag</h4>
-        <div class="field">
-          <label for="tg-key">Key</label>
-          <input id="tg-key" bind:value={tagKey} />
-        </div>
-        <div class="field">
-          <label for="tg-val">Value</label>
-          <input id="tg-val" bind:value={tagValue} />
-        </div>
-        <button class="btn btn-p" onclick={addTag}>Add tag</button>
-      </div>
-    {/if}
-  </aside>
-{/if}
-
-{#if confirmOpen}
-  <div class="modal-back" role="presentation" onclick={() => (confirmOpen = false)}></div>
-  <div class="modal">
-    <h3 style="margin-top:0">{confirmTitle}</h3>
-    <p>{confirmBody}</p>
-    <div class="modal-actions">
-      <button class="btn" onclick={() => (confirmOpen = false)}>Cancel</button>
-      <button class="btn btn-d" onclick={runConfirm}>{confirmLabel}</button>
-    </div>
-  </div>
-{/if}
-
-{#if createOpen}
-  <div class="modal-back" role="presentation" onclick={() => (createOpen = false)}></div>
-  <div class="modal modal-lg">
-    <h3 style="margin-top:0">Add parameter</h3>
-    <p class="muted" style="margin-top:0">Created under <code>{prefix}</code></p>
-    <div class="field">
-      <label for="np-name">Name</label>
-      <input id="np-name" class="mono" placeholder="db/password" bind:value={newName} />
-    </div>
-    <div class="field">
-      <label for="np-type">Type</label>
-      <select id="np-type" bind:value={newType}>
-        <option value="String">String</option>
-        <option value="StringList">StringList</option>
-        <option value="SecureString">SecureString</option>
-      </select>
-    </div>
-    {#if newType === 'SecureString'}
-      <div class="field">
-        <label for="np-kms">KMS key (defaults to account default)</label>
-        <select id="np-kms" bind:value={newKms}>
-          <option value="">Default key</option>
-          {#each kmsKeys as k}
-            <option value={k.keyId}>{kmsLabel(k)}</option>
-          {/each}
-        </select>
-      </div>
-    {/if}
-    <div class="field">
-      <label for="np-value">Value</label>
-      {#if newType === 'StringList'}
-        <input id="np-value" class="mono" placeholder="a,b,c" bind:value={newValue} />
-      {:else}
-        <input id="np-value" class="mono" bind:value={newValue} />
-      {/if}
-    </div>
-    <div class="field">
-      <label for="np-desc">Description</label>
-      <input id="np-desc" bind:value={newDescription} />
-    </div>
-    <label class="check">
-      <input type="checkbox" bind:checked={overwrite} /> Overwrite if it already exists
-    </label>
-    <div class="modal-actions">
-      <button class="btn" onclick={() => (createOpen = false)}>Cancel</button>
-      <button class="btn btn-p" onclick={addParameter}>Save parameter</button>
-    </div>
-  </div>
-{/if}
+<ParamForm bind:open={formOpen} {editing} {prefix} {kmsKeys} onsaved={saved} />
 
 <style>
-  .crumbs {
-    margin-bottom: 0.85rem;
-  }
-  .field :global(input),
-  .field :global(select) {
-    width: 100%;
-    min-width: 0;
-  }
-  .link-btn {
-    background: none;
-    border: none;
-    color: var(--c-blue);
-    cursor: pointer;
-    padding: 0;
-    font: inherit;
-  }
-  .check {
+  .layout {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.85rem;
-    color: var(--c-muted);
-  }
-  .check :global(input) {
-    min-width: 0;
-  }
-  .drawer-back,
-  .modal-back {
-    position: fixed;
-    inset: 0;
-    background: rgba(15, 20, 30, 0.35);
-    z-index: 40;
-  }
-  .drawer {
-    position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(560px, 92vw);
-    background: var(--c-surface);
-    border-left: 1px solid var(--c-border);
-    box-shadow: -8px 0 24px rgba(15, 20, 30, 0.12);
-    padding: 1.25rem;
-    overflow-y: auto;
-    z-index: 41;
-  }
-  .drawer-head {
-    display: flex;
-    justify-content: space-between;
+    flex-wrap: wrap;
     align-items: flex-start;
-    margin-bottom: 1rem;
+    gap: var(--space-5);
   }
-  .tabs {
+  .main-col {
+    flex: 999 1 560px;
+    min-width: 0;
     display: flex;
-    gap: 0.25rem;
-    margin-bottom: 1rem;
-    border-bottom: 1px solid var(--c-border);
+    flex-direction: column;
+    gap: var(--space-3);
   }
-  .tab {
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    color: var(--c-muted);
-    padding: 0.5rem 0.7rem;
+  .grow {
+    flex: 1;
+  }
+  .pathbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .crumb-box {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--ctl-h);
+    max-width: 100%;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-hover);
+    color: var(--text-subtle);
+  }
+  .crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--text-sm);
+  }
+  .crumbs a {
+    color: var(--text-muted);
+  }
+  .crumbs [aria-current] {
+    color: var(--text);
+  }
+  .sep {
+    color: var(--text-subtle);
+  }
+  .folder {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--text);
+  }
+  .folder :global(svg) {
+    color: var(--text-subtle);
+  }
+  .name {
+    font-weight: 500;
+    overflow-wrap: anywhere;
+  }
+  .desc {
+    display: block;
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-xs);
+  }
+  .value {
+    max-width: 380px;
+  }
+  @media (max-width: 720px) {
+    .hide-sm {
+      display: none;
+    }
+  }
+  .table-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: 0 var(--space-1);
+    color: var(--text-subtle);
+    font-size: var(--text-sm);
+  }
+  .note {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .missing {
+    flex: 1 1 400px;
+    max-width: 480px;
+    padding: var(--space-8) var(--space-4);
+  }
+  /* Segmented control (DesignSystem "seg"). */
+  .seg {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 3px;
+    border-radius: var(--radius-md);
+    background: var(--surface-pressed);
+  }
+  .seg button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font: 500 var(--text-sm) / 1 var(--font-sans);
+    white-space: nowrap;
     cursor: pointer;
-    font: inherit;
   }
-  .tab.active {
-    color: var(--c-text);
-    border-bottom-color: var(--c-blue);
-    font-weight: 600;
+  .seg button[aria-pressed='true'] {
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: var(--shadow-xs);
   }
-  .modal {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background: var(--c-surface);
-    border: 1px solid var(--c-border);
-    border-radius: var(--radius);
-    box-shadow: 0 12px 32px rgba(15, 20, 30, 0.18);
-    padding: 1.25rem;
-    width: min(440px, 92vw);
-    z-index: 42;
+  .count {
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--surface-pressed);
+    color: var(--text-muted);
+    font: 500 var(--text-xs) / 16px var(--font-sans);
+    font-variant-numeric: tabular-nums;
   }
-  .modal-lg {
-    width: min(520px, 92vw);
-    max-height: 90vh;
-    overflow-y: auto;
-  }
-  .modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    margin-top: 1rem;
-  }
-  .badge + .badge {
-    margin-left: 0.25rem;
+  .seg button[aria-pressed='true'] .count {
+    background: var(--surface-hover);
   }
 </style>

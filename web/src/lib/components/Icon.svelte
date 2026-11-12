@@ -6,6 +6,9 @@
 <script lang="ts" module>
   const paths = {
     x: 'M18 6 6 18M6 6l12 12',
+    circle: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z',
+    play: 'M6 4l14 8-14 8Z',
+    calendar: 'M19 4H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2ZM16 2v4M8 2v4M3 10h18',
     check: 'M20 6 9 17l-5-5',
     'check-circle': 'M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4 12 14.01l-3-3',
     'alert-circle': 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM12 8v4M12 16h.01',
