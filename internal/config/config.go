@@ -53,20 +53,34 @@ type Config struct {
 // MinSecretAccessKeyLen is the shortest static secret accepted. See Load.
 const MinSecretAccessKeyLen = 20
 
+// Posture is the outcome of CheckSecurityPosture.
+type Posture struct {
+	// Bootstrap is true when a database-backed server has no console users
+	// yet. The server then runs in bootstrap mode: the console API is closed
+	// except first-run setup (/v1/bootstrap), /v1/server/info,
+	// /v1/auth/providers and login, until the first admin is created.
+	Bootstrap bool
+}
+
 // CheckSecurityPosture refuses configurations that would leave Citadel open.
-// Outside insecure dev mode the console needs at least one user, and the AWS
-// APIs need a source of credentials to verify signatures against.
-func CheckSecurityPosture(cfg Config, dbBacked bool) error {
+// Outside insecure dev mode the console needs at least one user (a
+// database-backed server without one starts in bootstrap mode instead), and
+// the AWS APIs need a source of credentials to verify signatures against.
+// cfg.UIUsers must hold every known console user (configured and stored).
+func CheckSecurityPosture(cfg Config, dbBacked bool) (Posture, error) {
 	if cfg.InsecureDev {
-		return nil
-	}
-	if len(cfg.UIUsers) == 0 {
-		return errors.New("no console users are configured: set KMS_UI_USERS_JSON or KMS_UI_PASSWORD (or KMS_INSECURE_DEV=true for local development)")
+		return Posture{}, nil
 	}
 	if !dbBacked && cfg.ExpectedAccessKey == "" {
-		return errors.New("the in-memory store has no access keys: set KMS_ACCESS_KEY_ID and KMS_SECRET_ACCESS_KEY, use KMS_DB_URL, or set KMS_INSECURE_DEV=true for local development")
+		return Posture{}, errors.New("the in-memory store has no access keys: set KMS_ACCESS_KEY_ID and KMS_SECRET_ACCESS_KEY, use KMS_DB_URL, or set KMS_INSECURE_DEV=true for local development")
 	}
-	return nil
+	if len(cfg.UIUsers) == 0 {
+		if dbBacked {
+			return Posture{Bootstrap: true}, nil
+		}
+		return Posture{}, errors.New("no console users are configured: set KMS_UI_USERS_JSON or KMS_UI_PASSWORD (or KMS_INSECURE_DEV=true for local development)")
+	}
+	return Posture{}, nil
 }
 
 // Load reads the configuration from the environment and validates it.

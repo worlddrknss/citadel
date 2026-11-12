@@ -41,7 +41,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := run(cfg, s.Handler()); err != nil {
+	// Background jobs (session purges...) stop when the server does.
+	jobsCtx, stopJobs := context.WithCancel(context.Background())
+	s.Start(jobsCtx)
+	err = run(cfg, s.Handler())
+	stopJobs()
+	s.Wait()
+	if err != nil {
 		log.Fatalf("server exited with error: %v", err)
 	}
 }

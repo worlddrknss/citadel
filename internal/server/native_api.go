@@ -38,46 +38,31 @@ import (
 // separator used to encode the hierarchy can never be confused with data.
 var nativeSegmentRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
-// nativeSession resolves the caller's UI session for the native API. Unlike
-// requireUISession (which redirects browsers to the login page), it returns a
-// JSON 401 so the SPA can react programmatically. It also returns a context
-// scoped to the session's account so the underlying store applies per-account
+// nativeSession resolves the caller's console session for the native API.
+// It returns a JSON 401/403 so the SPA can react programmatically, and a
+// context scoped to the session's account so the store applies per-account
 // isolation via the existing accountFilter plumbing.
 func (s *Server) nativeSession(w http.ResponseWriter, r *http.Request, minRole string) (*uiSession, context.Context, bool) {
-	runtime := s.uiRuntime()
 	// Bearer token auth (machine identities) takes precedence over cookies so
 	// native SDKs and CI can talk to /v1 without a browser session.
 	if sess, ctx, ok, handled := s.nativeTokenSession(w, r, minRole); handled {
 		return sess, ctx, ok
 	}
-	if !runtime.enabled {
-		// No console users: only insecure dev mode gets the implicit local
-		// admin. Startup refuses this state otherwise; this is the backstop.
-		if s.cfg.InsecureDev {
-			sess := &uiSession{Username: "local", Role: "admin", DisplayName: "Local Admin"}
+	token := s.sessionToken(r)
+	if token == "" {
+		// No console users at all: only insecure dev mode gets the implicit
+		// local admin. Startup refuses this state otherwise (or runs in
+		// bootstrap mode, where the API is closed); this is the backstop.
+		if s.cfg.InsecureDev && !s.hasConsoleUsers(r.Context()) {
+			sess := &uiSession{Username: "local", Role: "admin", DisplayName: "Local Admin", PlatformAdmin: true}
 			return sess, r.Context(), true
 		}
-		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "no console users are configured")
-		return nil, nil, false
-	}
-	cookie, err := r.Cookie(adminSessionCookieName)
-	if err != nil || strings.TrimSpace(cookie.Value) == "" {
 		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return nil, nil, false
 	}
-	runtime.mu.Lock()
-	session, ok := runtime.sessions[cookie.Value]
-	now := time.Now().UTC()
-	if ok && sessionExpired(session, now, runtime.idleTTL, runtime.absoluteTTL) {
-		delete(runtime.sessions, cookie.Value)
-		ok = false
-	}
-	if ok {
-		session.LastSeenAt = now
-		runtime.sessions[cookie.Value] = session
-	}
-	runtime.mu.Unlock()
-	if !ok {
+	session, err := s.resolveSession(r.Context(), token)
+	if err != nil {
+		s.clearSessionCookie(w)
 		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "session expired")
 		return nil, nil, false
 	}
@@ -88,7 +73,7 @@ func (s *Server) nativeSession(w http.ResponseWriter, r *http.Request, minRole s
 	// Scope the request context to the session's current account so the store's
 	// AccountFilter/accountForContext helpers isolate reads and stamp writes.
 	ctx := store.WithCallerAccount(r.Context(), strings.TrimSpace(session.AccountID))
-	return &session, ctx, true
+	return session, ctx, true
 }
 
 // nativeTokenSession authenticates a machine identity from an Authorization:
@@ -129,24 +114,26 @@ func (s *Server) nativeTokenSession(w http.ResponseWriter, r *http.Request, minR
 		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid or inactive token")
 		return nil, nil, false, true
 	}
-	// A token acts with its owner's role, never more: otherwise any viewer
-	// could mint a key and act as admin. A key whose owner no longer exists
-	// grants nothing.
-	runtime := s.uiRuntime()
-	runtime.mu.Lock()
-	ownerCfg, ownerExists := runtime.users[owner]
-	runtime.mu.Unlock()
+	// A token acts with its owner's role in the key's account, never more:
+	// otherwise any viewer could mint a key and act as admin. A key whose
+	// owner no longer exists, or no longer belongs to the account, grants
+	// nothing. Tokens never carry platform-admin rights.
+	ownerUser, ownerExists := s.lookupUser(r.Context(), owner)
 	if !ownerExists {
 		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid or inactive token")
 		return nil, nil, false, true
 	}
-	tokenRole := ownerCfg.Role
+	tokenRole, member := accountRole(s.userMemberships(r.Context(), ownerUser), strings.TrimSpace(accountID))
+	if !member {
+		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid or inactive token")
+		return nil, nil, false, true
+	}
 	if !uiRoleAtLeast(tokenRole, minRole) {
 		writeNativeError(w, http.StatusForbidden, "forbidden", "insufficient role")
 		return nil, nil, false, true
 	}
 	_ = s.store.TouchAccessKeyLastUsed(r.Context(), keyID)
-	sess = &uiSession{Username: keyID, Role: tokenRole, AccountID: accountID, DisplayName: "Machine Identity"}
+	sess = &uiSession{Username: keyID, Role: tokenRole, AccountID: accountID, DisplayName: "Machine Identity", ViaToken: true, Accounts: []string{accountID}}
 	ctx = store.WithCallerAccount(r.Context(), strings.TrimSpace(accountID))
 	return sess, ctx, true, true
 }
@@ -278,13 +265,7 @@ func (s *Server) handleV1Me(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeNativeJSON(w, http.StatusOK, nativeMeResponse{
-		Username:    sess.Username,
-		DisplayName: sess.DisplayName,
-		Role:        sess.Role,
-		AccountID:   sess.AccountID,
-		Accounts:    sess.Accounts,
-	})
+	writeNativeJSON(w, http.StatusOK, meResponse(sess))
 }
 
 // handleV1Projects returns the distinct projects (and their environments)
