@@ -8,9 +8,15 @@
   import { toast } from '$lib/stores/toast.svelte';
   import { confirm } from '$lib/stores/confirm.svelte';
   import SsoEditor from './SsoEditor.svelte';
-  import { adminApi, fmtDate, type SsoProvider } from './api';
+  import { session } from '$lib/stores/session.svelte';
+  import { adminApi, fmtDate, ssoOrgWide, type SsoProvider } from './api';
 
   let { accounts }: { accounts: Account[] } = $props();
+
+  // Account admins see the providers of their account, but the server only
+  // lets platform admins change ones whose rules reach other accounts.
+  const canManage = (p: SsoProvider) => session.platformAdmin || (p.accountId === session.me?.accountId && !ssoOrgWide(p));
+  const accountLabel = (id: string) => accounts.find((a) => a.accountId === id)?.name ?? id;
 
   let providers = $state<SsoProvider[]>([]);
   let loading = $state(true);
@@ -73,6 +79,8 @@
         groupClaim: p.groupClaim,
         roleMappings: p.roleMappings,
         defaultRole: p.defaultRole,
+        // The server replaces the whole provider: omitting this would clear it.
+        allowedEmailDomains: p.allowedEmailDomains ?? [],
         enabled
       });
       toast.success(`${p.name} ${enabled ? 'enabled' : 'disabled'}`);
@@ -128,24 +136,28 @@
           {:else}
             {#each providers as p (p.id)}
               <tr>
-                <td><span class="strong">{p.name}</span><span class="mono subtle sub2">{p.issuer}</span></td>
+                <td><span class="strong">{p.name}</span><span class="mono subtle sub2">{p.issuer}</span>{#if p.accountId}<span class="subtle sub2">Home account: {accountLabel(p.accountId)}{ssoOrgWide(p) ? ' · org-wide' : ''}</span>{/if}</td>
                 <td class="mono">{p.clientId}</td>
                 <td class="muted">
                   {p.roleMappings.length} rule{p.roleMappings.length === 1 ? '' : 's'} · default {p.defaultRole === 'none' ? 'no access' : p.defaultRole}
                 </td>
                 <td>
                   <label class="switch">
-                    <input type="checkbox" role="switch" checked={p.enabled} onchange={(e) => { const on = e.currentTarget.checked; e.currentTarget.checked = p.enabled; setEnabled(p, on); }} aria-label="{p.name} enabled" />
+                    <input type="checkbox" role="switch" checked={p.enabled} disabled={!canManage(p)} onchange={(e) => { const on = e.currentTarget.checked; e.currentTarget.checked = p.enabled; setEnabled(p, on); }} aria-label="{p.name} enabled" />
                     <Badge tone={p.enabled ? 'success' : 'neutral'} dot={false}>{p.enabled ? 'Enabled' : 'Disabled'}</Badge>
                   </label>
                 </td>
                 <td class="subtle">{fmtDate(p.updatedAt)}</td>
                 <td class="end">
-                  <span class="cell-actions">
-                    <button type="button" class="btn btn-ghost btn-sm" onclick={() => test(p)} disabled={testing === p.id}>{testing === p.id ? 'Testing…' : 'Test'}</button>
-                    <button type="button" class="btn-icon" aria-label="Edit {p.name}" title="Edit" onclick={() => edit(p)}><Icon name="edit" size={14} /></button>
-                    <button type="button" class="btn-icon danger" aria-label="Delete {p.name}" title="Delete" onclick={() => remove(p)}><Icon name="trash" size={14} /></button>
-                  </span>
+                  {#if canManage(p)}
+                    <span class="cell-actions">
+                      <button type="button" class="btn btn-ghost btn-sm" onclick={() => test(p)} disabled={testing === p.id}>{testing === p.id ? 'Testing…' : 'Test'}</button>
+                      <button type="button" class="btn-icon" aria-label="Edit {p.name}" title="Edit" onclick={() => edit(p)}><Icon name="edit" size={14} /></button>
+                      <button type="button" class="btn-icon danger" aria-label="Delete {p.name}" title="Delete" onclick={() => remove(p)}><Icon name="trash" size={14} /></button>
+                    </span>
+                  {:else}
+                    <span class="subtle small">Platform admins manage this</span>
+                  {/if}
                 </td>
               </tr>
             {/each}

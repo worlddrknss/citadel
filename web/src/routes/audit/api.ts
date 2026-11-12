@@ -21,13 +21,20 @@ export interface AuditRow {
   id: number;
   createdAt: string;
   actor: string;
+  /** console | access-key | sts | acme | system… (how the actor authenticated). */
+  actorType?: string;
   actorDisplayName?: string;
+  /** The access key used, for SigV4 calls. */
+  accessKeyId?: string;
   action: string;
   resource?: string;
   keyId?: string;
   result: string;
   errorType?: string;
   sourceIp?: string;
+  userAgent?: string;
+  /** Position in the hash chain (gapless); `id` may have gaps. */
+  chainSeq?: number;
   prevHash?: string;
   hash?: string;
   /** Server recomputed this event's hash and it matched. */
@@ -45,6 +52,7 @@ export interface AuditPage {
 
 export interface ChainStatus {
   status: 'verified' | 'broken' | 'never';
+  /** Event IDs (not chain positions). */
   verifiedThrough?: number;
   headHash?: string;
   checkedAt?: string;

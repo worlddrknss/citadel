@@ -158,15 +158,14 @@
     setParams({ event: openId === String(id) ? null : String(id) });
   }
 
+  // The event exactly as the API and the JSON export name its fields.
+  const EVENT_FIELDS: (keyof AuditRow)[] = [
+    'id', 'chainSeq', 'createdAt', 'actor', 'actorType', 'actorDisplayName', 'accessKeyId', 'action', 'resource',
+    'keyId', 'result', 'errorType', 'sourceIp', 'userAgent', 'prevHash', 'hash', 'hashValid'
+  ];
   function eventJson(e: AuditRow): string {
-    const out: Record<string, unknown> = { id: e.id, time: e.createdAt, actor: e.actor, action: e.action };
-    if (e.resource) out.resource = e.resource;
-    if (e.keyId) out.kmsKeyId = e.keyId;
-    out.result = e.result;
-    if (e.errorType) out.errorType = e.errorType;
-    if (e.sourceIp) out.sourceIp = e.sourceIp;
-    if (e.prevHash) out.prevHash = e.prevHash;
-    if (e.hash) out.hash = e.hash;
+    const out: Record<string, unknown> = {};
+    for (const k of EVENT_FIELDS) if (e[k] !== undefined && e[k] !== '') out[k] = e[k];
     return JSON.stringify(out, null, 2);
   }
 
@@ -406,7 +405,7 @@
                 </td>
                 <td class="mono subtle">#{e.id.toLocaleString()}</td>
                 <td class="mono sm" title={fullTime(e.createdAt)}>{utcStamp(e.createdAt)}</td>
-                <td><span class="who"><span class="avatar" aria-hidden="true">{initials(e.actorDisplayName || e.actor || '?')}</span>{e.actorDisplayName || e.actor || '—'}</span></td>
+                <td><span class="who" title={[e.actor, e.actorType, e.accessKeyId].filter(Boolean).join(' · ')}><span class="avatar" aria-hidden="true">{initials(e.actorDisplayName || e.actor || '?')}</span>{e.actorDisplayName || e.actor || '—'}</span></td>
                 <td class="mono sm">{e.action}</td>
                 <td class="mono sm res" title={e.resource || e.keyId}>{e.resource || e.keyId || '—'}</td>
                 <td>

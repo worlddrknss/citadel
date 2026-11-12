@@ -17,6 +17,9 @@
   let format = $state<'json' | 'cef'>('json');
   let token = $state('');
   let hasToken = $state(false);
+  let clearToken = $state(false);
+  /** The saved configuration: the test sends to this, not to unsaved edits. */
+  let saved = $state<{ enabled: boolean; url: string; format: 'json' | 'cef' } | null>(null);
   let saving = $state(false);
   let testing = $state(false);
   const canEdit = $derived(session.can('admin'));
@@ -34,6 +37,8 @@
       format = c.format;
       hasToken = c.hasToken;
       token = '';
+      clearToken = false;
+      saved = { enabled: c.enabled, url: c.url, format: c.format };
       phase = 'ok';
     } catch (e) {
       phase = isNotImplemented(e) ? 'unavailable' : 'error';
@@ -45,9 +50,12 @@
     e.preventDefault();
     saving = true;
     try {
-      const c = await auditApi.saveStream({ enabled, url: url.trim(), format, ...(token ? { token } : {}) });
+      // token: omitted keeps the stored one, "" clears it.
+      const c = await auditApi.saveStream({ enabled, url: url.trim(), format, ...(token ? { token } : clearToken ? { token: '' } : {}) });
       hasToken = c.hasToken;
       token = '';
+      clearToken = false;
+      saved = { enabled: c.enabled, url: c.url, format: c.format };
       toast.success(enabled ? 'Audit streaming is on' : 'Audit streaming settings saved');
       open = false;
     } catch (err) {
@@ -56,6 +64,8 @@
       saving = false;
     }
   }
+
+  const dirty = $derived(!!saved && (saved.enabled !== enabled || saved.url !== url.trim() || saved.format !== format || !!token || clearToken));
 
   async function test() {
     testing = true;
@@ -108,13 +118,19 @@
       </label>
       <label class="field">
         <span class="field-label">Bearer token</span>
-        <input class="input" type="password" bind:value={token} autocomplete="off" placeholder={hasToken ? 'Saved. Leave blank to keep it.' : 'Optional'} disabled={!canEdit} />
+        <input class="input" type="password" bind:value={token} autocomplete="off" placeholder={hasToken && !clearToken ? 'Saved. Leave blank to keep it.' : 'Optional'} disabled={!canEdit || clearToken} />
       </label>
+      {#if hasToken && canEdit}
+        <label class="check">
+          <input type="checkbox" bind:checked={clearToken} onchange={() => (token = '')} />
+          <span>Remove the saved token</span>
+        </label>
+      {/if}
     </form>
   {/if}
   {#snippet footer()}
     {#if phase === 'ok' && canEdit}
-      <button type="button" class="btn btn-ghost" onclick={test} disabled={testing || !url}>{testing ? 'Sending…' : 'Send test event'}</button>
+      <button type="button" class="btn btn-ghost" onclick={test} disabled={testing || !saved?.url || dirty} title={dirty ? 'Save first: the test uses the saved settings' : undefined}>{testing ? 'Sending…' : 'Send test event'}</button>
       <button type="submit" form="stream-form" class="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
     {:else}
       <button type="button" class="btn btn-secondary" onclick={() => (open = false)}>Close</button>

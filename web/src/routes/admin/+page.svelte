@@ -19,6 +19,9 @@
   import { roleTone, fmtDate, type RoleName, type UserRow } from './api';
 
   const isAdmin = $derived(session.can('admin'));
+  // Account admins manage their current account only; platform admins
+  // manage accounts, org settings and every user (the server enforces this).
+  const isPlatform = $derived(session.platformAdmin);
   const me = $derived(session.me);
 
   let users = $state<UserRow[]>([]);
@@ -55,6 +58,12 @@
   let query = $state('');
 
   const accountName = (id: string) => accounts.find((a) => a.accountId === id)?.name ?? id;
+  /** Accounts the signed-in admin may add members to. */
+  const manageableAccounts = $derived(isPlatform ? accounts : accounts.filter((a) => a.accountId === me?.accountId));
+  /** Mirrors the server: account admins can't touch platform admins or people in other accounts. */
+  const canManageUser = (u: UserRow) =>
+    isPlatform || (!u.platformAdmin && (u.accounts ?? []).length > 0 && (u.accounts ?? []).every((a) => a === me?.accountId));
+  const canManageAccount = (id: string) => isPlatform || id === me?.accountId;
 
   interface Membership {
     username: string;
@@ -192,7 +201,7 @@
     {#if isAdmin}
       {#if tab === 'users'}
         <button type="button" class="btn btn-primary" onclick={() => { editingUser = null; userOpen = true; }}><Icon name="plus" size={16} />Create user</button>
-      {:else if tab === 'accounts'}
+      {:else if tab === 'accounts' && isPlatform}
         <button type="button" class="btn btn-primary" onclick={() => { accountName_ = ''; accountError = ''; accountOpen = true; }}><Icon name="plus" size={16} />Create account</button>
       {:else if tab === 'memberships'}
         <button type="button" class="btn btn-primary" onclick={() => addMembership()}><Icon name="plus" size={16} />Add membership</button>
@@ -243,16 +252,18 @@
         </td>
         <td class="subtle hide-sm">{fmtDate(a.createdAt)}</td>
         <td class="end">
-          <button
-            type="button"
-            class="btn-icon danger"
-            aria-label="Delete {a.name}"
-            title={a.accountId === me?.accountId ? "You can't delete the account you're signed in to" : 'Delete'}
-            disabled={a.accountId === me?.accountId}
-            onclick={() => deleteAccount(a)}
-          >
-            <Icon name="trash" size={14} />
-          </button>
+          {#if isPlatform}
+            <button
+              type="button"
+              class="btn-icon danger"
+              aria-label="Delete {a.name}"
+              title={a.accountId === me?.accountId ? "You can't delete the account you're signed in to" : 'Delete'}
+              disabled={a.accountId === me?.accountId}
+              onclick={() => deleteAccount(a)}
+            >
+              <Icon name="trash" size={14} />
+            </button>
+          {/if}
         </td>
       {/snippet}
       {#snippet empty()}
@@ -275,10 +286,12 @@
         <td><span class="strong">{accountName(m.accountId)}</span><span class="mono subtle sub">{m.accountId}</span></td>
         <td>{#if m.role}<Badge tone={roleTone(m.role)} dot={false}>{m.role}</Badge>{:else}<span class="subtle small">Default role</span>{/if}</td>
         <td class="end">
-          <span class="cell-actions">
-            <button type="button" class="btn btn-ghost btn-sm" onclick={() => { memPreset = { username: m.username, accountId: m.accountId, role: m.role || 'viewer', editing: true }; memOpen = true; }}>Change role</button>
-            <button type="button" class="btn-icon danger" aria-label="Remove {m.username} from {accountName(m.accountId)}" title="Remove" onclick={() => removeMembership(m)}><Icon name="x" size={14} /></button>
-          </span>
+          {#if canManageAccount(m.accountId)}
+            <span class="cell-actions">
+              <button type="button" class="btn btn-ghost btn-sm" onclick={() => { memPreset = { username: m.username, accountId: m.accountId, role: m.role || 'viewer', editing: true }; memOpen = true; }}>Change role</button>
+              <button type="button" class="btn-icon danger" aria-label="Remove {m.username} from {accountName(m.accountId)}" title="Remove" onclick={() => removeMembership(m)}><Icon name="x" size={14} /></button>
+            </span>
+          {/if}
         </td>
       {/snippet}
       {#snippet empty()}
@@ -301,7 +314,7 @@
             <span><span class="strong">{u.displayName || u.username}</span>{#if u.username === me?.username}<span class="subtle small"> (you)</span>{/if}<span class="mono subtle sub">{u.username}</span></span>
           </span>
         </td>
-        <td><Badge tone={roleTone(u.role)} dot={false}>{u.role}</Badge></td>
+        <td><Badge tone={roleTone(u.role)} dot={false}>{u.role}</Badge>{#if u.platformAdmin}<Badge tone="info" dot={false}>Platform admin</Badge>{/if}</td>
         <td class="hide-sm">
           <span class="chips">
             {#each (u.accounts ?? []).slice(0, 3) as a (a)}<span class="badge">{accountName(a)}</span>{/each}
@@ -310,10 +323,12 @@
           </span>
         </td>
         <td class="end">
-          <span class="cell-actions">
-            <button type="button" class="btn-icon" aria-label="Edit {u.username}" title="Edit" onclick={() => { editingUser = u; userOpen = true; }}><Icon name="edit" size={14} /></button>
-            <button type="button" class="btn-icon danger" aria-label="Delete {u.username}" title={u.username === me?.username ? "You can't delete yourself" : 'Delete'} disabled={u.username === me?.username} onclick={() => deleteUser(u)}><Icon name="trash" size={14} /></button>
-          </span>
+          {#if canManageUser(u)}
+            <span class="cell-actions">
+              <button type="button" class="btn-icon" aria-label="Edit {u.username}" title="Edit" onclick={() => { editingUser = u; userOpen = true; }}><Icon name="edit" size={14} /></button>
+              <button type="button" class="btn-icon danger" aria-label="Delete {u.username}" title={u.username === me?.username ? "You can't delete yourself" : 'Delete'} disabled={u.username === me?.username} onclick={() => deleteUser(u)}><Icon name="trash" size={14} /></button>
+            </span>
+          {/if}
         </td>
       {/snippet}
       {#snippet empty()}
@@ -323,8 +338,8 @@
   {/if}
 {/if}
 
-<UserModal bind:open={userOpen} user={editingUser} {accounts} {users} onsaved={load} />
-<MembershipModal bind:open={memOpen} {users} {accounts} preset={memPreset} onsaved={load} />
+<UserModal bind:open={userOpen} user={editingUser} accounts={manageableAccounts} {users} onsaved={load} />
+<MembershipModal bind:open={memOpen} {users} accounts={manageableAccounts} preset={memPreset} onsaved={load} />
 
 <Modal bind:open={accountOpen} title="Create account" description="A new isolated account with its own default KMS key." size="sm">
   <form id="acct-form" onsubmit={createAccount} novalidate>

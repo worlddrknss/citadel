@@ -5,6 +5,7 @@
   import Icon from '$lib/components/Icon.svelte';
   import { api, errorMessage, type Account } from '$lib/api';
   import { toast } from '$lib/stores/toast.svelte';
+  import { session } from '$lib/stores/session.svelte';
   import { ROLES, type RoleName, type UserRow } from './api';
 
   let {
@@ -20,6 +21,7 @@
   let role = $state<RoleName>('viewer');
   let password = $state('');
   let initialAccount = $state('');
+  let platformAdmin = $state(false);
   let touched = $state(false);
   let busy = $state(false);
   let error = $state('');
@@ -31,11 +33,20 @@
         displayName = user?.displayName ?? '';
         role = (user?.role as RoleName) ?? 'viewer';
         password = '';
-        initialAccount = '';
+        // Account admins create people straight into their own account.
+        initialAccount = isPlatform ? '' : (session.me?.accountId ?? '');
+        platformAdmin = !!user?.platformAdmin;
         touched = false;
         error = '';
       });
   });
+
+  const isPlatform = $derived(session.platformAdmin);
+  const isSelf = $derived(!!user && user.username === session.me?.username);
+  // Only platform admins set a user's default role; account admins grant a
+  // role in their account (a membership) when creating, and change it on the
+  // Memberships tab. The server ignores the default role otherwise.
+  const showRole = $derived(isPlatform || !user);
 
   const usernameError = $derived(
     user ? '' : !/^[a-zA-Z0-9._@-]{2,64}$/.test(username.trim()) ? "Use 2–64 letters, numbers, '.', '_', '-' or '@'." : users.some((u) => u.username.toLowerCase() === username.trim().toLowerCase()) ? 'That username is taken.' : ''
@@ -55,7 +66,8 @@
         displayName: displayName.trim(),
         role,
         password: password || undefined,
-        accounts: !user && initialAccount ? [initialAccount] : undefined
+        accounts: !user && initialAccount ? [initialAccount] : undefined,
+        ...(isPlatform && !isSelf ? { platformAdmin } : {})
       });
       if (!user && initialAccount) await api.assignUserAccount(name, initialAccount, role);
       toast.success(user ? `Saved ${name}` : `Created ${name}`);
@@ -84,8 +96,9 @@
         <input id="u-dn" class="input" bind:value={displayName} autocomplete="off" placeholder="Ana López" />
       </div>
     </div>
-    <fieldset class="field">
-      <legend class="field-label">Default role</legend>
+    {#if showRole}
+    <fieldset class="field" disabled={isSelf}>
+      <legend class="field-label">{isPlatform ? 'Default role' : 'Role in this account'}</legend>
       <div class="roles">
         {#each ROLES as r (r.value)}
           <label class="choice" class:on={role === r.value}>
@@ -94,9 +107,20 @@
           </label>
         {/each}
       </div>
-      <span class="field-hint">Each account membership can override this on the Memberships tab.</span>
+      {#if isSelf}
+        <span class="field-hint">You can't change your own role.</span>
+      {:else}
+        <span class="field-hint">Each account membership can override this on the Memberships tab.</span>
+      {/if}
     </fieldset>
-    {#if !user && accounts.length}
+    {/if}
+    {#if isPlatform && !isSelf}
+      <label class="choice pa">
+        <input type="checkbox" bind:checked={platformAdmin} />
+        <span><span class="ctitle">Platform admin</span><span class="muted csub">Manages every account, org settings, the workload identity issuer and org-wide SSO.</span></span>
+      </label>
+    {/if}
+    {#if !user && accounts.length && isPlatform}
       <div class="field">
         <label class="field-label" for="u-acct">Add to account <span class="subtle">(optional)</span></label>
         <select id="u-acct" class="select" bind:value={initialAccount}>

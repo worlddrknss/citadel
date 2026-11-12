@@ -7,6 +7,7 @@
   import CopyButton from '$lib/components/CopyButton.svelte';
   import { errorMessage, type Account } from '$lib/api';
   import { toast } from '$lib/stores/toast.svelte';
+  import { session } from '$lib/stores/session.svelte';
   import { adminApi, ROLES, type RoleMapping, type RoleName, type SsoProvider } from './api';
 
   let {
@@ -26,6 +27,9 @@
   let mappings = $state<RoleMapping[]>([]);
   let defaultRole = $state<RoleName | 'none'>('none');
   let enabled = $state(true);
+  let emailDomains = $state('');
+  /** Set after a create: the server's redirect URI to register at the IdP. */
+  let created = $state<{ name: string; redirectUri: string } | null>(null);
   let touched = $state(false);
   let busy = $state(false);
   let error = $state('');
@@ -43,55 +47,68 @@
         mappings = (provider?.roleMappings ?? []).map((m) => ({ ...m }));
         defaultRole = provider?.defaultRole ?? 'none';
         enabled = provider?.enabled ?? false;
+        emailDomains = (provider?.allowedEmailDomains ?? []).join(' ');
+        created = null;
         touched = false;
         error = '';
       });
   });
 
   const scopeList = $derived(scopes.split(/[\s,]+/).filter(Boolean));
+  const domainList = $derived(emailDomains.split(/[\s,]+/).map((d) => d.trim().toLowerCase()).filter(Boolean));
+  // The provider grants its default role in its home account (the current
+  // account when creating). Account admins may only map roles there.
+  const homeAccount = $derived(provider?.accountId || session.me?.accountId || '');
+  const ruleAccounts = $derived(session.platformAdmin ? accounts : accounts.filter((a) => a.accountId === homeAccount));
+  const homeName = $derived(accounts.find((a) => a.accountId === homeAccount)?.name ?? homeAccount);
   const errs = $derived({
     name: name.trim() ? '' : 'Give the provider a name users will see on the sign-in button.',
-    issuer: /^https:\/\/[^\s/]+(\/\S*)?$/.test(issuer.trim()) ? '' : 'Enter the https:// issuer URL.',
+    issuer: /^https?:\/\/[^\s/?#]+([/][^\s?#]*)?$/.test(issuer.trim()) ? '' : 'Enter the issuer URL (https://…), exactly as your identity provider publishes it.',
     clientId: clientId.trim() ? '' : 'Enter the client ID from your identity provider.',
     clientSecret: replaceSecret && !clientSecret ? 'Enter the client secret.' : '',
     scopes: scopeList.includes('openid') ? '' : 'Scopes must include openid.',
     groupClaim: mappings.length && !groupClaim.trim() ? 'Required when you map groups to roles.' : '',
-    mappings: mappings.some((m) => !m.group.trim()) ? 'Every rule needs a group name.' : ''
+    mappings: mappings.some((m) => !m.group.trim()) ? 'Every rule needs a group name.' : '',
+    domains: domainList.every((d) => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(d)) ? '' : 'Enter domains like example.com, separated by spaces.'
   });
   const invalid = $derived(Object.values(errs).some(Boolean));
-  const callback = typeof location !== 'undefined' ? `${location.origin}/v1/sso/callback` : '/v1/sso/callback';
 
   function addRule() {
-    mappings = [...mappings, { group: '', accountId: accounts[0]?.accountId ?? '*', role: 'viewer' }];
+    mappings = [...mappings, { group: '', accountId: homeAccount || '*', role: 'viewer' }];
   }
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
     touched = true;
     if (invalid) return;
-    if (enabled && defaultRole === 'admin') {
-      error = 'The default role cannot be admin. Grant admin through a group mapping instead.';
-      return;
-    }
     busy = true;
     error = '';
     const body = {
       name: name.trim(),
-      issuer: issuer.trim().replace(/\/+$/, ''),
+      // Sent as typed: it must match the discovery document's issuer exactly,
+      // trailing slash included (Auth0's has one).
+      issuer: issuer.trim(),
       clientId: clientId.trim(),
       ...(replaceSecret ? { clientSecret } : {}),
       scopes: scopeList,
       groupClaim: groupClaim.trim(),
       roleMappings: mappings.map((m) => ({ ...m, group: m.group.trim() })),
       defaultRole,
+      allowedEmailDomains: domainList,
       enabled
     };
     try {
-      if (provider) await adminApi.updateSso(provider.id, body);
-      else await adminApi.createSso(body);
-      toast.success(provider ? `Saved ${body.name}` : `Added ${body.name}`);
       clientSecret = '';
-      open = false;
+      if (provider) {
+        await adminApi.updateSso(provider.id, body);
+        toast.success(`Saved ${body.name}`);
+        open = false;
+      } else {
+        // Keep the dialog open on the redirect URI the server will accept.
+        const res = await adminApi.createSso(body);
+        toast.success(`Added ${body.name}`);
+        created = { name: body.name, redirectUri: res.redirectUri };
+      }
       onsaved();
     } catch (err) {
       error = errorMessage(err, 'Could not save the provider.');
@@ -103,7 +120,20 @@
   const show = (k: keyof typeof errs) => (touched ? errs[k] : '');
 </script>
 
-<Modal bind:open title={provider ? `Edit ${provider.name}` : 'Add sign-in provider'} description="Users sign in to the console with your OpenID Connect identity provider." size="lg">
+<Modal bind:open title={created ? `${created.name} added` : provider ? `Edit ${provider.name}` : 'Add sign-in provider'} description="Users sign in to the console with your OpenID Connect identity provider." size="lg">
+  {#if created}
+    <div class="form">
+      <div class="field">
+        <span class="field-label">Redirect URI</span>
+        {#if created.redirectUri}
+          <div class="cb"><code class="mono" data-testid="sso-redirect-uri">{created.redirectUri}</code><CopyButton value={created.redirectUri} label="Copy redirect URI" /></div>
+          <span class="field-hint">Register this as an allowed redirect (callback) URL in your identity provider, then enable the provider.</span>
+        {:else}
+          <span class="field-hint">Set KMS_PUBLIC_URL on the server to get a redirect URI.</span>
+        {/if}
+      </div>
+    </div>
+  {:else}
   <form id="sso-form" class="form" onsubmit={submit} novalidate>
     <div class="field-row">
       <div class="field">
@@ -138,8 +168,14 @@
     </div>
     <div class="field">
       <span class="field-label">Redirect URI</span>
-      <div class="cb"><code class="mono">{provider?.redirectUri || callback}</code><CopyButton value={provider?.redirectUri || callback} label="Copy redirect URI" /></div>
-      <span class="field-hint">Register this as an allowed redirect (callback) URL in your identity provider.</span>
+      {#if provider?.redirectUri}
+        <div class="cb"><code class="mono">{provider.redirectUri}</code><CopyButton value={provider.redirectUri} label="Copy redirect URI" /></div>
+        <span class="field-hint">Register this as an allowed redirect (callback) URL in your identity provider.</span>
+      {:else if provider}
+        <span class="field-hint">Set KMS_PUBLIC_URL on the server to get a redirect URI.</span>
+      {:else}
+        <span class="field-hint">Shown after you add the provider: it includes the provider's ID.</span>
+      {/if}
     </div>
     <div class="field-row">
       <div class="field">
@@ -169,8 +205,9 @@
               <input id="rg-{i}" class="input mono" bind:value={m.group} placeholder="platform-admins" autocomplete="off" spellcheck="false" aria-invalid={touched && !m.group.trim()} />
               <label class="sr-only" for="ra-{i}">Account for rule {i + 1}</label>
               <select id="ra-{i}" class="select" bind:value={m.accountId}>
-                <option value="*">All accounts</option>
-                {#each accounts as a (a.accountId)}<option value={a.accountId}>{a.name}</option>{/each}
+                {#if session.platformAdmin}<option value="*">All accounts</option>{/if}
+                {#each ruleAccounts as a (a.accountId)}<option value={a.accountId}>{a.name}</option>{/each}
+                {#if !ruleAccounts.some((a) => a.accountId === m.accountId) && !(session.platformAdmin && m.accountId === '*')}<option value={m.accountId}>{m.accountId === '*' ? 'All accounts' : m.accountId}</option>{/if}
               </select>
               <label class="sr-only" for="rr-{i}">Role for rule {i + 1}</label>
               <select id="rr-{i}" class="select" bind:value={m.role}>
@@ -190,10 +227,15 @@
         <label class="field-label" for="sso-def">Default role</label>
         <select id="sso-def" class="select" bind:value={defaultRole}>
           <option value="none">No access (must match a rule)</option>
-          <option value="viewer">Viewer in the home account</option>
-          <option value="editor">Editor in the home account</option>
+          <option value="viewer">Viewer in {homeName}</option>
+          <option value="editor">Editor in {homeName}</option>
+          <option value="admin">Admin in {homeName}</option>
         </select>
-        <span class="field-hint">For users who match no rule.</span>
+        {#if defaultRole === 'admin'}
+          <span class="field-hint warn">Everyone your identity provider lets in becomes an admin. Prefer a group rule.</span>
+        {:else}
+          <span class="field-hint">For users who match no rule. The home account is {homeName}.</span>
+        {/if}
       </div>
       <label class="toggle">
         <input type="checkbox" role="switch" bind:checked={enabled} />
@@ -201,13 +243,24 @@
       </label>
     </div>
 
+    <div class="field">
+      <label class="field-label" for="sso-domains">Allowed email domains <span class="subtle">(optional)</span></label>
+      <input id="sso-domains" class="input mono" bind:value={emailDomains} placeholder="example.com" autocomplete="off" spellcheck="false" aria-invalid={!!show('domains')} />
+      {#if show('domains')}<span class="field-error">{show('domains')}</span>{:else}<span class="field-hint">Space-separated. Only users whose verified email is in one of these domains can sign in. Empty allows any.</span>{/if}
+    </div>
+
     {#if error}
       <div class="callout callout-danger" role="alert"><Icon name="alert-circle" size={16} /><span>{error}</span></div>
     {/if}
   </form>
+  {/if}
   {#snippet footer()}
-    <button type="button" class="btn btn-ghost" onclick={() => (open = false)}>Cancel</button>
-    <button type="submit" form="sso-form" class="btn btn-primary" disabled={busy}>{busy ? 'Saving…' : provider ? 'Save changes' : 'Add provider'}</button>
+    {#if created}
+      <button type="button" class="btn btn-primary" onclick={() => (open = false)}>Done</button>
+    {:else}
+      <button type="button" class="btn btn-ghost" onclick={() => (open = false)}>Cancel</button>
+      <button type="submit" form="sso-form" class="btn btn-primary" disabled={busy}>{busy ? 'Saving…' : provider ? 'Save changes' : 'Add provider'}</button>
+    {/if}
   {/snippet}
 </Modal>
 
@@ -277,6 +330,9 @@
     align-items: flex-start;
     padding-top: 22px;
     cursor: pointer;
+  }
+.warn {
+    color: var(--warning);
   }
   .toggle > span {
     display: flex;
