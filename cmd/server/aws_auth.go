@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/arn"
 )
 
 // AWS API authentication.
@@ -35,9 +37,9 @@ type awsCaller struct {
 // PrincipalARN renders the caller as an IAM principal for policy evaluation.
 func (c awsCaller) PrincipalARN() string {
 	if c.Temporary {
-		return arnFor("sts", "", c.AccountID, "assumed-role/"+c.Username)
+		return arn.Build("sts", "", c.AccountID, "assumed-role/"+c.Username)
 	}
-	return arnFor("iam", "", c.AccountID, "user/"+c.Username)
+	return arn.Build("iam", "", c.AccountID, "user/"+c.Username)
 }
 
 type awsCallerCtxKey struct{}

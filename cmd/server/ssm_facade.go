@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/worlddrknss/citadel/internal/arn"
 )
 
 // AWS Systems Manager (SSM) Parameter Store compatibility facade. These
@@ -19,7 +21,7 @@ func (s *server) parameterARN(ctx context.Context, name string) string {
 	if a, ok := callerAccountFromContext(ctx); ok {
 		acct = a
 	}
-	return arnFor("ssm", region, acct, "parameter"+name)
+	return arn.Build("ssm", region, acct, "parameter"+name)
 }
 
 // ssmParamStore resolves the parameter persistence layer or writes an AWS error.

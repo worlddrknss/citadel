@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/arn"
 )
 
 // Native /v1 IAM endpoints backing the web console's Identity & Access page.
@@ -83,7 +85,7 @@ func (s *server) handleV1CreateOIDCProvider(w http.ResponseWriter, r *http.Reque
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "url must be a valid https issuer URL")
 		return
 	}
-	providerARN := arnFor("iam", "", sess.AccountID, "oidc-provider/"+host)
+	providerARN := arn.Build("iam", "", sess.AccountID, "oidc-provider/"+host)
 	clientIDs := trimList(req.ClientIds)
 	if len(clientIDs) == 0 {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "at least one client ID (audience) is required")
@@ -178,7 +180,7 @@ func (s *server) handleV1CreateRole(w http.ResponseWriter, r *http.Request) {
 		maxSecs = 43200
 	}
 	role := iamRole{
-		RoleARN:        arnFor("iam", "", sess.AccountID, "role/"+roleName),
+		RoleARN:        arn.Build("iam", "", sess.AccountID, "role/"+roleName),
 		AccountID:      sess.AccountID,
 		RoleName:       roleName,
 		Description:    strings.TrimSpace(req.Description),

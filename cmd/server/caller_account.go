@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+
+	"github.com/worlddrknss/citadel/internal/arn"
 )
 
 // callerAccountCtxKey is the private context key under which the authenticated
@@ -61,14 +63,14 @@ func (s *dbStore) accountForContext(ctx context.Context) string {
 // falling back to the deployment account.
 func (s *dbStore) keyARNForCtx(ctx context.Context, id string) string {
 	r, _ := s.DeploymentIdentity()
-	return arnFor("kms", r, s.accountForContext(ctx), "key/"+id)
+	return arn.Build("kms", r, s.accountForContext(ctx), "key/"+id)
 }
 
 // secretARNForCtx builds a Secrets Manager ARN using the caller's account when
 // available, falling back to the deployment account.
 func (s *dbStore) secretARNForCtx(ctx context.Context, name string) string {
 	r, _ := s.DeploymentIdentity()
-	return arnFor("secretsmanager", r, s.accountForContext(ctx), "secret:"+name)
+	return arn.Build("secretsmanager", r, s.accountForContext(ctx), "secret:"+name)
 }
 
 // accountForContext returns the caller's account ID when present, otherwise the
@@ -86,5 +88,5 @@ func (s *inMemoryStore) accountForContext(ctx context.Context) string {
 // the caller's account when available, falling back to the deployment account.
 func (s *inMemoryStore) secretARNForCtx(ctx context.Context, name string) string {
 	r, _ := s.DeploymentIdentity()
-	return arnFor("secretsmanager", r, s.accountForContext(ctx), "secret:"+name)
+	return arn.Build("secretsmanager", r, s.accountForContext(ctx), "secret:"+name)
 }

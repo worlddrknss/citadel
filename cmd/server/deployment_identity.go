@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+
+	"github.com/worlddrknss/citadel/internal/arn"
 )
 
 const (
@@ -25,8 +27,8 @@ func resolveDeploymentIdentity(ctx context.Context, db *sql.DB, cfg config) (str
 	if err != nil {
 		return "", "", err
 	}
-	if !isValidRegion(region) {
-		region = effectiveRegion(cfg.awsRegion)
+	if !arn.IsValidRegion(region) {
+		region = arn.EffectiveRegion(cfg.awsRegion)
 		if err := putSetting(ctx, db, settingAWSRegion, region); err != nil {
 			return "", "", err
 		}
@@ -36,11 +38,11 @@ func resolveDeploymentIdentity(ctx context.Context, db *sql.DB, cfg config) (str
 	if err != nil {
 		return "", "", err
 	}
-	if !isValidAccountID(accountID) {
-		if isValidAccountID(cfg.awsAccountID) {
+	if !arn.IsValidAccountID(accountID) {
+		if arn.IsValidAccountID(cfg.awsAccountID) {
 			accountID = cfg.awsAccountID
 		} else {
-			accountID = generateAccountID()
+			accountID = arn.GenerateAccountID()
 		}
 		if err := putSetting(ctx, db, settingAWSAccountID, accountID); err != nil {
 			return "", "", err
@@ -63,13 +65,13 @@ func (s *dbStore) migrateResourceARNs(ctx context.Context) error {
 		return nil
 	}
 
-	oldRegion, oldAccount := defaultAWSRegion, placeholderAccountID
+	oldRegion, oldAccount := arn.DefaultRegion, arn.PlaceholderAccountID
 	if parts := strings.SplitN(applied, "|", 2); len(parts) == 2 && parts[1] != "" {
 		oldRegion, oldAccount = parts[0], parts[1]
 	} else {
 		// Records created before deployment identity tracking used the historical
 		// placeholder region/account.
-		oldRegion, oldAccount = "local", placeholderAccountID
+		oldRegion, oldAccount = "local", arn.PlaceholderAccountID
 	}
 
 	oldSeg := ":" + oldRegion + ":" + oldAccount + ":"

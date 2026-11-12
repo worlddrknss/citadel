@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/arn"
 )
 
 // AWS-compatible Security Token Service (STS).
@@ -84,7 +86,7 @@ func isSTSRequest(r *http.Request) bool {
 func (s *server) resolveSignedSTSCaller(r *http.Request, bodyHash string) (accountID, principalARN string, err error) {
 	if s.cfg.insecureDev && strings.TrimSpace(r.Header.Get("Authorization")) == "" {
 		_, acct := s.store.DeploymentIdentity()
-		return acct, arnFor("iam", "", acct, "user/local"), nil
+		return acct, arn.Build("iam", "", acct, "user/local"), nil
 	}
 	caller, err := s.verifyAWSRequest(r, bodyHash)
 	if err != nil {
@@ -240,7 +242,7 @@ func (s *server) mintTempCredentials(ctx context.Context, role iamRole, sessionN
 		return stsCredentials{}, "", "", err
 	}
 
-	assumedARN := arnFor("sts", "", role.AccountID, "assumed-role/"+role.RoleName+"/"+sessionName)
+	assumedARN := arn.Build("sts", "", role.AccountID, "assumed-role/"+role.RoleName+"/"+sessionName)
 	assumedUserID := roleUniqueID(role.RoleName) + ":" + sessionName
 	creds := stsCredentials{
 		AccessKeyID:     keyID,

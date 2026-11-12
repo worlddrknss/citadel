@@ -8,6 +8,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/arn"
 )
 
 // managedDefaultAlias is the per-account alias that always resolves to that
@@ -44,7 +46,7 @@ func (s *dbStore) keyManaged(ctx context.Context, keyID string) (bool, error) {
 // pre-existing deployment default the root account's managed default on upgrade.
 func (s *dbStore) EnsureAccountDefaultKey(ctx context.Context, accountID string) (kmsKey, error) {
 	accountID = strings.TrimSpace(accountID)
-	if !isValidAccountID(accountID) {
+	if !arn.IsValidAccountID(accountID) {
 		return kmsKey{}, fmt.Errorf("invalid account id %q", accountID)
 	}
 
@@ -113,7 +115,7 @@ func (s *dbStore) EnsureAccountDefaultKey(ctx context.Context, accountID string)
 		if werr != nil {
 			return kmsKey{}, werr
 		}
-		arn := arnFor("kms", region, accountID, "key/"+keyID)
+		arn := arn.Build("kms", region, accountID, "key/"+keyID)
 		if _, e := tx.ExecContext(ctx,
 			`INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, managed, deletion_date, created_at, account_id)
 			 VALUES ($1, $2, '', $3, $4, '', $5, $6, $7, TRUE, TRUE, NULL, $8, $9)`,
@@ -169,7 +171,7 @@ func ensureManagedDefaultKeys(ctx context.Context, store keyStore) error {
 			rows.Close()
 			return scanErr
 		}
-		if id = strings.TrimSpace(id); isValidAccountID(id) {
+		if id = strings.TrimSpace(id); arn.IsValidAccountID(id) {
 			ids[id] = struct{}{}
 		}
 	}
@@ -181,7 +183,7 @@ func ensureManagedDefaultKeys(ctx context.Context, store keyStore) error {
 
 	// Always include the deployment/root account so single-tenant deployments
 	// get a managed default even before any ui_accounts rows exist.
-	if _, dep := db.DeploymentIdentity(); isValidAccountID(dep) && dep != placeholderAccountID {
+	if _, dep := db.DeploymentIdentity(); arn.IsValidAccountID(dep) && dep != arn.PlaceholderAccountID {
 		ids[dep] = struct{}{}
 	}
 

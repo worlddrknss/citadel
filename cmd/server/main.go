@@ -26,6 +26,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/worlddrknss/citadel/internal/arn"
+
 	_ "github.com/lib/pq"
 )
 
@@ -936,7 +938,7 @@ func loadConfig() (config, error) {
 	cfg.tlsCertFile = os.Getenv("KMS_TLS_CERT_FILE")
 	cfg.tlsKeyFile = os.Getenv("KMS_TLS_KEY_FILE")
 
-	cfg.awsRegion = strings.TrimSpace(envOrDefault("KMS_AWS_REGION", defaultAWSRegion))
+	cfg.awsRegion = strings.TrimSpace(envOrDefault("KMS_AWS_REGION", arn.DefaultRegion))
 	cfg.awsAccountID = strings.TrimSpace(os.Getenv("KMS_AWS_ACCOUNT_ID"))
 
 	if hmacKeyB64 := os.Getenv("KMS_AUDIT_HMAC_KEY_B64"); hmacKeyB64 != "" {
@@ -1003,14 +1005,14 @@ func buildStore(cfg config) (keyStore, func(), error) {
 		if legacyKeyID == "" {
 			legacyKeyID = deriveDeterministicLegacyKeyID(cfg.legacyMasterKey)
 		}
-		region := effectiveRegion(cfg.awsRegion)
+		region := arn.EffectiveRegion(cfg.awsRegion)
 		accountID := cfg.awsAccountID
-		if !isValidAccountID(accountID) {
-			accountID = generateAccountID()
+		if !arn.IsValidAccountID(accountID) {
+			accountID = arn.GenerateAccountID()
 		}
 		k := kmsKey{
 			ID:           legacyKeyID,
-			ARN:          envOrDefault("KMS_KEY_ARN", arnFor("kms", region, accountID, "key/"+legacyKeyID)),
+			ARN:          envOrDefault("KMS_KEY_ARN", arn.Build("kms", region, accountID, "key/"+legacyKeyID)),
 			MasterKeyRaw: cfg.legacyMasterKey,
 			Description:  "go-kms key",
 			CreatedAt:    time.Now().UTC(),
@@ -1640,7 +1642,7 @@ func maybeBootstrapFromLegacy(ctx context.Context, cfg config, store keyStore) e
 // deployment identity.
 func bootstrapKeyARN(store keyStore, keyID string) string {
 	region, accountID := store.DeploymentIdentity()
-	return arnFor("kms", region, accountID, "key/"+keyID)
+	return arn.Build("kms", region, accountID, "key/"+keyID)
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {

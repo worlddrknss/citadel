@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/worlddrknss/citadel/internal/arn"
 )
 
 var errUIAccountNotFound = errors.New("ui account not found")
@@ -29,7 +31,7 @@ func (s *dbStore) CreateUIAccount(ctx context.Context, name string) (string, err
 	if name == "" {
 		return "", errors.New("account name is required")
 	}
-	accountID := generateAccountID()
+	accountID := arn.GenerateAccountID()
 	// Ensure uniqueness (retry if collision, though very unlikely)
 	for {
 		var exists int
@@ -40,7 +42,7 @@ func (s *dbStore) CreateUIAccount(ctx context.Context, name string) (string, err
 		if exists == 0 {
 			break
 		}
-		accountID = generateAccountID()
+		accountID = arn.GenerateAccountID()
 	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO ui_accounts (account_id, account, created_at, updated_at) VALUES ($1, $2, NOW(), NOW())`,
@@ -116,7 +118,7 @@ func (s *dbStore) UpsertUIAccount(ctx context.Context, account string) error {
 		`INSERT INTO ui_accounts (account_id, account, created_at, updated_at)
 VALUES ($1, $2, NOW(), NOW())
 ON CONFLICT (account) DO NOTHING`,
-		generateAccountID(), account,
+		arn.GenerateAccountID(), account,
 	)
 	return err
 }
@@ -141,7 +143,7 @@ func (s *inMemoryStore) CreateUIAccount(_ context.Context, name string) (string,
 			}
 		}
 	}
-	accountID := generateAccountID()
+	accountID := arn.GenerateAccountID()
 	// In-memory: just track the existence; real accounts are in the in-memory accounts map.
 	// For now, we'll return the generated ID.
 	s.uiAccounts[accountID] = struct{}{}
