@@ -10,10 +10,9 @@ import (
 )
 
 // webDistFS holds the compiled Svelte (SvelteKit static adapter) control plane.
-// The build output lives in cmd/server/webdist and is embedded into the binary
-// so Citadel ships as a single self-contained executable. The directory is
-// committed (regenerate via scripts/build-web.sh) so `go build` never requires
-// Node to be installed.
+// The build output is copied into cmd/server/webdist (by scripts/build-web.sh
+// or the Dockerfile) and embedded so Citadel ships as one executable. It is not
+// committed: a plain `go build` without it serves a "console not built" page.
 //
 //go:embed all:webdist
 var webDistFS embed.FS
@@ -52,7 +51,7 @@ func (s *server) handleApp(w http.ResponseWriter, r *http.Request) {
 		reqPath = "index.html"
 		data, err = fs.ReadFile(dist, reqPath)
 		if err != nil {
-			http.Error(w, "control plane not built", http.StatusInternalServerError)
+			http.Error(w, "web console not built: run scripts/build-web.sh before go build", http.StatusServiceUnavailable)
 			return
 		}
 	}

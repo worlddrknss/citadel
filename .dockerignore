@@ -1,0 +1,7 @@
+.git
+server
+web/node_modules
+web/.svelte-kit
+web/build
+cmd/server/webdist/*
+!cmd/server/webdist/.keep

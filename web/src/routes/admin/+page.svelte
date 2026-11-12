@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { api, ApiError, type Me, type AdminUser, type Account } from '$lib/api';
 
-  let me: Me | null = $state(null);
+  let me = $state<Me | null>(null);
   let users: AdminUser[] = $state([]);
   let accounts: Account[] = $state([]);
   let flash = $state('');
