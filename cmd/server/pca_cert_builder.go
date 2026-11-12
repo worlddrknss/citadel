@@ -17,6 +17,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // kmsSigner implements crypto.Signer interface, delegating to internal KMS signing
@@ -29,7 +31,7 @@ type kmsSigner struct {
 }
 
 // newKMSSigner creates a crypto.Signer that delegates to KMS
-func newKMSSigner(ctx context.Context, store keyStore, key kmsKey, algorithm string) (*kmsSigner, error) {
+func newKMSSigner(ctx context.Context, store store.Store, key store.KMSKey, algorithm string) (*kmsSigner, error) {
 	// PublicKeyRaw is already DER-encoded bytes
 	pubKey, err := x509.ParsePKIXPublicKey(key.PublicKeyRaw)
 	if err != nil {
@@ -96,7 +98,7 @@ func parseCSR(csrPEM []byte) (*x509.CertificateRequest, error) {
 
 // buildRootCA creates and self-signs a root CA certificate
 // The CA must have a SIGN_VERIFY KMS key; we use the public key directly
-func buildRootCA(ca pcaCertificateAuthority, kmsKey kmsKey) (certPEM, certDER []byte, err error) {
+func buildRootCA(ca store.PCACertificateAuthority, kmsKey store.KMSKey) (certPEM, certDER []byte, err error) {
 	// PublicKeyRaw is already DER-encoded bytes
 	pubKey, err := x509.ParsePKIXPublicKey(kmsKey.PublicKeyRaw)
 	if err != nil {
@@ -156,7 +158,7 @@ func buildRootCA(ca pcaCertificateAuthority, kmsKey kmsKey) (certPEM, certDER []
 }
 
 // buildRootCAWithSigner creates a self-signed root CA certificate using the provided signer
-func buildRootCAWithSigner(ca pcaCertificateAuthority, kmsKey kmsKey, signer crypto.Signer) (certPEM, certDER []byte, err error) {
+func buildRootCAWithSigner(ca store.PCACertificateAuthority, kmsKey store.KMSKey, signer crypto.Signer) (certPEM, certDER []byte, err error) {
 	// PublicKeyRaw is already DER-encoded bytes
 	pubKey, err := x509.ParsePKIXPublicKey(kmsKey.PublicKeyRaw)
 	if err != nil {
@@ -213,7 +215,7 @@ func buildRootCAWithSigner(ca pcaCertificateAuthority, kmsKey kmsKey, signer cry
 }
 
 // buildLeafCertificate creates a leaf certificate from a CSR, signed by the CA
-func buildLeafCertificate(csr *x509.CertificateRequest, ca pcaCertificateAuthority, validity validitySpec, kmsKey kmsKey) (certPEM []byte, err error) {
+func buildLeafCertificate(csr *x509.CertificateRequest, ca store.PCACertificateAuthority, validity validitySpec, kmsKey store.KMSKey) (certPEM []byte, err error) {
 	// Validate CSR subject
 	if csr.Subject.String() == "" {
 		return nil, fmt.Errorf("CSR must have subject")
@@ -290,7 +292,7 @@ type leafOverrides struct {
 }
 
 // buildLeafCertificateWithSigner creates a leaf certificate from a CSR, signed by the provided CA signer
-func buildLeafCertificateWithSigner(csr *x509.CertificateRequest, ca pcaCertificateAuthority, validity validitySpec, caSigner crypto.Signer, caPubKey crypto.PublicKey, signingAlgorithm string, overrides *leafOverrides) (certPEM, certDER []byte, err error) {
+func buildLeafCertificateWithSigner(csr *x509.CertificateRequest, ca store.PCACertificateAuthority, validity validitySpec, caSigner crypto.Signer, caPubKey crypto.PublicKey, signingAlgorithm string, overrides *leafOverrides) (certPEM, certDER []byte, err error) {
 	subject := csr.Subject
 	if overrides != nil && overrides.CommonName != "" {
 		subject.CommonName = overrides.CommonName

@@ -3,19 +3,21 @@ package main
 import (
 	"context"
 	"testing"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // TestHierarchyEmptyFoldersAndProjects verifies the P3 structure store: empty
 // projects, environments, and folders are persisted independently of secret
 // values and surface through the secrets service, scoped per account.
 func TestHierarchyEmptyFoldersAndProjects(t *testing.T) {
-	store := newTenantTestStore()
-	svc := newSecretsService(store)
+	st := newTenantTestStore()
+	svc := newSecretsService(st)
 
 	const acctA = "111111111111"
 	const acctB = "222222222222"
-	ctxA := withCallerAccount(context.Background(), acctA)
-	ctxB := withCallerAccount(context.Background(), acctB)
+	ctxA := store.WithCallerAccount(context.Background(), acctA)
+	ctxB := store.WithCallerAccount(context.Background(), acctB)
 
 	// Register an empty project + environment + nested folder for account A.
 	if err := svc.CreateProject(ctxA, "payments", "Payments"); err != nil {

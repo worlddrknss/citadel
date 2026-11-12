@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"testing"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // A folder and an item share one namespace: "payments/prod/db/PASSWORD" is an
@@ -19,9 +21,9 @@ import (
 // Ready=True.
 
 func TestListFolderSurfacesShadowingObject(t *testing.T) {
-	store := newTenantTestStore()
-	svc := newSecretsService(store)
-	ctx := withCallerAccount(context.Background(), "111111111111")
+	st := newTenantTestStore()
+	svc := newSecretsService(st)
+	ctx := store.WithCallerAccount(context.Background(), "111111111111")
 
 	if _, err := svc.PutItem(ctx, itemCoord{Project: "payments", Env: "prod", Key: "DATABASE_URL"}, "postgres://", ""); err != nil {
 		t.Fatalf("PutItem: %v", err)
@@ -40,7 +42,7 @@ func TestListFolderSurfacesShadowingObject(t *testing.T) {
 	}
 
 	// Create the object at the folder's own name, the way the legacy blob exists.
-	if _, _, err := store.CreateSecret(ctx, createSecretRequest{
+	if _, _, err := st.CreateSecret(ctx, store.CreateSecretRequest{
 		Name:         "payments/prod",
 		SecretString: `{"DATABASE_URL":"stale"}`,
 	}); err != nil {
@@ -66,9 +68,9 @@ func TestListFolderSurfacesShadowingObject(t *testing.T) {
 }
 
 func TestNameShadowsFolderRejectsFolderNames(t *testing.T) {
-	store := newTenantTestStore()
-	svc := newSecretsService(store)
-	ctx := withCallerAccount(context.Background(), "111111111111")
+	st := newTenantTestStore()
+	svc := newSecretsService(st)
+	ctx := store.WithCallerAccount(context.Background(), "111111111111")
 
 	if _, err := svc.PutItem(ctx, itemCoord{Project: "payments", Env: "prod", Folder: []string{"db"}, Key: "PASSWORD"}, "s3cr3t", ""); err != nil {
 		t.Fatalf("PutItem: %v", err)
@@ -104,9 +106,9 @@ func TestNameShadowsFolderRejectsFolderNames(t *testing.T) {
 // The projection is only served when no stored secret answers to the name, so a
 // shadowing object silently freezes the folder. This is the failure d76riders hit.
 func TestShadowingObjectHidesTheLiveProjection(t *testing.T) {
-	store := newTenantTestStore()
-	svc := newSecretsService(store)
-	ctx := withCallerAccount(context.Background(), "111111111111")
+	st := newTenantTestStore()
+	svc := newSecretsService(st)
+	ctx := store.WithCallerAccount(context.Background(), "111111111111")
 
 	if _, err := svc.PutItem(ctx, itemCoord{Project: "payments", Env: "prod", Key: "DATABASE_URL"}, "postgres://", ""); err != nil {
 		t.Fatalf("PutItem: %v", err)
@@ -124,7 +126,7 @@ func TestShadowingObjectHidesTheLiveProjection(t *testing.T) {
 	}
 
 	// DeleteShadowing must clear the object that no item coordinate can name.
-	if _, _, err := store.CreateSecret(ctx, createSecretRequest{
+	if _, _, err := st.CreateSecret(ctx, store.CreateSecretRequest{
 		Name:         "payments/prod",
 		SecretString: `{"DATABASE_URL":"stale"}`,
 	}); err != nil {

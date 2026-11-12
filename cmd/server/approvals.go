@@ -6,6 +6,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // Approval workflow scaffolding (PLAN.md §6 P8).
@@ -55,7 +57,7 @@ func newApprovalRegistry() *approvalRegistry {
 }
 
 func accountForApproval(ctx context.Context) string {
-	if a, ok := callerAccountFromContext(ctx); ok {
+	if a, ok := store.CallerAccountFromContext(ctx); ok {
 		return a
 	}
 	return ""

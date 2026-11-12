@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // Certificate-authority business logic shared by the native Citadel /v1
@@ -37,16 +38,16 @@ func (s *server) adminCreateCA(r *http.Request) (string, error) {
 	keySpec := ""
 	switch keyAlgorithm {
 	case "", "RSA_2048":
-		keySpec = keySpecRSA2048
+		keySpec = store.KeySpecRSA2048
 		keyAlgorithm = "RSA_2048"
 	case "RSA_3072":
-		keySpec = keySpecRSA3072
+		keySpec = store.KeySpecRSA3072
 	case "RSA_4096":
-		keySpec = keySpecRSA4096
+		keySpec = store.KeySpecRSA4096
 	case "EC_prime256v1":
-		keySpec = keySpecECCP256
+		keySpec = store.KeySpecECCP256
 	case "EC_secp384r1":
-		keySpec = keySpecECCP384
+		keySpec = store.KeySpecECCP384
 	default:
 		return "", fmt.Errorf("unsupported key algorithm")
 	}
@@ -61,14 +62,14 @@ func (s *server) adminCreateCA(r *http.Request) (string, error) {
 		}
 	}
 
-	signingKey, err := s.store.CreateKey(r.Context(), "Private CA key", keyUsageSignVerify, keySpec)
+	signingKey, err := s.store.CreateKey(r.Context(), "Private CA key", store.KeyUsageSignVerify, keySpec)
 	if err != nil {
 		return "", err
 	}
 
 	caID := cryptoutil.RandomHex(12)
 	caARN := s.serverARN("acm-pca", "certificate-authority/"+caID)
-	ca := pcaCertificateAuthority{
+	ca := store.PCACertificateAuthority{
 		CAID:      caID,
 		ARN:       caARN,
 		Type:      caType,
@@ -186,7 +187,7 @@ func (s *server) adminIssueCert(r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	cert := pcaCertificate{
+	cert := store.PCACertificate{
 		CertID:    cryptoutil.RandomHex(12),
 		CAID:      ca.CAID,
 		Serial:    parsedCert.SerialNumber.String(),
@@ -288,7 +289,7 @@ func (s *server) adminImportCA(r *http.Request) (string, error) {
 		caType = "ROOT"
 	}
 	caID := cryptoutil.RandomHex(12)
-	ca := pcaCertificateAuthority{
+	ca := store.PCACertificateAuthority{
 		CAID:        caID,
 		ARN:         s.serverARN("acm-pca", "certificate-authority/"+caID),
 		Type:        caType,
@@ -371,7 +372,7 @@ func (s *server) adminRenewCert(r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	cert := pcaCertificate{
+	cert := store.PCACertificate{
 		CertID:    cryptoutil.RandomHex(12),
 		CAID:      ca.CAID,
 		Serial:    parsedCert.SerialNumber.String(),
@@ -388,17 +389,17 @@ func (s *server) adminRenewCert(r *http.Request) error {
 }
 
 // findCAByID resolves a certificate authority by its CA ID.
-func (s *server) findCAByID(ctx context.Context, caID string) (pcaCertificateAuthority, error) {
+func (s *server) findCAByID(ctx context.Context, caID string) (store.PCACertificateAuthority, error) {
 	cas, err := s.store.ListCertificateAuthorities(ctx)
 	if err != nil {
-		return pcaCertificateAuthority{}, err
+		return store.PCACertificateAuthority{}, err
 	}
 	for _, c := range cas {
 		if c.CAID == caID {
 			return c, nil
 		}
 	}
-	return pcaCertificateAuthority{}, fmt.Errorf("issuing certificate authority not found")
+	return store.PCACertificateAuthority{}, fmt.Errorf("issuing certificate authority not found")
 }
 
 func (s *server) adminRevokeCert(r *http.Request) error {

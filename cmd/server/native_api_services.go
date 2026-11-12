@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // Native read-only /v1 endpoints that back the Svelte parity screens for KMS,
@@ -87,7 +89,7 @@ func (s *server) handleV1ListCertificates(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		// Stores without certificate support (e.g. the in-memory dev store)
 		// simply have no certificates to show rather than erroring the screen.
-		if errors.Is(err, errUnsupported) {
+		if errors.Is(err, store.ErrUnsupported) {
 			writeNativeJSON(w, http.StatusOK, map[string]any{"certificates": out})
 			return
 		}

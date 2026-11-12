@@ -3,14 +3,16 @@ package main
 import (
 	"context"
 	"testing"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // TestSecretReferenceResolution verifies P8 ${KEY} and ${/abs/path/KEY}
 // expansion at reveal time, including a nested reference.
 func TestSecretReferenceResolution(t *testing.T) {
-	store := newTenantTestStore()
-	svc := newSecretsService(store)
-	ctx := withCallerAccount(context.Background(), "111111111111")
+	st := newTenantTestStore()
+	svc := newSecretsService(st)
+	ctx := store.WithCallerAccount(context.Background(), "111111111111")
 
 	put := func(folder []string, key, val string) {
 		if _, err := svc.PutItem(ctx, itemCoord{Project: "app", Env: "prod", Folder: folder, Key: key}, val, ""); err != nil {
@@ -54,9 +56,9 @@ func TestSecretReferenceResolution(t *testing.T) {
 // TestApprovalWorkflow verifies the P8 change-request lifecycle: a pending
 // request does not change the value until approved, and approval applies it.
 func TestApprovalWorkflow(t *testing.T) {
-	store := newTenantTestStore()
-	svc := newSecretsService(store)
-	ctx := withCallerAccount(context.Background(), "111111111111")
+	st := newTenantTestStore()
+	svc := newSecretsService(st)
+	ctx := store.WithCallerAccount(context.Background(), "111111111111")
 	coord := itemCoord{Project: "app", Env: "prod", Key: "API_KEY"}
 
 	if _, err := svc.PutItem(ctx, coord, "old", ""); err != nil {
@@ -98,7 +100,7 @@ func TestApprovalWorkflow(t *testing.T) {
 	}
 
 	// Another account cannot see or decide this request.
-	otherCtx := withCallerAccount(context.Background(), "222222222222")
+	otherCtx := store.WithCallerAccount(context.Background(), "222222222222")
 	if reqs := svc.ListChangeRequests(otherCtx); len(reqs) != 0 {
 		t.Fatalf("cross-account leak: %+v", reqs)
 	}

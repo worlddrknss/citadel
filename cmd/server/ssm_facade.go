@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/worlddrknss/citadel/internal/arn"
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // AWS Systems Manager (SSM) Parameter Store compatibility facade. These
@@ -18,14 +19,14 @@ import (
 
 func (s *server) parameterARN(ctx context.Context, name string) string {
 	region, acct := s.store.DeploymentIdentity()
-	if a, ok := callerAccountFromContext(ctx); ok {
+	if a, ok := store.CallerAccountFromContext(ctx); ok {
 		acct = a
 	}
 	return arn.Build("ssm", region, acct, "parameter"+name)
 }
 
 // ssmParamStore resolves the parameter persistence layer or writes an AWS error.
-func (s *server) ssmParamStore(w http.ResponseWriter) (parameterStore, bool) {
+func (s *server) ssmParamStore(w http.ResponseWriter) (store.ParameterStore, bool) {
 	ps, ok := s.paramStore()
 	if !ok {
 		writeAWSJSONError(w, http.StatusInternalServerError, "InternalServerError", "parameter store is not available")
@@ -53,29 +54,29 @@ type ssmTag struct {
 }
 
 type ssmParameter struct {
-	Name             string        `json:"Name"`
-	Type             string        `json:"Type"`
-	Value            string        `json:"Value"`
-	Version          int64         `json:"Version"`
-	LastModifiedDate *awsTimestamp `json:"LastModifiedDate,omitempty"`
-	ARN              string        `json:"ARN"`
-	DataType         string        `json:"DataType"`
+	Name             string              `json:"Name"`
+	Type             string              `json:"Type"`
+	Value            string              `json:"Value"`
+	Version          int64               `json:"Version"`
+	LastModifiedDate *store.AWSTimestamp `json:"LastModifiedDate,omitempty"`
+	ARN              string              `json:"ARN"`
+	DataType         string              `json:"DataType"`
 }
 
 type ssmParameterMetadata struct {
-	Name             string        `json:"Name"`
-	Type             string        `json:"Type"`
-	Tier             string        `json:"Tier"`
-	Version          int64         `json:"Version"`
-	Description      string        `json:"Description,omitempty"`
-	KeyId            string        `json:"KeyId,omitempty"`
-	LastModifiedDate *awsTimestamp `json:"LastModifiedDate,omitempty"`
-	DataType         string        `json:"DataType"`
+	Name             string              `json:"Name"`
+	Type             string              `json:"Type"`
+	Tier             string              `json:"Tier"`
+	Version          int64               `json:"Version"`
+	Description      string              `json:"Description,omitempty"`
+	KeyId            string              `json:"KeyId,omitempty"`
+	LastModifiedDate *store.AWSTimestamp `json:"LastModifiedDate,omitempty"`
+	DataType         string              `json:"DataType"`
 }
 
 // ssmValueForResponse returns the value to surface for a record, decrypting
 // SecureString only when requested.
-func (s *server) ssmValueForResponse(ctx context.Context, rec parameterRecord, withDecryption bool) string {
+func (s *server) ssmValueForResponse(ctx context.Context, rec store.ParameterRecord, withDecryption bool) string {
 	if !rec.IsEncrypted {
 		return rec.Value
 	}
@@ -89,8 +90,8 @@ func (s *server) ssmValueForResponse(ctx context.Context, rec parameterRecord, w
 	return plain
 }
 
-func (s *server) ssmParameterFrom(ctx context.Context, rec parameterRecord, withDecryption bool) ssmParameter {
-	ts := awsTimestamp(rec.UpdatedAt)
+func (s *server) ssmParameterFrom(ctx context.Context, rec store.ParameterRecord, withDecryption bool) ssmParameter {
+	ts := store.AWSTimestamp(rec.UpdatedAt)
 	return ssmParameter{
 		Name:             rec.Name,
 		Type:             rec.Type,
@@ -129,29 +130,29 @@ func (s *server) handleSSMPutParameter(w http.ResponseWriter, r *http.Request) {
 	var req ssmPutParameterRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		return
 	}
 	rec, err := s.buildParameterRecord(r.Context(), req.Name, req.Type, req.Value, req.KeyId, req.Tier, req.Description)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		return
 	}
 	saved, err := ps.PutParameter(r.Context(), rec, req.Overwrite)
 	if err != nil {
 		ssmParameterError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: rec.KMSKeyID, Result: "error", ErrorType: classifyParameterError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: rec.KMSKeyID, Result: "error", ErrorType: classifyParameterError(err), Actor: r.RemoteAddr})
 		return
 	}
 	if len(req.Tags) > 0 {
-		tags := make([]paramTag, 0, len(req.Tags))
+		tags := make([]store.ParamTag, 0, len(req.Tags))
 		for _, t := range req.Tags {
-			tags = append(tags, paramTag{Key: t.Key, Value: t.Value})
+			tags = append(tags, store.ParamTag{Key: t.Key, Value: t.Value})
 		}
 		_ = ps.TagParameter(r.Context(), saved.Name, tags)
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: saved.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: saved.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, ssmPutParameterResponse{Version: saved.Version, Tier: saved.Tier})
 }
 
@@ -185,10 +186,10 @@ func (s *server) handleSSMGetParameter(w http.ResponseWriter, r *http.Request) {
 	rec, err := ps.GetParameter(r.Context(), name)
 	if err != nil {
 		ssmParameterError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifyParameterError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifyParameterError(err), Actor: r.RemoteAddr})
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: rec.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: rec.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, ssmGetParameterResponse{Parameter: s.ssmParameterFrom(r.Context(), rec, req.WithDecryption)})
 }
 
@@ -229,7 +230,7 @@ func (s *server) handleSSMGetParameters(w http.ResponseWriter, r *http.Request) 
 		}
 		resp.Parameters = append(resp.Parameters, s.ssmParameterFrom(r.Context(), rec, req.WithDecryption))
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -281,7 +282,7 @@ func (s *server) handleSSMGetParametersByPath(w http.ResponseWriter, r *http.Req
 		}
 		out = append(out, s.ssmParameterFrom(r.Context(), rec, req.WithDecryption))
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, ssmGetParametersByPathResponse{Parameters: out})
 }
 
@@ -309,10 +310,10 @@ func (s *server) handleSSMDeleteParameter(w http.ResponseWriter, r *http.Request
 	}
 	if err := ps.DeleteParameter(r.Context(), name); err != nil {
 		ssmParameterError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifyParameterError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifyParameterError(err), Actor: r.RemoteAddr})
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -349,7 +350,7 @@ func (s *server) handleSSMDeleteParameters(w http.ResponseWriter, r *http.Reques
 		}
 		resp.DeletedParameters = append(resp.DeletedParameters, name)
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -373,7 +374,7 @@ func (s *server) handleSSMDescribeParameters(w http.ResponseWriter, r *http.Requ
 	}
 	out := make([]ssmParameterMetadata, 0, len(recs))
 	for _, rec := range recs {
-		ts := awsTimestamp(rec.UpdatedAt)
+		ts := store.AWSTimestamp(rec.UpdatedAt)
 		out = append(out, ssmParameterMetadata{
 			Name:             rec.Name,
 			Type:             rec.Type,
@@ -385,7 +386,7 @@ func (s *server) handleSSMDescribeParameters(w http.ResponseWriter, r *http.Requ
 			DataType:         "text",
 		})
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, ssmDescribeParametersResponse{Parameters: out})
 }
 
@@ -397,16 +398,16 @@ type ssmGetParameterHistoryRequest struct {
 }
 
 type ssmParameterHistoryEntry struct {
-	Name             string        `json:"Name"`
-	Type             string        `json:"Type"`
-	Value            string        `json:"Value"`
-	Version          int64         `json:"Version"`
-	Tier             string        `json:"Tier"`
-	Description      string        `json:"Description,omitempty"`
-	KeyId            string        `json:"KeyId,omitempty"`
-	Labels           []string      `json:"Labels"`
-	LastModifiedDate *awsTimestamp `json:"LastModifiedDate,omitempty"`
-	DataType         string        `json:"DataType"`
+	Name             string              `json:"Name"`
+	Type             string              `json:"Type"`
+	Value            string              `json:"Value"`
+	Version          int64               `json:"Version"`
+	Tier             string              `json:"Tier"`
+	Description      string              `json:"Description,omitempty"`
+	KeyId            string              `json:"KeyId,omitempty"`
+	Labels           []string            `json:"Labels"`
+	LastModifiedDate *store.AWSTimestamp `json:"LastModifiedDate,omitempty"`
+	DataType         string              `json:"DataType"`
 }
 
 type ssmGetParameterHistoryResponse struct {
@@ -447,7 +448,7 @@ func (s *server) handleSSMGetParameterHistory(w http.ResponseWriter, r *http.Req
 		if labels == nil {
 			labels = []string{}
 		}
-		ts := awsTimestamp(h.ModifiedAt)
+		ts := store.AWSTimestamp(h.ModifiedAt)
 		out = append(out, ssmParameterHistoryEntry{
 			Name:             h.Name,
 			Type:             h.Type,
@@ -461,7 +462,7 @@ func (s *server) handleSSMGetParameterHistory(w http.ResponseWriter, r *http.Req
 			DataType:         "text",
 		})
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, ssmGetParameterHistoryResponse{Parameters: out})
 }
 
@@ -504,7 +505,7 @@ func (s *server) handleSSMLabelParameterVersion(w http.ResponseWriter, r *http.R
 			version = rec.Version
 		}
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, ssmLabelParameterVersionResponse{InvalidLabels: []string{}, ParameterVersion: version})
 }
 
@@ -532,15 +533,15 @@ func (s *server) handleSSMAddTagsToResource(w http.ResponseWriter, r *http.Reque
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
-	tags := make([]paramTag, 0, len(req.Tags))
+	tags := make([]store.ParamTag, 0, len(req.Tags))
 	for _, t := range req.Tags {
-		tags = append(tags, paramTag{Key: t.Key, Value: t.Value})
+		tags = append(tags, store.ParamTag{Key: t.Key, Value: t.Value})
 	}
 	if err := ps.TagParameter(r.Context(), name, tags); err != nil {
 		ssmParameterError(w, err)
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -570,7 +571,7 @@ func (s *server) handleSSMRemoveTagsFromResource(w http.ResponseWriter, r *http.
 		ssmParameterError(w, err)
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -609,6 +610,6 @@ func (s *server) handleSSMListTagsForResource(w http.ResponseWriter, r *http.Req
 		out = append(out, ssmTag{Key: t.Key, Value: t.Value})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
-	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, ssmListTagsResponse{TagList: out})
 }

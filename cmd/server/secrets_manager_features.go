@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
@@ -11,9 +10,8 @@ import (
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
+	"github.com/worlddrknss/citadel/internal/store"
 )
-
-const pendingVersionStage = "AWSPENDING"
 
 type tagEntry struct {
 	Key   string `json:"Key"`
@@ -27,18 +25,10 @@ type listSecretVersionIDsRequest struct {
 }
 
 type listSecretVersionIDsResponse struct {
-	Versions   []secretVersionListEntry `json:"Versions"`
-	NextToken  string                   `json:"NextToken,omitempty"`
-	SecretName string                   `json:"Name,omitempty"`
-	ARN        string                   `json:"ARN,omitempty"`
-}
-
-type secretVersionListEntry struct {
-	VersionID      string        `json:"VersionId"`
-	VersionStages  []string      `json:"VersionStages"`
-	CreatedDate    awsTimestamp  `json:"CreatedDate"`
-	KMSKeyIDs      []string      `json:"KmsKeyIds,omitempty"`
-	LastAccessedAt *awsTimestamp `json:"LastAccessedDate,omitempty"`
+	Versions   []store.SecretVersionListEntry `json:"Versions"`
+	NextToken  string                         `json:"NextToken,omitempty"`
+	SecretName string                         `json:"Name,omitempty"`
+	ARN        string                         `json:"ARN,omitempty"`
 }
 
 type tagSecretRequest struct {
@@ -93,55 +83,50 @@ type updateSecretVersionStageRequest struct {
 	RemoveFromVersionID string `json:"RemoveFromVersionId"`
 }
 
-type secretRotationResult struct {
-	Metadata  secretMetadataRecord
-	VersionID string
-}
-
 func (s *server) handleListSecretVersionIDs(w http.ResponseWriter, r *http.Request) {
 	const action = "secretsmanager.ListSecretVersionIds"
 	var req listSecretVersionIDsRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
 		return
 	}
 	if strings.TrimSpace(req.SecretID) == "" {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", "SecretId is required")
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
 		return
 	}
 	limit, err := normalizeSecretListLimit(req.MaxResults)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
 		return
 	}
 	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:ListSecretVersionIds"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	versions, err := s.store.ListSecretVersionIDs(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
-	versions, nextToken, _, err := paginateList(versions, req.NextToken, limit, func(item secretVersionListEntry) string { return item.VersionID })
+	versions, nextToken, _, err := paginateList(versions, req.NextToken, limit, func(item store.SecretVersionListEntry) string { return item.VersionID })
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
 		return
 	}
 	writeJSON(w, http.StatusOK, listSecretVersionIDsResponse{Versions: versions, NextToken: nextToken, SecretName: meta.Name, ARN: meta.ARN})
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 }
 
 func (s *server) handleTagSecret(w http.ResponseWriter, r *http.Request) {
@@ -149,27 +134,27 @@ func (s *server) handleTagSecret(w http.ResponseWriter, r *http.Request) {
 	var req tagSecretRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
 		return
 	}
 	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:TagResource"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.store.TagSecret(r.Context(), req.SecretID, toSecretTags(req.Tags)); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 }
 
 func (s *server) handleUntagSecret(w http.ResponseWriter, r *http.Request) {
@@ -177,27 +162,27 @@ func (s *server) handleUntagSecret(w http.ResponseWriter, r *http.Request) {
 	var req untagSecretRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
 		return
 	}
 	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:UntagResource"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.store.UntagSecret(r.Context(), req.SecretID, req.TagKeys); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 }
 
 func (s *server) handleGetSecretResourcePolicy(w http.ResponseWriter, r *http.Request) {
@@ -205,28 +190,28 @@ func (s *server) handleGetSecretResourcePolicy(w http.ResponseWriter, r *http.Re
 	var req secretPolicyRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
 		return
 	}
 	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:GetResourcePolicy"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	policy, err := s.store.GetSecretResourcePolicy(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	writeJSON(w, http.StatusOK, getSecretResourcePolicyResponse{ARN: meta.ARN, Name: meta.Name, ResourcePolicy: policy})
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 }
 
 func (s *server) handlePutSecretResourcePolicy(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +219,7 @@ func (s *server) handlePutSecretResourcePolicy(w http.ResponseWriter, r *http.Re
 	var req secretPolicyRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", Actor: r.RemoteAddr})
 		return
 	}
 	if strings.TrimSpace(req.ResourcePolicy) == "" {
@@ -244,12 +229,12 @@ func (s *server) handlePutSecretResourcePolicy(w http.ResponseWriter, r *http.Re
 	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
 	if err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:PutResourcePolicy"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	policy, err := normalizePolicyDocument(req.ResourcePolicy)
@@ -262,7 +247,7 @@ func (s *server) handlePutSecretResourcePolicy(w http.ResponseWriter, r *http.Re
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 }
 
 func (s *server) handleValidateSecretResourcePolicy(w http.ResponseWriter, r *http.Request) {
@@ -297,7 +282,7 @@ func (s *server) handleRotateSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:RotateSecret"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	result, err := s.store.RotateSecret(r.Context(), req.SecretID, req.RotationLambdaARN, req.AutomaticallyAfterDays, rotateImmediately, req.ClientRequestToken)
@@ -306,7 +291,7 @@ func (s *server) handleRotateSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rotateSecretResponse{ARN: result.Metadata.ARN, Name: result.Metadata.Name, VersionID: result.VersionID})
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: result.Metadata.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: result.Metadata.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 }
 
 func (s *server) handleCancelRotateSecret(w http.ResponseWriter, r *http.Request) {
@@ -323,7 +308,7 @@ func (s *server) handleCancelRotateSecret(w http.ResponseWriter, r *http.Request
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:CancelRotateSecret"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	meta, err = s.store.CancelRotateSecret(r.Context(), req.SecretID)
@@ -332,7 +317,7 @@ func (s *server) handleCancelRotateSecret(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, restoreSecretResponse{ARN: meta.ARN, Name: meta.Name})
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 }
 
 func (s *server) handleUpdateSecretVersionStage(w http.ResponseWriter, r *http.Request) {
@@ -349,7 +334,7 @@ func (s *server) handleUpdateSecretVersionStage(w http.ResponseWriter, r *http.R
 	}
 	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:UpdateSecretVersionStage"); err != nil {
 		secretError(w, err)
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), Actor: r.RemoteAddr})
 		return
 	}
 	meta, err = s.store.UpdateSecretVersionStage(r.Context(), req.SecretID, req.VersionStage, req.MoveToVersionID, req.RemoveFromVersionID)
@@ -358,10 +343,10 @@ func (s *server) handleUpdateSecretVersionStage(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 }
 
-func (s *dbStore) ListSecretVersionIDs(ctx context.Context, secretID string) ([]secretVersionListEntry, error) {
+func (s *dbStore) ListSecretVersionIDs(ctx context.Context, secretID string) ([]store.SecretVersionListEntry, error) {
 	meta, err := s.loadSecretMetadata(ctx, secretID)
 	if err != nil {
 		return nil, err
@@ -377,22 +362,22 @@ ORDER BY version_created_at ASC
 		return nil, err
 	}
 	defer rows.Close()
-	out := make([]secretVersionListEntry, 0)
+	out := make([]store.SecretVersionListEntry, 0)
 	for rows.Next() {
-		var entry secretVersionListEntry
+		var entry store.SecretVersionListEntry
 		var createdAt time.Time
 		if err := rows.Scan(&entry.VersionID, &createdAt); err != nil {
 			return nil, err
 		}
-		entry.CreatedDate = awsTimestamp(createdAt)
-		entry.VersionStages = secretStagesForVersion(meta, entry.VersionID)
+		entry.CreatedDate = store.AWSTimestamp(createdAt)
+		entry.VersionStages = store.SecretStagesForVersion(meta, entry.VersionID)
 		entry.KMSKeyIDs = []string{meta.KMSKeyID}
 		out = append(out, entry)
 	}
 	return out, rows.Err()
 }
 
-func (s *dbStore) TagSecret(ctx context.Context, secretID string, tags []secretTag) error {
+func (s *dbStore) TagSecret(ctx context.Context, secretID string, tags []store.SecretTag) error {
 	meta, err := s.loadSecretMetadata(ctx, secretID)
 	if err != nil {
 		return err
@@ -435,7 +420,7 @@ func (s *dbStore) GetSecretResourcePolicy(ctx context.Context, secretID string) 
 	var policy string
 	err = s.db.QueryRowContext(ctx, q, meta.Name).Scan(&policy)
 	if errors.Is(err, sql.ErrNoRows) {
-		return defaultSecretResourcePolicy(meta), nil
+		return store.DefaultSecretResourcePolicy(meta), nil
 	}
 	return policy, err
 }
@@ -454,16 +439,16 @@ ON CONFLICT (secret_name) DO UPDATE SET policy_document = EXCLUDED.policy_docume
 	return err
 }
 
-func (s *dbStore) RotateSecret(ctx context.Context, secretID, rotationLambdaARN string, automaticallyAfterDays int, rotateImmediately bool, clientRequestToken string) (secretRotationResult, error) {
+func (s *dbStore) RotateSecret(ctx context.Context, secretID, rotationLambdaARN string, automaticallyAfterDays int, rotateImmediately bool, clientRequestToken string) (store.SecretRotationResult, error) {
 	meta, err := s.loadSecretMetadata(ctx, secretID)
 	if err != nil {
-		return secretRotationResult{}, err
+		return store.SecretRotationResult{}, err
 	}
 	if automaticallyAfterDays == 0 {
 		automaticallyAfterDays = 30
 	}
 	if automaticallyAfterDays < 1 {
-		return secretRotationResult{}, errors.New("AutomaticallyAfterDays must be greater than 0")
+		return store.SecretRotationResult{}, errors.New("AutomaticallyAfterDays must be greater than 0")
 	}
 	meta.RotationEnabled = true
 	meta.RotationLambdaARN = strings.TrimSpace(rotationLambdaARN)
@@ -473,7 +458,7 @@ func (s *dbStore) RotateSecret(ctx context.Context, secretID, rotationLambdaARN 
 	versionID := ""
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return secretRotationResult{}, err
+		return store.SecretRotationResult{}, err
 	}
 	defer tx.Rollback()
 	if rotateImmediately {
@@ -483,87 +468,87 @@ func (s *dbStore) RotateSecret(ctx context.Context, secretID, rotationLambdaARN 
 		}
 		currentVersion, err := s.loadSecretVersion(ctx, meta.Name, meta.CurrentVersionID)
 		if err != nil {
-			return secretRotationResult{}, err
+			return store.SecretRotationResult{}, err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO sm_secret_versions (secret_name, version_id, client_request_token, encrypted_payload_b64, is_binary, version_created_at) VALUES ($1,$2,$3,$4,$5,$6)`, meta.Name, pendingVersionID, pendingVersionID, currentVersion.EncryptedPayloadB64, currentVersion.IsBinary, time.Now().UTC()); err != nil {
-			return secretRotationResult{}, mapSecretDBError(err)
+			return store.SecretRotationResult{}, mapSecretDBError(err)
 		}
-		assignSecretStage(&meta, pendingVersionStage, pendingVersionID)
+		store.AssignSecretStage(&meta, store.PendingVersionStage, pendingVersionID)
 		versionID = pendingVersionID
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE sm_secrets SET rotation_enabled = $2, rotation_lambda_arn = $3, rotation_days = $4, next_rotation_date = $5, updated_at = NOW() WHERE name = $1`, meta.Name, meta.RotationEnabled, meta.RotationLambdaARN, meta.RotationDays, meta.NextRotationDate); err != nil {
-		return secretRotationResult{}, err
+		return store.SecretRotationResult{}, err
 	}
 	if err := persistSecretStageRowsTx(ctx, tx, meta.Name, meta.VersionStages); err != nil {
-		return secretRotationResult{}, err
+		return store.SecretRotationResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return secretRotationResult{}, err
+		return store.SecretRotationResult{}, err
 	}
-	return secretRotationResult{Metadata: meta, VersionID: versionID}, nil
+	return store.SecretRotationResult{Metadata: meta, VersionID: versionID}, nil
 }
 
-func (s *dbStore) CancelRotateSecret(ctx context.Context, secretID string) (secretMetadataRecord, error) {
+func (s *dbStore) CancelRotateSecret(ctx context.Context, secretID string) (store.SecretMetadataRecord, error) {
 	meta, err := s.loadSecretMetadata(ctx, secretID)
 	if err != nil {
-		return secretMetadataRecord{}, err
+		return store.SecretMetadataRecord{}, err
 	}
 	meta.RotationEnabled = false
 	meta.RotationLambdaARN = ""
 	meta.RotationDays = 0
 	meta.NextRotationDate = nil
-	removeSecretStage(&meta, pendingVersionStage, "")
+	store.RemoveSecretStage(&meta, store.PendingVersionStage, "")
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return secretMetadataRecord{}, err
+		return store.SecretMetadataRecord{}, err
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `UPDATE sm_secrets SET rotation_enabled = FALSE, rotation_lambda_arn = '', rotation_days = 0, next_rotation_date = NULL, updated_at = NOW() WHERE name = $1`, meta.Name); err != nil {
-		return secretMetadataRecord{}, err
+		return store.SecretMetadataRecord{}, err
 	}
 	if err := persistSecretStageRowsTx(ctx, tx, meta.Name, meta.VersionStages); err != nil {
-		return secretMetadataRecord{}, err
+		return store.SecretMetadataRecord{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return secretMetadataRecord{}, err
+		return store.SecretMetadataRecord{}, err
 	}
 	return meta, nil
 }
 
-func (s *dbStore) UpdateSecretVersionStage(ctx context.Context, secretID, versionStage, moveToVersionID, removeFromVersionID string) (secretMetadataRecord, error) {
+func (s *dbStore) UpdateSecretVersionStage(ctx context.Context, secretID, versionStage, moveToVersionID, removeFromVersionID string) (store.SecretMetadataRecord, error) {
 	meta, err := s.loadSecretMetadata(ctx, secretID)
 	if err != nil {
-		return secretMetadataRecord{}, err
+		return store.SecretMetadataRecord{}, err
 	}
 	if strings.TrimSpace(versionStage) == "" || strings.TrimSpace(moveToVersionID) == "" {
-		return secretMetadataRecord{}, errors.New("VersionStage and MoveToVersionId are required")
+		return store.SecretMetadataRecord{}, errors.New("VersionStage and MoveToVersionId are required")
 	}
 	if _, err := s.loadSecretVersion(ctx, meta.Name, moveToVersionID); err != nil {
-		return secretMetadataRecord{}, err
+		return store.SecretMetadataRecord{}, err
 	}
-	assignSecretStage(&meta, versionStage, moveToVersionID)
+	store.AssignSecretStage(&meta, versionStage, moveToVersionID)
 	if removeFromVersionID != "" {
-		removeSecretStage(&meta, versionStage, removeFromVersionID)
+		store.RemoveSecretStage(&meta, versionStage, removeFromVersionID)
 	}
-	syncPrimarySecretVersionFields(&meta)
+	store.SyncPrimarySecretVersionFields(&meta)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return secretMetadataRecord{}, err
+		return store.SecretMetadataRecord{}, err
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `UPDATE sm_secrets SET current_version_id = $2, previous_version_id = $3, updated_at = NOW() WHERE name = $1`, meta.Name, meta.CurrentVersionID, meta.PreviousVersionID); err != nil {
-		return secretMetadataRecord{}, err
+		return store.SecretMetadataRecord{}, err
 	}
 	if err := persistSecretStageRowsTx(ctx, tx, meta.Name, meta.VersionStages); err != nil {
-		return secretMetadataRecord{}, err
+		return store.SecretMetadataRecord{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return secretMetadataRecord{}, err
+		return store.SecretMetadataRecord{}, err
 	}
 	return meta, nil
 }
 
-func (s *dbStore) loadSecretDecorations(ctx context.Context, meta *secretMetadataRecord) error {
+func (s *dbStore) loadSecretDecorations(ctx context.Context, meta *store.SecretMetadataRecord) error {
 	stageMap, err := s.loadSecretStageMap(ctx, meta.Name, meta.CurrentVersionID, meta.PreviousVersionID)
 	if err != nil {
 		return err
@@ -580,7 +565,7 @@ func (s *dbStore) loadSecretDecorations(ctx context.Context, meta *secretMetadat
 		return err
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		policy = defaultSecretResourcePolicy(*meta)
+		policy = store.DefaultSecretResourcePolicy(*meta)
 	}
 	meta.PolicyDocument = policy
 	return nil
@@ -602,21 +587,21 @@ func (s *dbStore) loadSecretStageMap(ctx context.Context, secretName, currentVer
 		stageMap[versionID] = append(stageMap[versionID], stage)
 	}
 	if len(stageMap) == 0 {
-		return buildFallbackSecretStageMap(currentVersionID, previousVersionID), rows.Err()
+		return store.BuildFallbackSecretStageMap(currentVersionID, previousVersionID), rows.Err()
 	}
-	mergeSecretStageMaps(stageMap, buildFallbackSecretStageMap(currentVersionID, previousVersionID))
+	store.MergeSecretStageMaps(stageMap, store.BuildFallbackSecretStageMap(currentVersionID, previousVersionID))
 	return stageMap, rows.Err()
 }
 
-func (s *dbStore) loadSecretTags(ctx context.Context, secretName string) ([]secretTag, error) {
+func (s *dbStore) loadSecretTags(ctx context.Context, secretName string) ([]store.SecretTag, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT tag_key, tag_value FROM sm_secret_tags WHERE secret_name = $1 ORDER BY tag_key ASC`, secretName)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := make([]secretTag, 0)
+	out := make([]store.SecretTag, 0)
 	for rows.Next() {
-		var tag secretTag
+		var tag store.SecretTag
 		if err := rows.Scan(&tag.Key, &tag.Value); err != nil {
 			return nil, err
 		}
@@ -625,16 +610,16 @@ func (s *dbStore) loadSecretTags(ctx context.Context, secretName string) ([]secr
 	return out, rows.Err()
 }
 
-func (s *inMemoryStore) ListSecretVersionIDs(ctx context.Context, secretID string) ([]secretVersionListEntry, error) {
+func (s *inMemoryStore) ListSecretVersionIDs(ctx context.Context, secretID string) ([]store.SecretVersionListEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
 		return nil, err
 	}
-	entries := make([]secretVersionListEntry, 0, len(secret.versions))
+	entries := make([]store.SecretVersionListEntry, 0, len(secret.versions))
 	for _, version := range secret.versions {
-		entries = append(entries, secretVersionListEntry{VersionID: version.VersionID, VersionStages: secretStagesForVersion(secret.metadata, version.VersionID), CreatedDate: awsTimestamp(version.CreatedAt), KMSKeyIDs: []string{secret.metadata.KMSKeyID}})
+		entries = append(entries, store.SecretVersionListEntry{VersionID: version.VersionID, VersionStages: store.SecretStagesForVersion(secret.metadata, version.VersionID), CreatedDate: store.AWSTimestamp(version.CreatedAt), KMSKeyIDs: []string{secret.metadata.KMSKeyID}})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return time.Time(entries[i].CreatedDate).Before(time.Time(entries[j].CreatedDate))
@@ -642,7 +627,7 @@ func (s *inMemoryStore) ListSecretVersionIDs(ctx context.Context, secretID strin
 	return entries, nil
 }
 
-func (s *inMemoryStore) TagSecret(ctx context.Context, secretID string, tags []secretTag) error {
+func (s *inMemoryStore) TagSecret(ctx context.Context, secretID string, tags []store.SecretTag) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	secret, err := s.findSecret(ctx, secretID)
@@ -666,7 +651,7 @@ func (s *inMemoryStore) TagSecret(ctx context.Context, secretID string, tags []s
 	sort.Strings(keys)
 	secret.metadata.Tags = secret.metadata.Tags[:0]
 	for _, key := range keys {
-		secret.metadata.Tags = append(secret.metadata.Tags, secretTag{Key: key, Value: byKey[key]})
+		secret.metadata.Tags = append(secret.metadata.Tags, store.SecretTag{Key: key, Value: byKey[key]})
 	}
 	return nil
 }
@@ -682,7 +667,7 @@ func (s *inMemoryStore) UntagSecret(ctx context.Context, secretID string, tagKey
 	for _, key := range tagKeys {
 		remove[key] = struct{}{}
 	}
-	filtered := make([]secretTag, 0, len(secret.metadata.Tags))
+	filtered := make([]store.SecretTag, 0, len(secret.metadata.Tags))
 	for _, tag := range secret.metadata.Tags {
 		if _, ok := remove[tag.Key]; !ok {
 			filtered = append(filtered, tag)
@@ -700,7 +685,7 @@ func (s *inMemoryStore) GetSecretResourcePolicy(ctx context.Context, secretID st
 		return "", err
 	}
 	if strings.TrimSpace(secret.metadata.PolicyDocument) == "" {
-		return defaultSecretResourcePolicy(secret.metadata), nil
+		return store.DefaultSecretResourcePolicy(secret.metadata), nil
 	}
 	return secret.metadata.PolicyDocument, nil
 }
@@ -716,12 +701,12 @@ func (s *inMemoryStore) PutSecretResourcePolicy(ctx context.Context, secretID, p
 	return nil
 }
 
-func (s *inMemoryStore) RotateSecret(ctx context.Context, secretID, rotationLambdaARN string, automaticallyAfterDays int, rotateImmediately bool, clientRequestToken string) (secretRotationResult, error) {
+func (s *inMemoryStore) RotateSecret(ctx context.Context, secretID, rotationLambdaARN string, automaticallyAfterDays int, rotateImmediately bool, clientRequestToken string) (store.SecretRotationResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
-		return secretRotationResult{}, err
+		return store.SecretRotationResult{}, err
 	}
 	if automaticallyAfterDays == 0 {
 		automaticallyAfterDays = 30
@@ -735,172 +720,68 @@ func (s *inMemoryStore) RotateSecret(ctx context.Context, secretID, rotationLamb
 	if rotateImmediately {
 		currentValue, err := s.getSecretValueLocked(ctx, secret.metadata.Name, secret.metadata.CurrentVersionID, "")
 		if err != nil {
-			return secretRotationResult{}, err
+			return store.SecretRotationResult{}, err
 		}
 		versionID = clientRequestToken
 		if versionID == "" {
 			versionID = cryptoutil.RandomHex(16)
 		}
-		var putReq putSecretValueRequest
+		var putReq store.PutSecretValueRequest
 		if currentValue.SecretString != nil {
-			putReq = putSecretValueRequest{SecretID: secret.metadata.Name, ClientRequestToken: versionID, SecretString: *currentValue.SecretString}
+			putReq = store.PutSecretValueRequest{SecretID: secret.metadata.Name, ClientRequestToken: versionID, SecretString: *currentValue.SecretString}
 		} else {
-			putReq = putSecretValueRequest{SecretID: secret.metadata.Name, ClientRequestToken: versionID, SecretBinary: currentValue.SecretBinary}
+			putReq = store.PutSecretValueRequest{SecretID: secret.metadata.Name, ClientRequestToken: versionID, SecretBinary: currentValue.SecretBinary}
 		}
 		if _, err := s.putSecretValueLocked(ctx, putReq); err != nil {
-			return secretRotationResult{}, err
+			return store.SecretRotationResult{}, err
 		}
-		assignSecretStage(&secret.metadata, pendingVersionStage, versionID)
+		store.AssignSecretStage(&secret.metadata, store.PendingVersionStage, versionID)
 	}
-	return secretRotationResult{Metadata: secret.metadata, VersionID: versionID}, nil
+	return store.SecretRotationResult{Metadata: secret.metadata, VersionID: versionID}, nil
 }
 
-func (s *inMemoryStore) CancelRotateSecret(ctx context.Context, secretID string) (secretMetadataRecord, error) {
+func (s *inMemoryStore) CancelRotateSecret(ctx context.Context, secretID string) (store.SecretMetadataRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
-		return secretMetadataRecord{}, err
+		return store.SecretMetadataRecord{}, err
 	}
 	secret.metadata.RotationEnabled = false
 	secret.metadata.RotationLambdaARN = ""
 	secret.metadata.RotationDays = 0
 	secret.metadata.NextRotationDate = nil
-	removeSecretStage(&secret.metadata, pendingVersionStage, "")
+	store.RemoveSecretStage(&secret.metadata, store.PendingVersionStage, "")
 	return secret.metadata, nil
 }
 
-func (s *inMemoryStore) UpdateSecretVersionStage(ctx context.Context, secretID, versionStage, moveToVersionID, removeFromVersionID string) (secretMetadataRecord, error) {
+func (s *inMemoryStore) UpdateSecretVersionStage(ctx context.Context, secretID, versionStage, moveToVersionID, removeFromVersionID string) (store.SecretMetadataRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	secret, err := s.findSecret(ctx, secretID)
 	if err != nil {
-		return secretMetadataRecord{}, err
+		return store.SecretMetadataRecord{}, err
 	}
 	if strings.TrimSpace(moveToVersionID) == "" {
-		return secretMetadataRecord{}, errors.New("MoveToVersionId is required")
+		return store.SecretMetadataRecord{}, errors.New("MoveToVersionId is required")
 	}
 	if _, ok := secret.versions[moveToVersionID]; !ok {
-		return secretMetadataRecord{}, sql.ErrNoRows
+		return store.SecretMetadataRecord{}, sql.ErrNoRows
 	}
-	assignSecretStage(&secret.metadata, versionStage, moveToVersionID)
+	store.AssignSecretStage(&secret.metadata, versionStage, moveToVersionID)
 	if removeFromVersionID != "" {
-		removeSecretStage(&secret.metadata, versionStage, removeFromVersionID)
+		store.RemoveSecretStage(&secret.metadata, versionStage, removeFromVersionID)
 	}
-	syncPrimarySecretVersionFields(&secret.metadata)
+	store.SyncPrimarySecretVersionFields(&secret.metadata)
 	return secret.metadata, nil
 }
 
-func toSecretTags(tags []tagEntry) []secretTag {
-	out := make([]secretTag, 0, len(tags))
+func toSecretTags(tags []tagEntry) []store.SecretTag {
+	out := make([]store.SecretTag, 0, len(tags))
 	for _, tag := range tags {
-		out = append(out, secretTag{Key: strings.TrimSpace(tag.Key), Value: tag.Value})
+		out = append(out, store.SecretTag{Key: strings.TrimSpace(tag.Key), Value: tag.Value})
 	}
 	return out
-}
-
-func defaultSecretResourcePolicy(meta secretMetadataRecord) string {
-	policy := map[string]any{
-		"Version": "2012-10-17",
-		"Statement": []map[string]any{{
-			"Sid":       "AllowAccountSecretAccess",
-			"Effect":    "Allow",
-			"Principal": "*",
-			"Action":    "secretsmanager:*",
-			"Resource":  meta.ARN,
-		}},
-	}
-	b, _ := json.Marshal(policy)
-	return string(b)
-}
-
-func ensureSecretStageMap(meta *secretMetadataRecord) {
-	if meta.VersionStages == nil {
-		meta.VersionStages = buildFallbackSecretStageMap(meta.CurrentVersionID, meta.PreviousVersionID)
-	}
-}
-
-func buildFallbackSecretStageMap(currentVersionID, previousVersionID string) map[string][]string {
-	out := map[string][]string{}
-	if currentVersionID != "" {
-		out[currentVersionID] = append(out[currentVersionID], currentVersionStage)
-	}
-	if previousVersionID != "" {
-		out[previousVersionID] = append(out[previousVersionID], previousVersionStage)
-	}
-	return out
-}
-
-func mergeSecretStageMaps(dst, src map[string][]string) {
-	for versionID, stages := range src {
-		for _, stage := range stages {
-			if !containsString(dst[versionID], stage) {
-				dst[versionID] = append(dst[versionID], stage)
-			}
-		}
-	}
-}
-
-func promoteSecretVersion(meta *secretMetadataRecord, newVersionID string) {
-	ensureSecretStageMap(meta)
-	oldCurrent := meta.CurrentVersionID
-	removeSecretStage(meta, previousVersionStage, "")
-	if oldCurrent != "" && oldCurrent != newVersionID {
-		assignSecretStage(meta, previousVersionStage, oldCurrent)
-	}
-	assignSecretStage(meta, currentVersionStage, newVersionID)
-	syncPrimarySecretVersionFields(meta)
-}
-
-func assignSecretStage(meta *secretMetadataRecord, stage, versionID string) {
-	ensureSecretStageMap(meta)
-	removeSecretStage(meta, stage, "")
-	if versionID == "" {
-		return
-	}
-	if !containsString(meta.VersionStages[versionID], stage) {
-		meta.VersionStages[versionID] = append(meta.VersionStages[versionID], stage)
-	}
-	stages := meta.VersionStages[versionID]
-	sort.Strings(stages)
-	meta.VersionStages[versionID] = stages
-	syncPrimarySecretVersionFields(meta)
-}
-
-func removeSecretStage(meta *secretMetadataRecord, stage, versionID string) {
-	ensureSecretStageMap(meta)
-	for currentVersionID, stages := range meta.VersionStages {
-		if versionID != "" && currentVersionID != versionID {
-			continue
-		}
-		filtered := stages[:0]
-		for _, candidate := range stages {
-			if candidate != stage {
-				filtered = append(filtered, candidate)
-			}
-		}
-		if len(filtered) == 0 {
-			delete(meta.VersionStages, currentVersionID)
-		} else {
-			meta.VersionStages[currentVersionID] = filtered
-		}
-	}
-	syncPrimarySecretVersionFields(meta)
-}
-
-func syncPrimarySecretVersionFields(meta *secretMetadataRecord) {
-	meta.CurrentVersionID = ""
-	meta.PreviousVersionID = ""
-	for versionID, stages := range meta.VersionStages {
-		for _, stage := range stages {
-			switch stage {
-			case currentVersionStage:
-				meta.CurrentVersionID = versionID
-			case previousVersionStage:
-				meta.PreviousVersionID = versionID
-			}
-		}
-	}
 }
 
 func persistSecretStageRowsTx(ctx context.Context, tx *sql.Tx, secretName string, stageMap map[string][]string) error {
@@ -915,13 +796,4 @@ func persistSecretStageRowsTx(ctx context.Context, tx *sql.Tx, secretName string
 		}
 	}
 	return nil
-}
-
-func containsString(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-	return false
 }

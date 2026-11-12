@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // Native (/v1/parameters) Parameter Store API consumed by the Citadel SPA. It
@@ -19,9 +20,9 @@ import (
 
 // paramStore returns the parameter persistence layer when the active store
 // supports it. The in-memory dev store and the Postgres store both implement
-// parameterStore; this guard keeps the call sites tidy.
-func (s *server) paramStore() (parameterStore, bool) {
-	ps, ok := s.store.(parameterStore)
+// ParameterStore; this guard keeps the call sites tidy.
+func (s *server) paramStore() (store.ParameterStore, bool) {
+	ps, ok := s.store.(store.ParameterStore)
 	return ps, ok
 }
 
@@ -29,7 +30,7 @@ func (s *server) paramStore() (parameterStore, bool) {
 // ciphertext and the resolved KMS key ID. An empty kmsKeyID resolves the
 // deployment default key (same behaviour as Secrets Manager).
 func (s *server) encryptParameterValue(ctx context.Context, kmsKeyID, value string) (cipherB64, keyID string, err error) {
-	keyID, cipherB64, _, err = buildSecretCiphertext(ctx, s.store.ResolveByID, s.store.ResolveDefault, kmsKeyID, value, "")
+	keyID, cipherB64, _, err = store.BuildSecretCiphertext(ctx, s.store.ResolveByID, s.store.ResolveDefault, kmsKeyID, value, "")
 	return cipherB64, keyID, err
 }
 
@@ -66,7 +67,7 @@ type nativeParameter struct {
 	LastModified string `json:"lastModified"`
 }
 
-func nativeParameterFrom(rec parameterRecord) nativeParameter {
+func nativeParameterFrom(rec store.ParameterRecord) nativeParameter {
 	return nativeParameter{
 		Name:         rec.Name,
 		Type:         rec.Type,
@@ -135,28 +136,28 @@ func (s *server) handleV1PutParameter(w http.ResponseWriter, r *http.Request) {
 	}
 	saved, err := ps.PutParameter(ctx, rec, req.Overwrite)
 	if err != nil {
-		s.recordAudit(ctx, auditEvent{Action: "citadel.PutParameter", KeyID: rec.KMSKeyID, Result: "error", ErrorType: classifyParameterError(err), Actor: r.RemoteAddr})
+		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PutParameter", KeyID: rec.KMSKeyID, Result: "error", ErrorType: classifyParameterError(err), Actor: r.RemoteAddr})
 		writeParameterNativeError(w, err)
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.PutParameter", KeyID: saved.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PutParameter", KeyID: saved.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"parameter": nativeParameterFrom(saved)})
 }
 
 // buildParameterRecord validates inputs and encrypts SecureString values.
-func (s *server) buildParameterRecord(ctx context.Context, name, ptype, value, kmsKeyID, tier, description string) (parameterRecord, error) {
+func (s *server) buildParameterRecord(ctx context.Context, name, ptype, value, kmsKeyID, tier, description string) (store.ParameterRecord, error) {
 	canonical, err := normalizeParameterName(name)
 	if err != nil {
-		return parameterRecord{}, err
+		return store.ParameterRecord{}, err
 	}
 	typ, err := normalizeParameterType(ptype)
 	if err != nil {
-		return parameterRecord{}, err
+		return store.ParameterRecord{}, err
 	}
 	if strings.TrimSpace(value) == "" && typ != parameterTypeSecureString {
-		return parameterRecord{}, errors.New("value is required")
+		return store.ParameterRecord{}, errors.New("value is required")
 	}
-	rec := parameterRecord{
+	rec := store.ParameterRecord{
 		Name:        canonical,
 		Type:        typ,
 		Tier:        normalizeParameterTier(tier),
@@ -165,7 +166,7 @@ func (s *server) buildParameterRecord(ctx context.Context, name, ptype, value, k
 	if typ == parameterTypeSecureString {
 		cipherB64, keyID, err := s.encryptParameterValue(ctx, kmsKeyID, value)
 		if err != nil {
-			return parameterRecord{}, err
+			return store.ParameterRecord{}, err
 		}
 		rec.Value = cipherB64
 		rec.KMSKeyID = keyID
@@ -193,11 +194,11 @@ func (s *server) handleV1DeleteParameter(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := ps.DeleteParameter(ctx, name); err != nil {
-		s.recordAudit(ctx, auditEvent{Action: "citadel.DeleteParameter", Result: "error", ErrorType: classifyParameterError(err), Actor: r.RemoteAddr})
+		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteParameter", Result: "error", ErrorType: classifyParameterError(err), Actor: r.RemoteAddr})
 		writeParameterNativeError(w, err)
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.DeleteParameter", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteParameter", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": name})
 }
 
@@ -231,7 +232,7 @@ func (s *server) handleV1RevealParameter(w http.ResponseWriter, r *http.Request)
 		}
 		value = plain
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.GetParameter", KeyID: rec.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.GetParameter", KeyID: rec.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{
 		"parameter": nativeParameterFrom(rec),
 		"value":     value,
@@ -310,7 +311,7 @@ func (s *server) handleV1LabelParameterVersion(w http.ResponseWriter, r *http.Re
 		writeParameterNativeError(w, err)
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.LabelParameterVersion", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.LabelParameterVersion", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"name": name, "labels": labels})
 }
 
@@ -368,18 +369,18 @@ func (s *server) handleV1TagParameter(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	tags := make([]paramTag, 0, len(req.Tags))
+	tags := make([]store.ParamTag, 0, len(req.Tags))
 	for k, v := range req.Tags {
 		if strings.TrimSpace(k) == "" {
 			continue
 		}
-		tags = append(tags, paramTag{Key: k, Value: v})
+		tags = append(tags, store.ParamTag{Key: k, Value: v})
 	}
 	if err := ps.TagParameter(ctx, name, tags); err != nil {
 		writeParameterNativeError(w, err)
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.TagParameter", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.TagParameter", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"name": name})
 }
 
@@ -414,16 +415,16 @@ func (s *server) handleV1UntagParameter(w http.ResponseWriter, r *http.Request) 
 		writeParameterNativeError(w, err)
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.UntagParameter", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UntagParameter", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"name": name})
 }
 
 // classifyParameterError maps store errors to stable audit error types.
 func classifyParameterError(err error) string {
 	switch {
-	case errors.Is(err, errParameterNotFound):
+	case errors.Is(err, store.ErrParameterNotFound):
 		return "ParameterNotFound"
-	case errors.Is(err, errParameterExists):
+	case errors.Is(err, store.ErrParameterExists):
 		return "ParameterAlreadyExists"
 	default:
 		return "InternalError"
@@ -433,9 +434,9 @@ func classifyParameterError(err error) string {
 // writeParameterNativeError translates store errors into native JSON errors.
 func writeParameterNativeError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, errParameterNotFound):
+	case errors.Is(err, store.ErrParameterNotFound):
 		writeNativeError(w, http.StatusNotFound, "not_found", "parameter not found")
-	case errors.Is(err, errParameterExists):
+	case errors.Is(err, store.ErrParameterExists):
 		writeNativeError(w, http.StatusConflict, "already_exists", "parameter already exists; set overwrite to update")
 	default:
 		writeNativeError(w, http.StatusInternalServerError, "internal_error", err.Error())

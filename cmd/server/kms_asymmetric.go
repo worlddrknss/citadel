@@ -11,135 +11,15 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 const (
-	keyUsageEncryptDecrypt  = "ENCRYPT_DECRYPT"
-	keyUsageSignVerify      = "SIGN_VERIFY"
-	keySpecSymmetricDefault = "SYMMETRIC_DEFAULT"
-	keySpecRSA2048          = "RSA_2048"
-	keySpecRSA3072          = "RSA_3072"
-	keySpecRSA4096          = "RSA_4096"
-	keySpecECCP256          = "ECC_NIST_P256"
-	keySpecECCP384          = "ECC_NIST_P384"
-
 	defaultSignAlgRSA  = "RSASSA_PKCS1_V1_5_SHA_256"
 	defaultSignAlgP256 = "ECDSA_SHA_256"
 	defaultSignAlgP384 = "ECDSA_SHA_384"
 )
-
-func normalizeKeyUsage(keyUsage string) string {
-	keyUsage = strings.ToUpper(strings.TrimSpace(keyUsage))
-	if keyUsage == "" {
-		return keyUsageEncryptDecrypt
-	}
-	if keyUsage != keyUsageEncryptDecrypt && keyUsage != keyUsageSignVerify {
-		return keyUsageEncryptDecrypt
-	}
-	return keyUsage
-}
-
-func defaultKeySpecForUsage(keyUsage string) string {
-	switch normalizeKeyUsage(keyUsage) {
-	case keyUsageSignVerify:
-		return keySpecECCP256
-	default:
-		return keySpecSymmetricDefault
-	}
-}
-
-func normalizeKeySpec(keyUsage, keySpec string) (string, error) {
-	keyUsage = normalizeKeyUsage(keyUsage)
-	keySpec = strings.ToUpper(strings.TrimSpace(keySpec))
-	if keySpec == "" {
-		return defaultKeySpecForUsage(keyUsage), nil
-	}
-	switch keyUsage {
-	case keyUsageEncryptDecrypt:
-		if keySpec != keySpecSymmetricDefault {
-			return "", fmt.Errorf("invalid key spec %q for %s", keySpec, keyUsage)
-		}
-		return keySpecSymmetricDefault, nil
-	case keyUsageSignVerify:
-		switch keySpec {
-		case keySpecRSA2048, keySpecRSA3072, keySpecRSA4096, keySpecECCP256, keySpecECCP384:
-			return keySpec, nil
-		default:
-			return "", fmt.Errorf("invalid key spec %q for %s", keySpec, keyUsage)
-		}
-	default:
-		return "", fmt.Errorf("unsupported key usage %q", keyUsage)
-	}
-}
-
-func generateKeyMaterial(keyUsage, keySpec string) ([]byte, []byte, string, string, error) {
-	keyUsage = normalizeKeyUsage(keyUsage)
-	normalizedSpec, err := normalizeKeySpec(keyUsage, keySpec)
-	if err != nil {
-		return nil, nil, "", "", err
-	}
-	switch keyUsage {
-	case keyUsageEncryptDecrypt:
-		raw := make([]byte, 32)
-		if _, err := rand.Read(raw); err != nil {
-			return nil, nil, "", "", err
-		}
-		return raw, nil, keyUsageEncryptDecrypt, keySpecSymmetricDefault, nil
-	case keyUsageSignVerify:
-		priv, pub, err := generateSigningKey(normalizedSpec)
-		if err != nil {
-			return nil, nil, "", "", err
-		}
-		privDER, err := x509.MarshalPKCS8PrivateKey(priv)
-		if err != nil {
-			return nil, nil, "", "", err
-		}
-		pubDER, err := x509.MarshalPKIXPublicKey(pub)
-		if err != nil {
-			return nil, nil, "", "", err
-		}
-		return privDER, pubDER, keyUsageSignVerify, normalizedSpec, nil
-	default:
-		return nil, nil, "", "", fmt.Errorf("unsupported key usage %q", keyUsage)
-	}
-}
-
-func generateSigningKey(keySpec string) (crypto.PrivateKey, crypto.PublicKey, error) {
-	switch keySpec {
-	case keySpecRSA2048:
-		priv, err := rsa.GenerateKey(rand.Reader, 2048)
-		if err != nil {
-			return nil, nil, err
-		}
-		return priv, &priv.PublicKey, nil
-	case keySpecRSA3072:
-		priv, err := rsa.GenerateKey(rand.Reader, 3072)
-		if err != nil {
-			return nil, nil, err
-		}
-		return priv, &priv.PublicKey, nil
-	case keySpecRSA4096:
-		priv, err := rsa.GenerateKey(rand.Reader, 4096)
-		if err != nil {
-			return nil, nil, err
-		}
-		return priv, &priv.PublicKey, nil
-	case keySpecECCP256:
-		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			return nil, nil, err
-		}
-		return priv, &priv.PublicKey, nil
-	case keySpecECCP384:
-		priv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-		if err != nil {
-			return nil, nil, err
-		}
-		return priv, &priv.PublicKey, nil
-	default:
-		return nil, nil, fmt.Errorf("unsupported key spec %q", keySpec)
-	}
-}
 
 func parsePrivateKey(raw []byte) (crypto.Signer, crypto.PublicKey, error) {
 	parsed, err := x509.ParsePKCS8PrivateKey(raw)
@@ -161,14 +41,14 @@ func publicKeyBytesFromRaw(raw []byte) ([]byte, error) {
 	return x509.MarshalPKIXPublicKey(pub)
 }
 
-func keyUsageAndSpecForMetadata(key kmsKey) (string, string) {
-	usage := normalizeKeyUsage(key.KeyUsage)
+func keyUsageAndSpecForMetadata(key store.KMSKey) (string, string) {
+	usage := store.NormalizeKeyUsage(key.KeyUsage)
 	if usage == "" {
-		usage = keyUsageEncryptDecrypt
+		usage = store.KeyUsageEncryptDecrypt
 	}
 	spec := strings.ToUpper(strings.TrimSpace(key.KeySpec))
 	if spec == "" {
-		spec = defaultKeySpecForUsage(usage)
+		spec = store.DefaultKeySpecForUsage(usage)
 	}
 	return usage, spec
 }
@@ -179,20 +59,20 @@ func keySpecForPublicKey(pub crypto.PublicKey) (string, error) {
 	case *rsa.PublicKey:
 		switch p.N.BitLen() {
 		case 2048:
-			return keySpecRSA2048, nil
+			return store.KeySpecRSA2048, nil
 		case 3072:
-			return keySpecRSA3072, nil
+			return store.KeySpecRSA3072, nil
 		case 4096:
-			return keySpecRSA4096, nil
+			return store.KeySpecRSA4096, nil
 		default:
 			return "", fmt.Errorf("unsupported RSA key size %d bits (want 2048, 3072 or 4096)", p.N.BitLen())
 		}
 	case *ecdsa.PublicKey:
 		switch p.Curve {
 		case elliptic.P256():
-			return keySpecECCP256, nil
+			return store.KeySpecECCP256, nil
 		case elliptic.P384():
-			return keySpecECCP384, nil
+			return store.KeySpecECCP384, nil
 		default:
 			return "", fmt.Errorf("unsupported EC curve (want P-256 or P-384)")
 		}
@@ -203,40 +83,40 @@ func keySpecForPublicKey(pub crypto.PublicKey) (string, error) {
 
 // defaultSigningAlgorithmForKey returns the canonical KMS signing-algorithm name
 // for a SIGN_VERIFY key based on its key spec.
-func defaultSigningAlgorithmForKey(key kmsKey) string {
+func defaultSigningAlgorithmForKey(key store.KMSKey) string {
 	if algs := keySigningAlgorithms(key); len(algs) > 0 {
 		return algs[0]
 	}
 	return defaultSignAlgRSA
 }
 
-func keySigningAlgorithms(key kmsKey) []string {
+func keySigningAlgorithms(key store.KMSKey) []string {
 	usage, spec := keyUsageAndSpecForMetadata(key)
-	if usage != keyUsageSignVerify {
+	if usage != store.KeyUsageSignVerify {
 		return nil
 	}
 	switch spec {
-	case keySpecRSA2048, keySpecRSA3072, keySpecRSA4096:
+	case store.KeySpecRSA2048, store.KeySpecRSA3072, store.KeySpecRSA4096:
 		return []string{defaultSignAlgRSA}
-	case keySpecECCP256:
+	case store.KeySpecECCP256:
 		return []string{defaultSignAlgP256}
-	case keySpecECCP384:
+	case store.KeySpecECCP384:
 		return []string{defaultSignAlgP384}
 	default:
 		return nil
 	}
 }
 
-func keyPublicKeyBase64(key kmsKey) (string, error) {
+func keyPublicKeyBase64(key store.KMSKey) (string, error) {
 	if len(key.PublicKeyRaw) == 0 {
 		return "", errors.New("public key unavailable")
 	}
 	return base64.StdEncoding.EncodeToString(key.PublicKeyRaw), nil
 }
 
-func signDigestWithKey(key kmsKey, signingAlgorithm string, digest []byte) ([]byte, error) {
+func signDigestWithKey(key store.KMSKey, signingAlgorithm string, digest []byte) ([]byte, error) {
 	usage, spec := keyUsageAndSpecForMetadata(key)
-	if usage != keyUsageSignVerify {
+	if usage != store.KeyUsageSignVerify {
 		return nil, fmt.Errorf("key %s does not support signing", key.ID)
 	}
 	priv, _, err := parsePrivateKey(key.MasterKeyRaw)
@@ -250,9 +130,9 @@ func signDigestWithKey(key kmsKey, signingAlgorithm string, digest []byte) ([]by
 	return priv.Sign(rand.Reader, digest, hashFunc)
 }
 
-func verifyDigestWithKey(key kmsKey, signingAlgorithm string, digest, signature []byte) (bool, error) {
+func verifyDigestWithKey(key store.KMSKey, signingAlgorithm string, digest, signature []byte) (bool, error) {
 	usage, spec := keyUsageAndSpecForMetadata(key)
-	if usage != keyUsageSignVerify {
+	if usage != store.KeyUsageSignVerify {
 		return false, fmt.Errorf("key %s does not support verification", key.ID)
 	}
 	_, pub, err := parsePrivateKey(key.MasterKeyRaw)
@@ -278,9 +158,9 @@ func hashForSigningAlgorithm(signingAlgorithm, keySpec string) (crypto.Hash, err
 	switch signingAlgorithm {
 	case "":
 		switch keySpec {
-		case keySpecECCP384:
+		case store.KeySpecECCP384:
 			return crypto.SHA384, nil
-		case keySpecRSA4096:
+		case store.KeySpecRSA4096:
 			return crypto.SHA512, nil
 		default:
 			return crypto.SHA256, nil

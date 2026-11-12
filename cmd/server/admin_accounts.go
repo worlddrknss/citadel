@@ -9,25 +9,12 @@ import (
 	"strings"
 
 	"github.com/worlddrknss/citadel/internal/arn"
+	"github.com/worlddrknss/citadel/internal/store"
 )
-
-var errUIAccountNotFound = errors.New("ui account not found")
-
-// uiAccountInfo represents an account with its ID and display name.
-type uiAccountInfo struct {
-	AccountID string
-	Name      string
-	CreatedAt string
-	UpdatedAt string
-}
-
-func normalizeAccountName(raw string) string {
-	return strings.ToLower(strings.TrimSpace(raw))
-}
 
 // CreateUIAccount creates a new account with a generated account ID and the given display name.
 func (s *dbStore) CreateUIAccount(ctx context.Context, name string) (string, error) {
-	name = normalizeAccountName(name)
+	name = store.NormalizeAccountName(name)
 	if name == "" {
 		return "", errors.New("account name is required")
 	}
@@ -58,20 +45,20 @@ func (s *dbStore) CreateUIAccount(ctx context.Context, name string) (string, err
 }
 
 // GetUIAccount retrieves an account by its account ID.
-func (s *dbStore) GetUIAccount(ctx context.Context, accountID string) (uiAccountInfo, error) {
-	var info uiAccountInfo
+func (s *dbStore) GetUIAccount(ctx context.Context, accountID string) (store.UIAccountInfo, error) {
+	var info store.UIAccountInfo
 	err := s.db.QueryRowContext(ctx,
 		`SELECT account_id, account, created_at, updated_at FROM ui_accounts WHERE account_id = $1`,
 		accountID,
 	).Scan(&info.AccountID, &info.Name, &info.CreatedAt, &info.UpdatedAt)
 	if err == sql.ErrNoRows {
-		return info, errUIAccountNotFound
+		return info, store.ErrUIAccountNotFound
 	}
 	return info, err
 }
 
 // ListUIAccounts retrieves all accounts sorted by name.
-func (s *dbStore) ListUIAccounts(ctx context.Context) ([]uiAccountInfo, error) {
+func (s *dbStore) ListUIAccounts(ctx context.Context) ([]store.UIAccountInfo, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT account_id, account, created_at, updated_at FROM ui_accounts ORDER BY account`)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -80,9 +67,9 @@ func (s *dbStore) ListUIAccounts(ctx context.Context) ([]uiAccountInfo, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var accounts []uiAccountInfo
+	var accounts []store.UIAccountInfo
 	for rows.Next() {
-		var info uiAccountInfo
+		var info store.UIAccountInfo
 		if err := rows.Scan(&info.AccountID, &info.Name, &info.CreatedAt, &info.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -102,14 +89,14 @@ func (s *dbStore) DeleteUIAccount(ctx context.Context, accountID string) error {
 		return err
 	}
 	if affected == 0 {
-		return errUIAccountNotFound
+		return store.ErrUIAccountNotFound
 	}
 	return nil
 }
 
 // UpsertUIAccount updates an account's name (legacy method, kept for compatibility).
 func (s *dbStore) UpsertUIAccount(ctx context.Context, account string) error {
-	account = normalizeAccountName(account)
+	account = store.NormalizeAccountName(account)
 	if account == "" {
 		return errors.New("account is required")
 	}
@@ -126,7 +113,7 @@ ON CONFLICT (account) DO NOTHING`,
 // In-memory store implementations
 
 func (s *inMemoryStore) CreateUIAccount(_ context.Context, name string) (string, error) {
-	name = normalizeAccountName(name)
+	name = store.NormalizeAccountName(name)
 	if name == "" {
 		return "", errors.New("account name is required")
 	}
@@ -138,7 +125,7 @@ func (s *inMemoryStore) CreateUIAccount(_ context.Context, name string) (string,
 	// Check if account name already exists
 	for _, user := range s.uiUsers {
 		for _, acct := range user.Accounts {
-			if normalizeAccountName(acct) == name {
+			if store.NormalizeAccountName(acct) == name {
 				return "", fmt.Errorf("account name already exists")
 			}
 		}
@@ -150,20 +137,20 @@ func (s *inMemoryStore) CreateUIAccount(_ context.Context, name string) (string,
 	return accountID, nil
 }
 
-func (s *inMemoryStore) GetUIAccount(_ context.Context, accountID string) (uiAccountInfo, error) {
+func (s *inMemoryStore) GetUIAccount(_ context.Context, accountID string) (store.UIAccountInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.uiAccounts == nil {
 		s.uiAccounts = map[string]struct{}{}
 	}
 	if _, ok := s.uiAccounts[accountID]; !ok {
-		return uiAccountInfo{}, errUIAccountNotFound
+		return store.UIAccountInfo{}, store.ErrUIAccountNotFound
 	}
 	// In-memory store doesn't have detailed account info; return minimal info.
-	return uiAccountInfo{AccountID: accountID, Name: accountID}, nil
+	return store.UIAccountInfo{AccountID: accountID, Name: accountID}, nil
 }
 
-func (s *inMemoryStore) ListUIAccounts(_ context.Context) ([]uiAccountInfo, error) {
+func (s *inMemoryStore) ListUIAccounts(_ context.Context) ([]store.UIAccountInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.uiAccounts == nil {
@@ -173,15 +160,15 @@ func (s *inMemoryStore) ListUIAccounts(_ context.Context) ([]uiAccountInfo, erro
 	accountSet := make(map[string]struct{})
 	for _, user := range s.uiUsers {
 		for _, account := range user.Accounts {
-			account = normalizeAccountName(account)
+			account = store.NormalizeAccountName(account)
 			if account != "" {
 				accountSet[account] = struct{}{}
 			}
 		}
 	}
-	var accounts []uiAccountInfo
+	var accounts []store.UIAccountInfo
 	for account := range accountSet {
-		accounts = append(accounts, uiAccountInfo{AccountID: account, Name: account})
+		accounts = append(accounts, store.UIAccountInfo{AccountID: account, Name: account})
 	}
 	sort.Slice(accounts, func(i, j int) bool {
 		return accounts[i].Name < accounts[j].Name
@@ -196,14 +183,14 @@ func (s *inMemoryStore) DeleteUIAccount(_ context.Context, accountID string) err
 		s.uiAccounts = map[string]struct{}{}
 	}
 	if _, ok := s.uiAccounts[accountID]; !ok {
-		return errUIAccountNotFound
+		return store.ErrUIAccountNotFound
 	}
 	delete(s.uiAccounts, accountID)
 	return nil
 }
 
 func (s *inMemoryStore) UpsertUIAccount(_ context.Context, account string) error {
-	account = normalizeAccountName(account)
+	account = store.NormalizeAccountName(account)
 	if account == "" {
 		return errors.New("account is required")
 	}
@@ -217,12 +204,6 @@ func (s *inMemoryStore) UpsertUIAccount(_ context.Context, account string) error
 }
 
 // User-Account Junction Table methods
-
-// userAccountInfo represents a user's membership in an account.
-type userAccountInfo struct {
-	AccountID string
-	Role      string
-}
 
 // AddUserAccount adds a user to an account with a specific role.
 func (s *dbStore) AddUserAccount(ctx context.Context, username, accountID, role string) error {
@@ -259,7 +240,7 @@ func (s *dbStore) RemoveUserAccount(ctx context.Context, username, accountID str
 }
 
 // ListUserAccounts returns all accounts a user belongs to.
-func (s *dbStore) ListUserAccounts(ctx context.Context, username string) ([]userAccountInfo, error) {
+func (s *dbStore) ListUserAccounts(ctx context.Context, username string) ([]store.UserAccountInfo, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return nil, errors.New("username is required")
@@ -272,9 +253,9 @@ func (s *dbStore) ListUserAccounts(ctx context.Context, username string) ([]user
 		return nil, err
 	}
 	defer rows.Close()
-	var accounts []userAccountInfo
+	var accounts []store.UserAccountInfo
 	for rows.Next() {
-		var info userAccountInfo
+		var info store.UserAccountInfo
 		if err := rows.Scan(&info.AccountID, &info.Role); err != nil {
 			return nil, err
 		}
@@ -323,7 +304,7 @@ func (s *inMemoryStore) AddUserAccount(_ context.Context, username, accountID, r
 		// Add if not already present
 		found := false
 		for _, acct := range user.Accounts {
-			if normalizeAccountName(acct) == accountID {
+			if store.NormalizeAccountName(acct) == accountID {
 				found = true
 				break
 			}
@@ -346,7 +327,7 @@ func (s *inMemoryStore) RemoveUserAccount(_ context.Context, username, accountID
 	if user, ok := s.uiUsers[username]; ok {
 		filtered := make([]string, 0, len(user.Accounts))
 		for _, acct := range user.Accounts {
-			if normalizeAccountName(acct) != accountID {
+			if store.NormalizeAccountName(acct) != accountID {
 				filtered = append(filtered, acct)
 			}
 		}
@@ -355,7 +336,7 @@ func (s *inMemoryStore) RemoveUserAccount(_ context.Context, username, accountID
 	return nil
 }
 
-func (s *inMemoryStore) ListUserAccounts(_ context.Context, username string) ([]userAccountInfo, error) {
+func (s *inMemoryStore) ListUserAccounts(_ context.Context, username string) ([]store.UserAccountInfo, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return nil, errors.New("username is required")
@@ -363,9 +344,9 @@ func (s *inMemoryStore) ListUserAccounts(_ context.Context, username string) ([]
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if user, ok := s.uiUsers[username]; ok {
-		var accounts []userAccountInfo
+		var accounts []store.UserAccountInfo
 		for _, acct := range user.Accounts {
-			accounts = append(accounts, userAccountInfo{AccountID: acct, Role: "Owner"})
+			accounts = append(accounts, store.UserAccountInfo{AccountID: acct, Role: "Owner"})
 		}
 		return accounts, nil
 	}
@@ -382,7 +363,7 @@ func (s *inMemoryStore) ListAccountUsers(_ context.Context, accountID string) ([
 	var users []struct{ Username, Role string }
 	for username, user := range s.uiUsers {
 		for _, acct := range user.Accounts {
-			if normalizeAccountName(acct) == accountID {
+			if store.NormalizeAccountName(acct) == accountID {
 				users = append(users, struct{ Username, Role string }{username, "Owner"})
 				break
 			}

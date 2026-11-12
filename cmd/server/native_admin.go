@@ -159,18 +159,18 @@ func (s *server) handleV1CreateKMSKey(w http.ResponseWriter, r *http.Request) {
 	}
 	usage := strings.TrimSpace(req.KeyUsage)
 	if usage == "" {
-		usage = keyUsageEncryptDecrypt
+		usage = store.KeyUsageEncryptDecrypt
 	}
 	spec := strings.TrimSpace(req.KeySpec)
 	if spec == "" {
-		spec = keySpecSymmetricDefault
+		spec = store.KeySpecSymmetricDefault
 	}
 	key, err := s.store.CreateKey(ctx, strings.TrimSpace(req.Description), usage, spec)
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.CreateKey", KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateKey", KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"keyId": key.ID, "arn": key.ARN, "created": true})
 }
 
@@ -204,7 +204,7 @@ func (s *server) handleV1SetKMSKeyEnabled(w http.ResponseWriter, r *http.Request
 	if req.Enabled {
 		action = "citadel.EnableKey"
 	}
-	s.recordAudit(ctx, auditEvent{Action: action, KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: action, KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"keyId": keyID, "enabled": req.Enabled})
 }
 
@@ -233,7 +233,7 @@ func (s *server) handleV1ScheduleKMSKeyDeletion(w http.ResponseWriter, r *http.R
 		writeNativeError(w, http.StatusBadRequest, "delete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.ScheduleKeyDeletion", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ScheduleKeyDeletion", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"keyId": keyID, "deletionDate": when.UTC().Format(time.RFC3339)})
 }
 
@@ -257,7 +257,7 @@ func (s *server) handleV1CancelKMSKeyDeletion(w http.ResponseWriter, r *http.Req
 		writeNativeError(w, http.StatusBadRequest, "cancel_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.CancelKeyDeletion", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CancelKeyDeletion", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"keyId": keyID, "restored": true})
 }
 
@@ -304,7 +304,7 @@ func (s *server) handleV1CreateAccessKey(w http.ResponseWriter, r *http.Request)
 		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.CreateAccessKey", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateAccessKey", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{
 		"accessKeyId": secret.AccessKeyID,
 		"secretKey":   secret.SecretKey,
@@ -335,7 +335,7 @@ func (s *server) handleV1DeleteAccessKey(w http.ResponseWriter, r *http.Request)
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.DeleteAccessKey", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteAccessKey", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
@@ -364,7 +364,7 @@ func (s *server) handleV1SetAccessKeyStatus(w http.ResponseWriter, r *http.Reque
 		writeNativeError(w, http.StatusInternalServerError, "update_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.SetAccessKeyStatus", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.SetAccessKeyStatus", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"accessKeyId": keyID, "status": status})
 }
 
@@ -376,7 +376,7 @@ func (s *server) guardOwnAccessKey(ctx context.Context, sess *uiSession, keyID s
 		return err
 	}
 	if !strings.EqualFold(owner, sess.Username) && !uiRoleAtLeast(sess.Role, "admin") {
-		return errAccessKeyNotFound
+		return store.ErrAccessKeyNotFound
 	}
 	return nil
 }
@@ -433,7 +433,7 @@ func (s *server) handleV1ChangePassword(w http.ResponseWriter, r *http.Request) 
 		writeNativeError(w, http.StatusInternalServerError, "update_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.ChangePassword", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ChangePassword", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"updated": true})
 }
 
@@ -530,7 +530,7 @@ func (s *server) handleV1UpsertUser(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.UpsertUser", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpsertUser", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"username": username, "created": isNew})
 }
 
@@ -553,7 +553,7 @@ func (s *server) handleV1DeleteUser(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.DeleteUser", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteUser", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
@@ -613,7 +613,7 @@ func (s *server) handleV1CreateAccount(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.store.EnsureAccountDefaultKey(ctx, accountID); err != nil {
 		log.Printf("warning: failed to provision default key for account %s: %v", accountID, err)
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.CreateAccount", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateAccount", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"accountId": accountID, "created": true})
 }
 
@@ -636,7 +636,7 @@ func (s *server) handleV1DeleteAccount(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.DeleteAccount", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteAccount", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
@@ -667,7 +667,7 @@ func (s *server) handleV1AssignUserAccount(w http.ResponseWriter, r *http.Reques
 		writeNativeError(w, http.StatusBadRequest, "assign_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.AssignUserAccount", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.AssignUserAccount", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"assigned": true})
 }
 
@@ -687,7 +687,7 @@ func (s *server) handleV1RemoveUserAccount(w http.ResponseWriter, r *http.Reques
 		writeNativeError(w, http.StatusInternalServerError, "remove_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.RemoveUserAccount", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RemoveUserAccount", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"removed": true})
 }
 
@@ -741,7 +741,7 @@ func (s *server) handleV1CreateCA(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.CreateCA", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateCA", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"caId": caID, "created": true})
 }
 
@@ -777,7 +777,7 @@ func (s *server) handleV1IssueCert(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "issue_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.IssueCertificate", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.IssueCertificate", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"issued": true})
 }
 
@@ -805,7 +805,7 @@ func (s *server) handleV1RevokeCert(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "revoke_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.RevokeCertificate", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RevokeCertificate", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"revoked": true})
 }
 
@@ -836,7 +836,7 @@ func (s *server) handleV1ImportCA(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "import_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.ImportCA", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ImportCA", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"caId": caID, "imported": true})
 }
 
@@ -864,7 +864,7 @@ func (s *server) handleV1RenewCert(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "renew_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.RenewCertificate", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RenewCertificate", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"renewed": true})
 }
 
@@ -909,7 +909,7 @@ func (s *server) handleV1SaveLESettings(w http.ResponseWriter, r *http.Request) 
 		writeNativeError(w, http.StatusBadRequest, "save_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.SaveLESettings", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.SaveLESettings", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"saved": true})
 }
 
@@ -935,7 +935,7 @@ func (s *server) handleV1RequestLECert(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "request_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.RequestLetsEncrypt", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RequestLetsEncrypt", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"requested": true})
 }
 
@@ -960,7 +960,7 @@ func (s *server) handleV1BeginLEDNSOrder(w http.ResponseWriter, r *http.Request)
 		writeNativeError(w, http.StatusBadRequest, "begin_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.BeginLetsEncryptDNS", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.BeginLetsEncryptDNS", Result: "ok", Actor: r.RemoteAddr})
 	recs := make([]map[string]any, 0, len(records))
 	for _, rec := range records {
 		recs = append(recs, map[string]any{"domain": rec.Domain, "name": rec.Name, "value": rec.Value})
@@ -993,7 +993,7 @@ func (s *server) handleV1CompleteLEDNSOrder(w http.ResponseWriter, r *http.Reque
 		writeNativeError(w, http.StatusBadRequest, "complete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.CompleteLetsEncryptDNS", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CompleteLetsEncryptDNS", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"certId": cert.CertID, "domains": cert.Domains, "issued": true})
 }
 
@@ -1018,5 +1018,5 @@ func (s *server) rehashOnLogin(ctx context.Context, runtime *uiRuntime, user sto
 	runtime.mu.Lock()
 	runtime.users[user.Username] = user
 	runtime.mu.Unlock()
-	s.recordAudit(ctx, auditEvent{Action: "citadel.RehashPassword", Result: "ok", Actor: user.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RehashPassword", Result: "ok", Actor: user.Username})
 }

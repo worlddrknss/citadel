@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/worlddrknss/citadel/internal/config"
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 func newParamTestServer() *server {
@@ -58,7 +59,7 @@ func TestParameterStoreRoundtrip(t *testing.T) {
 	}
 
 	// Creating again without overwrite should conflict.
-	if _, err := ps.PutParameter(ctx, rec, false); err != errParameterExists {
+	if _, err := ps.PutParameter(ctx, rec, false); err != store.ErrParameterExists {
 		t.Fatalf("expected errParameterExists, got %v", err)
 	}
 
@@ -125,7 +126,7 @@ func TestParameterStoreRoundtrip(t *testing.T) {
 	}
 
 	// Tags.
-	if err := ps.TagParameter(ctx, "/app/prod/name", []paramTag{{Key: "team", Value: "platform"}}); err != nil {
+	if err := ps.TagParameter(ctx, "/app/prod/name", []store.ParamTag{{Key: "team", Value: "platform"}}); err != nil {
 		t.Fatalf("tag: %v", err)
 	}
 	tags, err := ps.ListParameterTags(ctx, "/app/prod/name")
@@ -137,7 +138,7 @@ func TestParameterStoreRoundtrip(t *testing.T) {
 	if err := ps.DeleteParameter(ctx, "/app/prod/name"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := ps.GetParameter(ctx, "/app/prod/name"); err != errParameterNotFound {
+	if _, err := ps.GetParameter(ctx, "/app/prod/name"); err != store.ErrParameterNotFound {
 		t.Fatalf("expected errParameterNotFound, got %v", err)
 	}
 }

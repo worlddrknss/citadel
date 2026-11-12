@@ -13,6 +13,7 @@ import (
 
 	"github.com/worlddrknss/citadel/internal/arn"
 	"github.com/worlddrknss/citadel/internal/sigv4"
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // AWS-compatible Security Token Service (STS).
@@ -133,7 +134,7 @@ func (s *server) handleSTSAssumeRole(w http.ResponseWriter, r *http.Request, bod
 		writeSTSError(w, http.StatusBadRequest, "NoSuchEntity", "the requested role does not exist")
 		return
 	}
-	if role.Trust.Type != trustTypeAccount || !role.Trust.principalAllowed(callerAccount) {
+	if role.Trust.Type != trustTypeAccount || !role.Trust.PrincipalAllowed(callerAccount) {
 		writeSTSError(w, http.StatusForbidden, "AccessDenied", "the role trust policy does not allow this principal")
 		return
 	}
@@ -145,7 +146,7 @@ func (s *server) handleSTSAssumeRole(w http.ResponseWriter, r *http.Request, bod
 		writeSTSError(w, http.StatusInternalServerError, "InternalFailure", "failed to issue credentials")
 		return
 	}
-	s.recordAudit(withCallerAccount(ctx, role.AccountID), auditEvent{Action: "sts.AssumeRole", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(store.WithCallerAccount(ctx, role.AccountID), store.AuditEvent{Action: "sts.AssumeRole", Result: "ok", Actor: r.RemoteAddr})
 
 	resp := stsAssumeRoleResponse{}
 	resp.XMLNS = stsXMLNamespace
@@ -183,7 +184,7 @@ func (s *server) handleSTSAssumeRoleWithWebIdentity(w http.ResponseWriter, r *ht
 		writeSTSError(w, http.StatusBadRequest, "InvalidIdentityToken", "the web identity token could not be validated")
 		return
 	}
-	if normalizeIssuerURL(role.Trust.ProviderURL) != claims.Issuer {
+	if store.NormalizeIssuerURL(role.Trust.ProviderURL) != claims.Issuer {
 		writeSTSError(w, http.StatusForbidden, "AccessDenied", "token issuer does not match the role's identity provider")
 		return
 	}
@@ -191,11 +192,11 @@ func (s *server) handleSTSAssumeRoleWithWebIdentity(w http.ResponseWriter, r *ht
 		writeSTSError(w, http.StatusForbidden, "AccessDenied", "no identity provider is registered for this issuer")
 		return
 	}
-	if !role.Trust.audienceAllowed(claims.Audiences) {
+	if !role.Trust.AudienceAllowed(claims.Audiences) {
 		writeSTSError(w, http.StatusForbidden, "AccessDenied", "token audience is not allowed by the role trust policy")
 		return
 	}
-	if !role.Trust.subjectAllowed(claims.Subject) {
+	if !role.Trust.SubjectAllowed(claims.Subject) {
 		writeSTSError(w, http.StatusForbidden, "AccessDenied", "token subject is not allowed by the role trust policy")
 		return
 	}
@@ -207,7 +208,7 @@ func (s *server) handleSTSAssumeRoleWithWebIdentity(w http.ResponseWriter, r *ht
 		writeSTSError(w, http.StatusInternalServerError, "InternalFailure", "failed to issue credentials")
 		return
 	}
-	s.recordAudit(withCallerAccount(ctx, role.AccountID), auditEvent{Action: "sts.AssumeRoleWithWebIdentity", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(store.WithCallerAccount(ctx, role.AccountID), store.AuditEvent{Action: "sts.AssumeRoleWithWebIdentity", Result: "ok", Actor: r.RemoteAddr})
 
 	resp := stsAssumeRoleWithWebIdentityResponse{}
 	resp.XMLNS = stsXMLNamespace
@@ -225,13 +226,13 @@ func (s *server) handleSTSAssumeRoleWithWebIdentity(w http.ResponseWriter, r *ht
 // mintTempCredentials issues, persists and returns a temporary credential set
 // bound to the given role. subject is the OIDC subject for web-identity flows
 // (empty for AssumeRole).
-func (s *server) mintTempCredentials(ctx context.Context, role iamRole, sessionName, subject string, duration time.Duration) (stsCredentials, string, string, error) {
+func (s *server) mintTempCredentials(ctx context.Context, role store.IAMRole, sessionName, subject string, duration time.Duration) (stsCredentials, string, string, error) {
 	keyID := generateTempAccessKeyID()
-	secret := generateAccessKeySecret()
+	secret := store.GenerateAccessKeySecret()
 	sessionToken := generateSessionToken()
 	expiry := time.Now().UTC().Add(duration)
 
-	sess := stsSession{
+	sess := store.STSSession{
 		AccessKeyID:     keyID,
 		AccountID:       role.AccountID,
 		RoleARN:         role.RoleARN,

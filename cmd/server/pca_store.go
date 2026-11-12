@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // CreateCertificateAuthority inserts a new CA record into the database
-func (s *dbStore) CreateCertificateAuthority(ctx context.Context, ca pcaCertificateAuthority) error {
+func (s *dbStore) CreateCertificateAuthority(ctx context.Context, ca store.PCACertificateAuthority) error {
 	query := `
 		INSERT INTO pca_certificate_authorities (
 			ca_id, urn, type, kms_key_id, subject_dn, state, ca_cert_b64,
@@ -28,7 +30,7 @@ func (s *dbStore) CreateCertificateAuthority(ctx context.Context, ca pcaCertific
 }
 
 // DescribeCertificateAuthority retrieves a CA by its ARN
-func (s *dbStore) DescribeCertificateAuthority(ctx context.Context, arn string) (pcaCertificateAuthority, error) {
+func (s *dbStore) DescribeCertificateAuthority(ctx context.Context, arn string) (store.PCACertificateAuthority, error) {
 	query := `
 		SELECT ca_id, urn, type, kms_key_id, subject_dn, state, ca_cert_b64,
 		       path_length, not_before, not_after, description, account, created_at, updated_at
@@ -36,7 +38,7 @@ func (s *dbStore) DescribeCertificateAuthority(ctx context.Context, arn string) 
 		WHERE urn = $1
 	`
 	row := s.db.QueryRowContext(ctx, query, arn)
-	var ca pcaCertificateAuthority
+	var ca store.PCACertificateAuthority
 	var pathLength sql.NullInt32
 	err := row.Scan(
 		&ca.CAID, &ca.ARN, &ca.Type, &ca.KMSKeyID, &ca.SubjectDN, &ca.State, &ca.CACertB64,
@@ -44,9 +46,9 @@ func (s *dbStore) DescribeCertificateAuthority(ctx context.Context, arn string) 
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return pcaCertificateAuthority{}, fmt.Errorf("certificate authority not found")
+			return store.PCACertificateAuthority{}, fmt.Errorf("certificate authority not found")
 		}
-		return pcaCertificateAuthority{}, fmt.Errorf("query CA: %w", err)
+		return store.PCACertificateAuthority{}, fmt.Errorf("query CA: %w", err)
 	}
 	if pathLength.Valid {
 		pl := int(pathLength.Int32)
@@ -56,7 +58,7 @@ func (s *dbStore) DescribeCertificateAuthority(ctx context.Context, arn string) 
 }
 
 // ListCertificateAuthorities returns all CAs for the current account
-func (s *dbStore) ListCertificateAuthorities(ctx context.Context) ([]pcaCertificateAuthority, error) {
+func (s *dbStore) ListCertificateAuthorities(ctx context.Context) ([]store.PCACertificateAuthority, error) {
 	query := `
 		SELECT ca_id, urn, type, kms_key_id, subject_dn, state, ca_cert_b64,
 		       path_length, not_before, not_after, description, account, created_at, updated_at
@@ -69,9 +71,9 @@ func (s *dbStore) ListCertificateAuthorities(ctx context.Context) ([]pcaCertific
 	}
 	defer rows.Close()
 
-	var cas []pcaCertificateAuthority
+	var cas []store.PCACertificateAuthority
 	for rows.Next() {
-		var ca pcaCertificateAuthority
+		var ca store.PCACertificateAuthority
 		var pathLength sql.NullInt32
 		err := rows.Scan(
 			&ca.CAID, &ca.ARN, &ca.Type, &ca.KMSKeyID, &ca.SubjectDN, &ca.State, &ca.CACertB64,
@@ -90,7 +92,7 @@ func (s *dbStore) ListCertificateAuthorities(ctx context.Context) ([]pcaCertific
 }
 
 // CreateCertificate inserts a new certificate record into the database
-func (s *dbStore) CreateCertificate(ctx context.Context, cert pcaCertificate) error {
+func (s *dbStore) CreateCertificate(ctx context.Context, cert store.PCACertificate) error {
 	query := `
 		INSERT INTO pca_certificates (
 			cert_id, ca_id, serial, csr_b64, cert_b64, status,
@@ -111,7 +113,7 @@ func (s *dbStore) CreateCertificate(ctx context.Context, cert pcaCertificate) er
 }
 
 // GetCertificate retrieves a certificate by its ID
-func (s *dbStore) GetCertificate(ctx context.Context, certID string) (pcaCertificate, error) {
+func (s *dbStore) GetCertificate(ctx context.Context, certID string) (store.PCACertificate, error) {
 	query := `
 		SELECT cert_id, ca_id, serial, csr_b64, cert_b64, status,
 		       not_before, not_after, revoked_at, revocation_reason, template, created_at, updated_at
@@ -119,7 +121,7 @@ func (s *dbStore) GetCertificate(ctx context.Context, certID string) (pcaCertifi
 		WHERE cert_id = $1
 	`
 	row := s.db.QueryRowContext(ctx, query, certID)
-	var cert pcaCertificate
+	var cert store.PCACertificate
 	var revokedAt sql.NullTime
 	var revocationReason sql.NullString
 	err := row.Scan(
@@ -128,9 +130,9 @@ func (s *dbStore) GetCertificate(ctx context.Context, certID string) (pcaCertifi
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return pcaCertificate{}, fmt.Errorf("certificate not found")
+			return store.PCACertificate{}, fmt.Errorf("certificate not found")
 		}
-		return pcaCertificate{}, fmt.Errorf("query certificate: %w", err)
+		return store.PCACertificate{}, fmt.Errorf("query certificate: %w", err)
 	}
 	if revokedAt.Valid {
 		cert.RevokedAt = &revokedAt.Time
@@ -142,7 +144,7 @@ func (s *dbStore) GetCertificate(ctx context.Context, certID string) (pcaCertifi
 }
 
 // ListCertificates returns all certificates issued by a CA
-func (s *dbStore) ListCertificates(ctx context.Context, caID string) ([]pcaCertificate, error) {
+func (s *dbStore) ListCertificates(ctx context.Context, caID string) ([]store.PCACertificate, error) {
 	query := `
 		SELECT cert_id, ca_id, serial, csr_b64, cert_b64, status,
 		       not_before, not_after, revoked_at, revocation_reason, template, created_at, updated_at
@@ -156,9 +158,9 @@ func (s *dbStore) ListCertificates(ctx context.Context, caID string) ([]pcaCerti
 	}
 	defer rows.Close()
 
-	var certs []pcaCertificate
+	var certs []store.PCACertificate
 	for rows.Next() {
-		var cert pcaCertificate
+		var cert store.PCACertificate
 		var revokedAt sql.NullTime
 		var revocationReason sql.NullString
 		err := rows.Scan(
@@ -201,30 +203,30 @@ func (s *dbStore) RevokeCertificate(ctx context.Context, certID, reason string) 
 }
 
 // inMemoryStore CA implementations (unsupported)
-func (s *inMemoryStore) CreateCertificateAuthority(_ context.Context, _ pcaCertificateAuthority) error {
-	return errUnsupported
+func (s *inMemoryStore) CreateCertificateAuthority(_ context.Context, _ store.PCACertificateAuthority) error {
+	return store.ErrUnsupported
 }
 
-func (s *inMemoryStore) DescribeCertificateAuthority(_ context.Context, _ string) (pcaCertificateAuthority, error) {
-	return pcaCertificateAuthority{}, errUnsupported
+func (s *inMemoryStore) DescribeCertificateAuthority(_ context.Context, _ string) (store.PCACertificateAuthority, error) {
+	return store.PCACertificateAuthority{}, store.ErrUnsupported
 }
 
-func (s *inMemoryStore) ListCertificateAuthorities(_ context.Context) ([]pcaCertificateAuthority, error) {
-	return nil, errUnsupported
+func (s *inMemoryStore) ListCertificateAuthorities(_ context.Context) ([]store.PCACertificateAuthority, error) {
+	return nil, store.ErrUnsupported
 }
 
-func (s *inMemoryStore) CreateCertificate(_ context.Context, _ pcaCertificate) error {
-	return errUnsupported
+func (s *inMemoryStore) CreateCertificate(_ context.Context, _ store.PCACertificate) error {
+	return store.ErrUnsupported
 }
 
-func (s *inMemoryStore) GetCertificate(_ context.Context, _ string) (pcaCertificate, error) {
-	return pcaCertificate{}, errUnsupported
+func (s *inMemoryStore) GetCertificate(_ context.Context, _ string) (store.PCACertificate, error) {
+	return store.PCACertificate{}, store.ErrUnsupported
 }
 
-func (s *inMemoryStore) ListCertificates(_ context.Context, _ string) ([]pcaCertificate, error) {
-	return nil, errUnsupported
+func (s *inMemoryStore) ListCertificates(_ context.Context, _ string) ([]store.PCACertificate, error) {
+	return nil, store.ErrUnsupported
 }
 
 func (s *inMemoryStore) RevokeCertificate(_ context.Context, _, _ string) error {
-	return errUnsupported
+	return store.ErrUnsupported
 }

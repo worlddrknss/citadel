@@ -4,6 +4,8 @@ import (
 	"context"
 	"sort"
 	"strings"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // This file implements the hierarchyStore interface (see secrets_service.go) on
@@ -30,11 +32,11 @@ func (s *inMemoryStore) hierProjectsLocked() map[string]*memProject {
 }
 
 // ListHierarchy returns the structure-only projects/environments for the caller.
-func (s *inMemoryStore) ListHierarchy(ctx context.Context) ([]hierarchyProject, error) {
+func (s *inMemoryStore) ListHierarchy(ctx context.Context) ([]store.HierarchyProject, error) {
 	account := s.accountForContext(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]hierarchyProject, 0)
+	out := make([]store.HierarchyProject, 0)
 	for _, p := range s.hierProjectsLocked() {
 		if p.account != account {
 			continue
@@ -44,7 +46,7 @@ func (s *inMemoryStore) ListHierarchy(ctx context.Context) ([]hierarchyProject, 
 			envs = append(envs, e)
 		}
 		sort.Strings(envs)
-		out = append(out, hierarchyProject{Project: p.slug, Name: p.name, Environments: envs})
+		out = append(out, store.HierarchyProject{Project: p.slug, Name: p.name, Environments: envs})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Project < out[j].Project })
 	return out, nil
@@ -54,10 +56,10 @@ func (s *inMemoryStore) ListHierarchy(ctx context.Context) ([]hierarchyProject, 
 // requested project/env/folder path.
 func (s *inMemoryStore) ListFolders(ctx context.Context, project, env string, folder []string) ([]string, error) {
 	account := s.accountForContext(ctx)
-	prefix := folderPath(folder)
+	prefix := store.FolderPath(folder)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := fmtHierarchyKey(account, project)
+	key := store.FmtHierarchyKey(account, project)
 	p, ok := s.hierProjectsLocked()[key]
 	if !ok {
 		return nil, nil
@@ -68,7 +70,7 @@ func (s *inMemoryStore) ListFolders(ctx context.Context, project, env string, fo
 	}
 	subSet := map[string]struct{}{}
 	for path := range paths {
-		child, ok := immediateChild(prefix, path)
+		child, ok := store.ImmediateChild(prefix, path)
 		if ok {
 			subSet[child] = struct{}{}
 		}
@@ -86,7 +88,7 @@ func (s *inMemoryStore) CreateProject(ctx context.Context, slug, name string) er
 	account := s.accountForContext(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := fmtHierarchyKey(account, slug)
+	key := store.FmtHierarchyKey(account, slug)
 	projects := s.hierProjectsLocked()
 	if p, ok := projects[key]; ok {
 		if name != "" {
@@ -110,7 +112,7 @@ func (s *inMemoryStore) CreateEnvironment(ctx context.Context, project, slug, na
 	account := s.accountForContext(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := fmtHierarchyKey(account, project)
+	key := store.FmtHierarchyKey(account, project)
 	projects := s.hierProjectsLocked()
 	p, ok := projects[key]
 	if !ok {
@@ -132,7 +134,7 @@ func (s *inMemoryStore) CreateFolder(ctx context.Context, project, env string, f
 	account := s.accountForContext(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := fmtHierarchyKey(account, project)
+	key := store.FmtHierarchyKey(account, project)
 	projects := s.hierProjectsLocked()
 	p, ok := projects[key]
 	if !ok {
@@ -151,7 +153,7 @@ func (s *inMemoryStore) CreateFolder(ctx context.Context, project, env string, f
 		p.folders[env] = map[string]struct{}{}
 	}
 	for i := 1; i <= len(folder); i++ {
-		p.folders[env][folderPath(folder[:i])] = struct{}{}
+		p.folders[env][store.FolderPath(folder[:i])] = struct{}{}
 	}
 	return nil
 }
@@ -161,7 +163,7 @@ func (s *inMemoryStore) RenameProject(ctx context.Context, slug, newName string)
 	account := s.accountForContext(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if p, ok := s.hierProjectsLocked()[fmtHierarchyKey(account, slug)]; ok {
+	if p, ok := s.hierProjectsLocked()[store.FmtHierarchyKey(account, slug)]; ok {
 		p.name = newName
 	}
 	return nil
@@ -172,7 +174,7 @@ func (s *inMemoryStore) RenameEnvironment(ctx context.Context, project, slug, ne
 	account := s.accountForContext(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if p, ok := s.hierProjectsLocked()[fmtHierarchyKey(account, project)]; ok {
+	if p, ok := s.hierProjectsLocked()[store.FmtHierarchyKey(account, project)]; ok {
 		if _, ok := p.envs[slug]; ok {
 			p.envs[slug] = newName
 		}
@@ -186,7 +188,7 @@ func (s *inMemoryStore) DeleteProject(ctx context.Context, slug string) error {
 	account := s.accountForContext(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.hierProjectsLocked(), fmtHierarchyKey(account, slug))
+	delete(s.hierProjectsLocked(), store.FmtHierarchyKey(account, slug))
 	return nil
 }
 
@@ -195,7 +197,7 @@ func (s *inMemoryStore) DeleteEnvironment(ctx context.Context, project, slug str
 	account := s.accountForContext(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if p, ok := s.hierProjectsLocked()[fmtHierarchyKey(account, project)]; ok {
+	if p, ok := s.hierProjectsLocked()[store.FmtHierarchyKey(account, project)]; ok {
 		delete(p.envs, slug)
 		delete(p.folders, slug)
 	}
@@ -205,10 +207,10 @@ func (s *inMemoryStore) DeleteEnvironment(ctx context.Context, project, slug str
 // DeleteFolder removes a structure-only folder and any nested folders.
 func (s *inMemoryStore) DeleteFolder(ctx context.Context, project, env string, folder []string) error {
 	account := s.accountForContext(ctx)
-	prefix := folderPath(folder)
+	prefix := store.FolderPath(folder)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.hierProjectsLocked()[fmtHierarchyKey(account, project)]
+	p, ok := s.hierProjectsLocked()[store.FmtHierarchyKey(account, project)]
 	if !ok {
 		return nil
 	}
@@ -224,39 +226,10 @@ func (s *inMemoryStore) DeleteFolder(ctx context.Context, project, env string, f
 	return nil
 }
 
-// immediateChild reports the immediate child folder name of full when full is a
-// strict descendant of prefix. prefix and full are normalized folder paths from
-// folderPath (e.g. "/" or "/a/b").
-func immediateChild(prefix, full string) (string, bool) {
-	if prefix == "/" {
-		rest := strings.TrimPrefix(full, "/")
-		if rest == "" {
-			return "", false
-		}
-		first := rest
-		if i := strings.IndexByte(rest, '/'); i >= 0 {
-			first = rest[:i]
-		}
-		return first, true
-	}
-	if !strings.HasPrefix(full, prefix+"/") {
-		return "", false
-	}
-	rest := strings.TrimPrefix(full, prefix+"/")
-	if rest == "" {
-		return "", false
-	}
-	first := rest
-	if i := strings.IndexByte(rest, '/'); i >= 0 {
-		first = rest[:i]
-	}
-	return first, true
-}
-
 // ---- dbStore (Postgres) implementation ----
 
 // ListHierarchy returns structure-only projects/environments for the caller.
-func (s *dbStore) ListHierarchy(ctx context.Context) ([]hierarchyProject, error) {
+func (s *dbStore) ListHierarchy(ctx context.Context) ([]store.HierarchyProject, error) {
 	account := s.accountForContext(ctx)
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT slug, name FROM sm_projects WHERE account_id=$1 ORDER BY slug`, account)
@@ -264,14 +237,14 @@ func (s *dbStore) ListHierarchy(ctx context.Context) ([]hierarchyProject, error)
 		return nil, err
 	}
 	defer rows.Close()
-	bySlug := map[string]*hierarchyProject{}
+	bySlug := map[string]*store.HierarchyProject{}
 	order := []string{}
 	for rows.Next() {
 		var slug, name string
 		if err := rows.Scan(&slug, &name); err != nil {
 			return nil, err
 		}
-		bySlug[slug] = &hierarchyProject{Project: slug, Name: name}
+		bySlug[slug] = &store.HierarchyProject{Project: slug, Name: name}
 		order = append(order, slug)
 	}
 	if err := rows.Err(); err != nil {
@@ -290,7 +263,7 @@ func (s *dbStore) ListHierarchy(ctx context.Context) ([]hierarchyProject, error)
 		}
 		p, ok := bySlug[project]
 		if !ok {
-			p = &hierarchyProject{Project: project}
+			p = &store.HierarchyProject{Project: project}
 			bySlug[project] = p
 			order = append(order, project)
 		}
@@ -300,7 +273,7 @@ func (s *dbStore) ListHierarchy(ctx context.Context) ([]hierarchyProject, error)
 		return nil, err
 	}
 	sort.Strings(order)
-	out := make([]hierarchyProject, 0, len(order))
+	out := make([]store.HierarchyProject, 0, len(order))
 	for _, slug := range order {
 		out = append(out, *bySlug[slug])
 	}
@@ -310,7 +283,7 @@ func (s *dbStore) ListHierarchy(ctx context.Context) ([]hierarchyProject, error)
 // ListFolders returns immediate registered subfolders under the given path.
 func (s *dbStore) ListFolders(ctx context.Context, project, env string, folder []string) ([]string, error) {
 	account := s.accountForContext(ctx)
-	prefix := folderPath(folder)
+	prefix := store.FolderPath(folder)
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT folder_path FROM sm_folders WHERE account_id=$1 AND project_slug=$2 AND env_slug=$3`,
 		account, project, env)
@@ -324,7 +297,7 @@ func (s *dbStore) ListFolders(ctx context.Context, project, env string, folder [
 		if err := rows.Scan(&path); err != nil {
 			return nil, err
 		}
-		if child, ok := immediateChild(prefix, path); ok {
+		if child, ok := store.ImmediateChild(prefix, path); ok {
 			subSet[child] = struct{}{}
 		}
 	}
@@ -372,7 +345,7 @@ func (s *dbStore) CreateFolder(ctx context.Context, project, env string, folder 
 		if _, err := s.db.ExecContext(ctx,
 			`INSERT INTO sm_folders (account_id, project_slug, env_slug, folder_path) VALUES ($1,$2,$3,$4)
 			 ON CONFLICT (account_id, project_slug, env_slug, folder_path) DO NOTHING`,
-			account, project, env, folderPath(folder[:i])); err != nil {
+			account, project, env, store.FolderPath(folder[:i])); err != nil {
 			return err
 		}
 	}
@@ -430,7 +403,7 @@ func (s *dbStore) DeleteEnvironment(ctx context.Context, project, slug string) e
 // DeleteFolder removes a structure-only folder and any nested folders.
 func (s *dbStore) DeleteFolder(ctx context.Context, project, env string, folder []string) error {
 	account := s.accountForContext(ctx)
-	prefix := folderPath(folder)
+	prefix := store.FolderPath(folder)
 	_, err := s.db.ExecContext(ctx,
 		`DELETE FROM sm_folders WHERE account_id=$1 AND project_slug=$2 AND env_slug=$3
 		 AND (folder_path=$4 OR folder_path LIKE $5)`,

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -11,10 +10,6 @@ import (
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
 	"github.com/worlddrknss/citadel/internal/store"
 )
-
-// errUIUserNotFound is returned when a UI user lookup or delete targets an
-// unknown username.
-var errUIUserNotFound = errors.New("ui user not found")
 
 // ListUIUsers returns the admin-console users persisted in the database.
 func (s *dbStore) ListUIUsers(ctx context.Context) ([]store.UIUser, error) {
@@ -32,7 +27,7 @@ func (s *dbStore) ListUIUsers(ctx context.Context) ([]store.UIUser, error) {
 		if err := rows.Scan(&user.Username, &user.PasswordHash, &user.Role, &user.DisplayName, &accountsJSON); err != nil {
 			return nil, err
 		}
-		user.Accounts = decodeAccountsJSON(accountsJSON)
+		user.Accounts = store.DecodeAccountsJSON(accountsJSON)
 		users = append(users, user)
 	}
 	return users, rows.Err()
@@ -48,7 +43,7 @@ func (s *dbStore) UpsertUIUser(ctx context.Context, user store.UIUser) error {
 	if strings.TrimSpace(user.PasswordHash) == "" {
 		return errors.New("ui user requires a password hash")
 	}
-	accountsJSON, err := encodeAccountsJSON(user.Accounts)
+	accountsJSON, err := store.EncodeAccountsJSON(user.Accounts)
 	if err != nil {
 		return err
 	}
@@ -75,7 +70,7 @@ func (s *dbStore) DeleteUIUser(ctx context.Context, username string) error {
 		return err
 	}
 	if affected == 0 {
-		return errUIUserNotFound
+		return store.ErrUIUserNotFound
 	}
 	return nil
 }
@@ -118,33 +113,10 @@ func (s *inMemoryStore) DeleteUIUser(_ context.Context, username string) error {
 	defer s.mu.Unlock()
 	username = strings.TrimSpace(username)
 	if _, ok := s.uiUsers[username]; !ok {
-		return errUIUserNotFound
+		return store.ErrUIUserNotFound
 	}
 	delete(s.uiUsers, username)
 	return nil
-}
-
-func decodeAccountsJSON(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	var accounts []string
-	if err := json.Unmarshal([]byte(raw), &accounts); err != nil {
-		return nil
-	}
-	return store.NormalizeAccounts(accounts)
-}
-
-func encodeAccountsJSON(accounts []string) (string, error) {
-	if len(accounts) == 0 {
-		return "[]", nil
-	}
-	b, err := json.Marshal(store.NormalizeAccounts(accounts))
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
 }
 
 // mergeDBUIUsers loads admin-console users from the store and merges them into
@@ -152,7 +124,7 @@ func encodeAccountsJSON(accounts []string) (string, error) {
 // precedence so operators can manage accounts without a redeploy. Env users
 // with a plaintext password are seeded into the database (hashed) on first run
 // when they are not already present.
-func mergeDBUIUsers(ctx context.Context, st keyStore, base map[string]store.UIUser) (map[string]store.UIUser, error) {
+func mergeDBUIUsers(ctx context.Context, st store.Store, base map[string]store.UIUser) (map[string]store.UIUser, error) {
 	merged := map[string]store.UIUser{}
 	for name, user := range base {
 		merged[name] = user

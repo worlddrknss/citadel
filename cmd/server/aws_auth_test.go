@@ -14,6 +14,7 @@ import (
 
 	"github.com/worlddrknss/citadel/internal/config"
 	"github.com/worlddrknss/citadel/internal/sigv4"
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // sigV4Sign signs req with SigV4 the way an AWS SDK does for JSON-protocol
@@ -107,7 +108,7 @@ func TestAWSAuthCallerReachesPolicyPrincipal(t *testing.T) {
 	// A header alone must not set the principal account.
 	r2 := httptest.NewRequest(http.MethodPost, "/", nil)
 	r2.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAX/20260101/us-east-1/kms/aws4_request")
-	if _, ok := callerAccountFromContext(r2.Context()); ok {
+	if _, ok := store.CallerAccountFromContext(r2.Context()); ok {
 		t.Fatal("unverified header produced a caller account")
 	}
 }

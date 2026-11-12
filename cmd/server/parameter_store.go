@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // Parameter Store provides an AWS Systems Manager (SSM) Parameter Store
@@ -18,11 +20,6 @@ import (
 // the Secrets Manager ciphertext format so the existing crypto helpers can be
 // reused.
 
-var (
-	errParameterNotFound = errors.New("parameter not found")
-	errParameterExists   = errors.New("parameter already exists")
-)
-
 const (
 	parameterTypeString       = "String"
 	parameterTypeStringList   = "StringList"
@@ -31,62 +28,11 @@ const (
 	parameterTierAdvanced     = "Advanced"
 )
 
-// parameterRecord is the persisted form of a parameter. For SecureString the
-// Value field holds the base64 ciphertext blob; for String/StringList it holds
-// the plaintext value.
-type parameterRecord struct {
-	Name        string
-	Type        string
-	Value       string
-	IsEncrypted bool
-	KMSKeyID    string
-	Tier        string
-	Version     int64
-	Description string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-}
-
-// parameterHistoryEntry captures a single historical version of a parameter.
-type parameterHistoryEntry struct {
-	Name        string
-	Version     int64
-	Type        string
-	Value       string
-	IsEncrypted bool
-	KMSKeyID    string
-	Tier        string
-	Description string
-	Labels      []string
-	ModifiedAt  time.Time
-}
-
-type paramTag struct {
-	Key   string
-	Value string
-}
-
 // memParameter is the in-memory representation including history and tags.
 type memParameter struct {
-	rec     parameterRecord
-	history []parameterHistoryEntry
-	tags    []paramTag
-}
-
-// parameterStore is the persistence contract for Parameter Store. It is
-// implemented by both dbStore and inMemoryStore and consumed via a type
-// assertion (s.store.(parameterStore)) so the large keyStore interface stays
-// unchanged.
-type parameterStore interface {
-	PutParameter(ctx context.Context, rec parameterRecord, overwrite bool) (parameterRecord, error)
-	GetParameter(ctx context.Context, name string) (parameterRecord, error)
-	ListParameters(ctx context.Context) ([]parameterRecord, error)
-	DeleteParameter(ctx context.Context, name string) error
-	GetParameterHistory(ctx context.Context, name string) ([]parameterHistoryEntry, error)
-	LabelParameterVersion(ctx context.Context, name string, version int64, labels []string) ([]string, error)
-	TagParameter(ctx context.Context, name string, tags []paramTag) error
-	UntagParameter(ctx context.Context, name string, keys []string) error
-	ListParameterTags(ctx context.Context, name string) ([]paramTag, error)
+	rec     store.ParameterRecord
+	history []store.ParameterHistoryEntry
+	tags    []store.ParamTag
 }
 
 // normalizeParameterName canonicalizes an SSM-style parameter name to a single
@@ -135,11 +81,11 @@ func normalizeParameterTier(t string) string {
 
 // ---- dbStore implementation -----------------------------------------------
 
-func (s *dbStore) PutParameter(ctx context.Context, rec parameterRecord, overwrite bool) (parameterRecord, error) {
+func (s *dbStore) PutParameter(ctx context.Context, rec store.ParameterRecord, overwrite bool) (store.ParameterRecord, error) {
 	acct := s.accountForContext(ctx)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return parameterRecord{}, err
+		return store.ParameterRecord{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -151,10 +97,10 @@ func (s *dbStore) PutParameter(ctx context.Context, rec parameterRecord, overwri
 	case err == sql.ErrNoRows:
 		existingVersion = 0
 	case err != nil:
-		return parameterRecord{}, err
+		return store.ParameterRecord{}, err
 	default:
 		if !overwrite {
-			return parameterRecord{}, errParameterExists
+			return store.ParameterRecord{}, store.ErrParameterExists
 		}
 	}
 
@@ -167,14 +113,14 @@ func (s *dbStore) PutParameter(ctx context.Context, rec parameterRecord, overwri
 			`INSERT INTO ps_parameters (account_id, name, param_type, param_value, is_encrypted, kms_key_id, tier, version, description, created_at, updated_at)
 			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 			acct, rec.Name, rec.Type, rec.Value, rec.IsEncrypted, rec.KMSKeyID, rec.Tier, rec.Version, rec.Description, now, now); err != nil {
-			return parameterRecord{}, err
+			return store.ParameterRecord{}, err
 		}
 	} else {
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE ps_parameters SET param_type=$3, param_value=$4, is_encrypted=$5, kms_key_id=$6, tier=$7, version=$8, description=$9, updated_at=$10
 			 WHERE account_id=$1 AND name=$2`,
 			acct, rec.Name, rec.Type, rec.Value, rec.IsEncrypted, rec.KMSKeyID, rec.Tier, rec.Version, rec.Description, now); err != nil {
-			return parameterRecord{}, err
+			return store.ParameterRecord{}, err
 		}
 		// Preserve CreatedAt from the existing row for the returned record.
 		_ = tx.QueryRowContext(ctx, `SELECT created_at FROM ps_parameters WHERE account_id=$1 AND name=$2`, acct, rec.Name).Scan(&rec.CreatedAt)
@@ -184,33 +130,33 @@ func (s *dbStore) PutParameter(ctx context.Context, rec parameterRecord, overwri
 		`INSERT INTO ps_parameter_history (account_id, name, version, param_type, param_value, is_encrypted, kms_key_id, tier, description, labels_json, modified_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'[]',$10)`,
 		acct, rec.Name, rec.Version, rec.Type, rec.Value, rec.IsEncrypted, rec.KMSKeyID, rec.Tier, rec.Description, now); err != nil {
-		return parameterRecord{}, err
+		return store.ParameterRecord{}, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return parameterRecord{}, err
+		return store.ParameterRecord{}, err
 	}
 	return rec, nil
 }
 
-func (s *dbStore) GetParameter(ctx context.Context, name string) (parameterRecord, error) {
+func (s *dbStore) GetParameter(ctx context.Context, name string) (store.ParameterRecord, error) {
 	acct := s.accountForContext(ctx)
-	var rec parameterRecord
+	var rec store.ParameterRecord
 	err := s.db.QueryRowContext(ctx,
 		`SELECT name, param_type, param_value, is_encrypted, kms_key_id, tier, version, description, created_at, updated_at
 		 FROM ps_parameters WHERE account_id=$1 AND name=$2`,
 		acct, name).Scan(&rec.Name, &rec.Type, &rec.Value, &rec.IsEncrypted, &rec.KMSKeyID, &rec.Tier, &rec.Version, &rec.Description, &rec.CreatedAt, &rec.UpdatedAt)
 	if err == sql.ErrNoRows {
-		return parameterRecord{}, errParameterNotFound
+		return store.ParameterRecord{}, store.ErrParameterNotFound
 	}
 	if err != nil {
-		return parameterRecord{}, err
+		return store.ParameterRecord{}, err
 	}
 	return rec, nil
 }
 
-func (s *dbStore) ListParameters(ctx context.Context) ([]parameterRecord, error) {
-	cond, args := accountFilter(ctx, "account_id", 1)
+func (s *dbStore) ListParameters(ctx context.Context) ([]store.ParameterRecord, error) {
+	cond, args := store.AccountFilter(ctx, "account_id", 1)
 	query := `SELECT name, param_type, param_value, is_encrypted, kms_key_id, tier, version, description, created_at, updated_at FROM ps_parameters`
 	if cond != "" {
 		query += " WHERE " + cond
@@ -221,9 +167,9 @@ func (s *dbStore) ListParameters(ctx context.Context) ([]parameterRecord, error)
 		return nil, err
 	}
 	defer rows.Close()
-	var out []parameterRecord
+	var out []store.ParameterRecord
 	for rows.Next() {
-		var rec parameterRecord
+		var rec store.ParameterRecord
 		if err := rows.Scan(&rec.Name, &rec.Type, &rec.Value, &rec.IsEncrypted, &rec.KMSKeyID, &rec.Tier, &rec.Version, &rec.Description, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -245,7 +191,7 @@ func (s *dbStore) DeleteParameter(ctx context.Context, name string) error {
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return errParameterNotFound
+		return store.ErrParameterNotFound
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM ps_parameter_history WHERE account_id=$1 AND name=$2`, acct, name); err != nil {
 		return err
@@ -256,7 +202,7 @@ func (s *dbStore) DeleteParameter(ctx context.Context, name string) error {
 	return tx.Commit()
 }
 
-func (s *dbStore) GetParameterHistory(ctx context.Context, name string) ([]parameterHistoryEntry, error) {
+func (s *dbStore) GetParameterHistory(ctx context.Context, name string) ([]store.ParameterHistoryEntry, error) {
 	acct := s.accountForContext(ctx)
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT name, version, param_type, param_value, is_encrypted, kms_key_id, tier, description, labels_json, modified_at
@@ -266,10 +212,10 @@ func (s *dbStore) GetParameterHistory(ctx context.Context, name string) ([]param
 		return nil, err
 	}
 	defer rows.Close()
-	var out []parameterHistoryEntry
+	var out []store.ParameterHistoryEntry
 	for rows.Next() {
 		var (
-			e         parameterHistoryEntry
+			e         store.ParameterHistoryEntry
 			labelsRaw string
 		)
 		if err := rows.Scan(&e.Name, &e.Version, &e.Type, &e.Value, &e.IsEncrypted, &e.KMSKeyID, &e.Tier, &e.Description, &labelsRaw, &e.ModifiedAt); err != nil {
@@ -296,7 +242,7 @@ func (s *dbStore) LabelParameterVersion(ctx context.Context, name string, versio
 		// Default to the latest version.
 		if err := s.db.QueryRowContext(ctx, `SELECT version FROM ps_parameters WHERE account_id=$1 AND name=$2`, acct, name).Scan(&version); err != nil {
 			if err == sql.ErrNoRows {
-				return nil, errParameterNotFound
+				return nil, store.ErrParameterNotFound
 			}
 			return nil, err
 		}
@@ -335,7 +281,7 @@ func (s *dbStore) LabelParameterVersion(ctx context.Context, name string, versio
 			if vl.ver == version {
 				continue
 			}
-			filtered := removeLabel(vl.labels, lbl)
+			filtered := store.RemoveLabel(vl.labels, lbl)
 			if len(filtered) != len(vl.labels) {
 				raw, _ := json.Marshal(filtered)
 				if _, err := tx.ExecContext(ctx, `UPDATE ps_parameter_history SET labels_json=$3 WHERE account_id=$1 AND name=$2 AND version=$4`, acct, name, string(raw), vl.ver); err != nil {
@@ -348,14 +294,14 @@ func (s *dbStore) LabelParameterVersion(ctx context.Context, name string, versio
 	var raw string
 	err = tx.QueryRowContext(ctx, `SELECT labels_json FROM ps_parameter_history WHERE account_id=$1 AND name=$2 AND version=$3`, acct, name, version).Scan(&raw)
 	if err == sql.ErrNoRows {
-		return nil, errParameterNotFound
+		return nil, store.ErrParameterNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
 	var current []string
 	_ = json.Unmarshal([]byte(raw), &current)
-	current = mergeLabels(current, labels)
+	current = store.MergeLabels(current, labels)
 	merged, _ := json.Marshal(current)
 	if _, err := tx.ExecContext(ctx, `UPDATE ps_parameter_history SET labels_json=$3 WHERE account_id=$1 AND name=$2 AND version=$4`, acct, name, string(merged), version); err != nil {
 		return nil, err
@@ -366,7 +312,7 @@ func (s *dbStore) LabelParameterVersion(ctx context.Context, name string, versio
 	return current, nil
 }
 
-func (s *dbStore) TagParameter(ctx context.Context, name string, tags []paramTag) error {
+func (s *dbStore) TagParameter(ctx context.Context, name string, tags []store.ParamTag) error {
 	acct := s.accountForContext(ctx)
 	if _, err := s.GetParameter(ctx, name); err != nil {
 		return err
@@ -400,16 +346,16 @@ func (s *dbStore) UntagParameter(ctx context.Context, name string, keys []string
 	return nil
 }
 
-func (s *dbStore) ListParameterTags(ctx context.Context, name string) ([]paramTag, error) {
+func (s *dbStore) ListParameterTags(ctx context.Context, name string) ([]store.ParamTag, error) {
 	acct := s.accountForContext(ctx)
 	rows, err := s.db.QueryContext(ctx, `SELECT tag_key, tag_value FROM ps_parameter_tags WHERE account_id=$1 AND name=$2 ORDER BY tag_key`, acct, name)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []paramTag
+	var out []store.ParamTag
 	for rows.Next() {
-		var t paramTag
+		var t store.ParamTag
 		if err := rows.Scan(&t.Key, &t.Value); err != nil {
 			return nil, err
 		}
@@ -420,7 +366,7 @@ func (s *dbStore) ListParameterTags(ctx context.Context, name string) ([]paramTa
 
 // ---- inMemoryStore implementation -----------------------------------------
 
-func (s *inMemoryStore) PutParameter(ctx context.Context, rec parameterRecord, overwrite bool) (parameterRecord, error) {
+func (s *inMemoryStore) PutParameter(ctx context.Context, rec store.ParameterRecord, overwrite bool) (store.ParameterRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.params == nil {
@@ -430,7 +376,7 @@ func (s *inMemoryStore) PutParameter(ctx context.Context, rec parameterRecord, o
 	existing, ok := s.params[rec.Name]
 	if ok {
 		if !overwrite {
-			return parameterRecord{}, errParameterExists
+			return store.ParameterRecord{}, store.ErrParameterExists
 		}
 		rec.Version = existing.rec.Version + 1
 		rec.CreatedAt = existing.rec.CreatedAt
@@ -442,7 +388,7 @@ func (s *inMemoryStore) PutParameter(ctx context.Context, rec parameterRecord, o
 	}
 	rec.UpdatedAt = now
 	existing.rec = rec
-	existing.history = append(existing.history, parameterHistoryEntry{
+	existing.history = append(existing.history, store.ParameterHistoryEntry{
 		Name:        rec.Name,
 		Version:     rec.Version,
 		Type:        rec.Type,
@@ -456,20 +402,20 @@ func (s *inMemoryStore) PutParameter(ctx context.Context, rec parameterRecord, o
 	return rec, nil
 }
 
-func (s *inMemoryStore) GetParameter(ctx context.Context, name string) (parameterRecord, error) {
+func (s *inMemoryStore) GetParameter(ctx context.Context, name string) (store.ParameterRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, ok := s.params[name]
 	if !ok {
-		return parameterRecord{}, errParameterNotFound
+		return store.ParameterRecord{}, store.ErrParameterNotFound
 	}
 	return p.rec, nil
 }
 
-func (s *inMemoryStore) ListParameters(ctx context.Context) ([]parameterRecord, error) {
+func (s *inMemoryStore) ListParameters(ctx context.Context) ([]store.ParameterRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out []parameterRecord
+	var out []store.ParameterRecord
 	for _, p := range s.params {
 		out = append(out, p.rec)
 	}
@@ -481,20 +427,20 @@ func (s *inMemoryStore) DeleteParameter(ctx context.Context, name string) error 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.params[name]; !ok {
-		return errParameterNotFound
+		return store.ErrParameterNotFound
 	}
 	delete(s.params, name)
 	return nil
 }
 
-func (s *inMemoryStore) GetParameterHistory(ctx context.Context, name string) ([]parameterHistoryEntry, error) {
+func (s *inMemoryStore) GetParameterHistory(ctx context.Context, name string) ([]store.ParameterHistoryEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, ok := s.params[name]
 	if !ok {
-		return nil, errParameterNotFound
+		return nil, store.ErrParameterNotFound
 	}
-	out := make([]parameterHistoryEntry, len(p.history))
+	out := make([]store.ParameterHistoryEntry, len(p.history))
 	copy(out, p.history)
 	return out, nil
 }
@@ -504,12 +450,12 @@ func (s *inMemoryStore) LabelParameterVersion(ctx context.Context, name string, 
 	defer s.mu.Unlock()
 	p, ok := s.params[name]
 	if !ok {
-		return nil, errParameterNotFound
+		return nil, store.ErrParameterNotFound
 	}
 	if version == 0 {
 		version = p.rec.Version
 	}
-	var target *parameterHistoryEntry
+	var target *store.ParameterHistoryEntry
 	for i := range p.history {
 		if p.history[i].Version == version {
 			target = &p.history[i]
@@ -517,25 +463,25 @@ func (s *inMemoryStore) LabelParameterVersion(ctx context.Context, name string, 
 		}
 	}
 	if target == nil {
-		return nil, errParameterNotFound
+		return nil, store.ErrParameterNotFound
 	}
 	for _, lbl := range labels {
 		for i := range p.history {
 			if p.history[i].Version != version {
-				p.history[i].Labels = removeLabel(p.history[i].Labels, lbl)
+				p.history[i].Labels = store.RemoveLabel(p.history[i].Labels, lbl)
 			}
 		}
 	}
-	target.Labels = mergeLabels(target.Labels, labels)
+	target.Labels = store.MergeLabels(target.Labels, labels)
 	return target.Labels, nil
 }
 
-func (s *inMemoryStore) TagParameter(ctx context.Context, name string, tags []paramTag) error {
+func (s *inMemoryStore) TagParameter(ctx context.Context, name string, tags []store.ParamTag) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, ok := s.params[name]
 	if !ok {
-		return errParameterNotFound
+		return store.ErrParameterNotFound
 	}
 	for _, t := range tags {
 		replaced := false
@@ -558,7 +504,7 @@ func (s *inMemoryStore) UntagParameter(ctx context.Context, name string, keys []
 	defer s.mu.Unlock()
 	p, ok := s.params[name]
 	if !ok {
-		return errParameterNotFound
+		return store.ErrParameterNotFound
 	}
 	for _, k := range keys {
 		filtered := p.tags[:0]
@@ -572,49 +518,17 @@ func (s *inMemoryStore) UntagParameter(ctx context.Context, name string, keys []
 	return nil
 }
 
-func (s *inMemoryStore) ListParameterTags(ctx context.Context, name string) ([]paramTag, error) {
+func (s *inMemoryStore) ListParameterTags(ctx context.Context, name string) ([]store.ParamTag, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, ok := s.params[name]
 	if !ok {
-		return nil, errParameterNotFound
+		return nil, store.ErrParameterNotFound
 	}
-	out := make([]paramTag, len(p.tags))
+	out := make([]store.ParamTag, len(p.tags))
 	copy(out, p.tags)
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out, nil
 }
 
 // ---- label helpers ---------------------------------------------------------
-
-func mergeLabels(existing, add []string) []string {
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(existing)+len(add))
-	for _, l := range existing {
-		if _, ok := seen[l]; !ok {
-			seen[l] = struct{}{}
-			out = append(out, l)
-		}
-	}
-	for _, l := range add {
-		l = strings.TrimSpace(l)
-		if l == "" {
-			continue
-		}
-		if _, ok := seen[l]; !ok {
-			seen[l] = struct{}{}
-			out = append(out, l)
-		}
-	}
-	return out
-}
-
-func removeLabel(labels []string, target string) []string {
-	out := make([]string, 0, len(labels))
-	for _, l := range labels {
-		if l != target {
-			out = append(out, l)
-		}
-	}
-	return out
-}

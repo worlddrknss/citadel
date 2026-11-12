@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // Native Citadel API (/v1) — single-item detail surface.
@@ -124,7 +126,7 @@ func (s *server) handleV1UpdateSecretMetadata(w http.ResponseWriter, r *http.Req
 		writeNativeError(w, http.StatusBadRequest, "update_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.UpdateItemMetadata", KeyID: strings.TrimSpace(req.KMSKeyID), Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpdateItemMetadata", KeyID: strings.TrimSpace(req.KMSKeyID), Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"updated": true})
 }
 
@@ -164,7 +166,7 @@ func (s *server) handleV1ReKeySecret(w http.ResponseWriter, r *http.Request) {
 			writeNativeError(w, http.StatusBadRequest, "rekey_failed", err.Error())
 			return
 		}
-		s.recordAudit(ctx, auditEvent{Action: "citadel.ReKeyItem", KeyID: newKey, Result: "ok", Actor: r.RemoteAddr})
+		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ReKeyItem", KeyID: newKey, Result: "ok", Actor: r.RemoteAddr})
 		writeNativeJSON(w, http.StatusOK, map[string]any{"rekeyed": 1, "failed": []string{}})
 		return
 	}
@@ -177,7 +179,7 @@ func (s *server) handleV1ReKeySecret(w http.ResponseWriter, r *http.Request) {
 	if len(failed) > 0 {
 		result = "partial"
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.ReKeyEnvironment", KeyID: newKey, Result: result, Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ReKeyEnvironment", KeyID: newKey, Result: result, Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"rekeyed": rekeyed, "failed": failed})
 }
 
@@ -209,7 +211,7 @@ func (s *server) handleV1PromoteVersion(w http.ResponseWriter, r *http.Request) 
 		writeNativeError(w, http.StatusBadRequest, "promote_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.PromoteItemVersion", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PromoteItemVersion", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"promoted": true, "versionId": strings.TrimSpace(req.VersionID)})
 }
 
@@ -237,15 +239,15 @@ func (s *server) handleV1TagSecret(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	tags := make([]secretTag, 0, len(req.Tags))
+	tags := make([]store.SecretTag, 0, len(req.Tags))
 	for _, t := range req.Tags {
-		tags = append(tags, secretTag{Key: strings.TrimSpace(t.Key), Value: t.Value})
+		tags = append(tags, store.SecretTag{Key: strings.TrimSpace(t.Key), Value: t.Value})
 	}
 	if err := s.secretsSvc().TagItem(ctx, coord, tags); err != nil {
 		writeNativeError(w, http.StatusBadRequest, "tag_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.TagItem", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.TagItem", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"tagged": true})
 }
 
@@ -272,7 +274,7 @@ func (s *server) handleV1UntagSecret(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "untag_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.UntagItem", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UntagItem", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"untagged": true})
 }
 
@@ -323,7 +325,7 @@ func (s *server) handleV1PutSecretPolicy(w http.ResponseWriter, r *http.Request)
 		writeNativeError(w, http.StatusBadRequest, "policy_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.PutItemPolicy", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PutItemPolicy", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"saved": true})
 }
 
@@ -357,7 +359,7 @@ func (s *server) handleV1ConfigureRotation(w http.ResponseWriter, r *http.Reques
 		writeNativeError(w, http.StatusBadRequest, "rotation_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.ConfigureItemRotation", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ConfigureItemRotation", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"configured": true})
 }
 
@@ -376,7 +378,7 @@ func (s *server) handleV1CancelRotation(w http.ResponseWriter, r *http.Request) 
 		writeNativeError(w, http.StatusBadRequest, "rotation_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.CancelItemRotation", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CancelItemRotation", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"cancelled": true})
 }
 
@@ -445,6 +447,6 @@ func (s *server) handleV1BulkSecrets(w http.ResponseWriter, r *http.Request) {
 		}
 		applied++
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.Bulk:" + action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.Bulk:" + action, Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"applied": applied, "failed": failed})
 }

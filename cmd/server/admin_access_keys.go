@@ -2,67 +2,22 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/base32"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
-	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
-
-var (
-	errAccessKeyNotFound = errors.New("access key not found")
-	errMaxAccessKeys     = errors.New("maximum access keys per account reached (limit: 2)")
-)
-
-// accessKeyInfo represents metadata about an access key.
-type accessKeyInfo struct {
-	AccessKeyID string
-	Username    string
-	AccountID   string
-	Status      string
-	CreatedAt   time.Time
-	LastUsedAt  *time.Time
-}
-
-// accessKeySecret is the sensitive secret that's shown once to the user.
-type accessKeySecret struct {
-	AccessKeyID string
-	SecretKey   string
-}
-
-// generateAccessKeyID generates an AWS-style access key ID (AKIA + 16 chars).
-// The suffix uses the RFC 4648 base32 alphabet (A-Z, 2-7) so the ID only ever
-// contains characters that are safe inside a SigV4 "Credential=" scope, which
-// is slash-delimited. base64 (with '+' and '/') must not be used here: a '/'
-// in the access key ID corrupts Authorization-header parsing.
-func generateAccessKeyID() string {
-	b := make([]byte, 10)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return "AKIA" + base32.StdEncoding.EncodeToString(b)
-}
-
-// generateAccessKeySecret generates a 40-character secret key.
-func generateAccessKeySecret() string {
-	b := make([]byte, 30)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return base64.StdEncoding.EncodeToString(b)[:40]
-}
 
 // CreateAccessKey creates a new access key for a user in an account.
 // Returns the access key ID and secret (only shown once).
 // Max 2 keys per (user, account) pair.
-func (s *dbStore) CreateAccessKey(ctx context.Context, username, accountID string) (accessKeySecret, error) {
+func (s *dbStore) CreateAccessKey(ctx context.Context, username, accountID string) (store.AccessKeySecret, error) {
 	username = strings.TrimSpace(username)
 	accountID = strings.TrimSpace(accountID)
 	if username == "" || accountID == "" {
-		return accessKeySecret{}, errors.New("username and accountID are required")
+		return store.AccessKeySecret{}, errors.New("username and accountID are required")
 	}
 
 	// Check current key count
@@ -72,19 +27,19 @@ func (s *dbStore) CreateAccessKey(ctx context.Context, username, accountID strin
 		username, accountID,
 	).Scan(&count)
 	if err != nil {
-		return accessKeySecret{}, err
+		return store.AccessKeySecret{}, err
 	}
 	if count >= 2 {
-		return accessKeySecret{}, errMaxAccessKeys
+		return store.AccessKeySecret{}, store.ErrMaxAccessKeys
 	}
 
-	keyID := generateAccessKeyID()
-	secret := generateAccessKeySecret()
+	keyID := store.GenerateAccessKeyID()
+	secret := store.GenerateAccessKeySecret()
 
 	// Wrap the secret with the store's wrapping key
 	wrappedB64, nonceB64, err := s.wrapKeyMaterial(keyID, []byte(secret))
 	if err != nil {
-		return accessKeySecret{}, fmt.Errorf("wrap secret: %w", err)
+		return store.AccessKeySecret{}, fmt.Errorf("wrap secret: %w", err)
 	}
 
 	_, err = s.db.ExecContext(ctx,
@@ -93,14 +48,14 @@ VALUES ($1, $2, $3, $4, $5, 'Active', NOW())`,
 		keyID, username, accountID, wrappedB64, nonceB64,
 	)
 	if err != nil {
-		return accessKeySecret{}, err
+		return store.AccessKeySecret{}, err
 	}
 
-	return accessKeySecret{AccessKeyID: keyID, SecretKey: secret}, nil
+	return store.AccessKeySecret{AccessKeyID: keyID, SecretKey: secret}, nil
 }
 
 // ListAccessKeys returns all access keys for a user in an account.
-func (s *dbStore) ListAccessKeys(ctx context.Context, username, accountID string) ([]accessKeyInfo, error) {
+func (s *dbStore) ListAccessKeys(ctx context.Context, username, accountID string) ([]store.AccessKeyInfo, error) {
 	username = strings.TrimSpace(username)
 	accountID = strings.TrimSpace(accountID)
 	if username == "" || accountID == "" {
@@ -119,9 +74,9 @@ ORDER BY created_at DESC`,
 	}
 	defer rows.Close()
 
-	var keys []accessKeyInfo
+	var keys []store.AccessKeyInfo
 	for rows.Next() {
-		var info accessKeyInfo
+		var info store.AccessKeyInfo
 		if err := rows.Scan(&info.AccessKeyID, &info.Username, &info.AccountID, &info.Status, &info.CreatedAt, &info.LastUsedAt); err != nil {
 			return nil, err
 		}
@@ -142,13 +97,13 @@ func (s *dbStore) GetAccessKeyByID(ctx context.Context, keyID string) (username,
 	// iam_access_keys. Resolve them here so the same SigV4 verification path
 	// validates long-lived and temporary credentials uniformly. An expired
 	// session is reported as Inactive so callers reject it.
-	if isTempAccessKeyID(keyID) {
-		acct, sec, _, _, serr := s.getSTSSessionSecret(ctx, keyID)
-		if serr == errSTSSessionExpired {
+	if store.IsTempAccessKeyID(keyID) {
+		acct, sec, _, _, serr := s.GetSTSSessionSecret(ctx, keyID)
+		if serr == store.ErrSTSSessionExpired {
 			return "", "", "", "Inactive", nil
 		}
-		if serr == errSTSSessionNotFound {
-			return "", "", "", "", errAccessKeyNotFound
+		if serr == store.ErrSTSSessionNotFound {
+			return "", "", "", "", store.ErrAccessKeyNotFound
 		}
 		if serr != nil {
 			return "", "", "", "", serr
@@ -164,7 +119,7 @@ WHERE access_key_id = $1`,
 		keyID,
 	).Scan(&username, &accountID, &wrappedB64, &nonceB64, &status)
 	if err == sql.ErrNoRows {
-		return "", "", "", "", errAccessKeyNotFound
+		return "", "", "", "", store.ErrAccessKeyNotFound
 	}
 	if err != nil {
 		return "", "", "", "", err
@@ -199,7 +154,7 @@ func (s *dbStore) SetAccessKeyStatus(ctx context.Context, keyID, newStatus strin
 		return err
 	}
 	if affected == 0 {
-		return errAccessKeyNotFound
+		return store.ErrAccessKeyNotFound
 	}
 	return nil
 }
@@ -223,7 +178,7 @@ func (s *dbStore) DeleteAccessKey(ctx context.Context, keyID string) error {
 		return err
 	}
 	if affected == 0 {
-		return errAccessKeyNotFound
+		return store.ErrAccessKeyNotFound
 	}
 	return nil
 }
@@ -244,26 +199,26 @@ func (s *dbStore) TouchAccessKeyLastUsed(ctx context.Context, keyID string) erro
 
 // In-memory store implementations
 
-func (s *inMemoryStore) CreateAccessKey(_ context.Context, username, accountID string) (accessKeySecret, error) {
-	return accessKeySecret{}, errUnsupported
+func (s *inMemoryStore) CreateAccessKey(_ context.Context, username, accountID string) (store.AccessKeySecret, error) {
+	return store.AccessKeySecret{}, store.ErrUnsupported
 }
 
-func (s *inMemoryStore) ListAccessKeys(_ context.Context, username, accountID string) ([]accessKeyInfo, error) {
-	return nil, errUnsupported
+func (s *inMemoryStore) ListAccessKeys(_ context.Context, username, accountID string) ([]store.AccessKeyInfo, error) {
+	return nil, store.ErrUnsupported
 }
 
 func (s *inMemoryStore) GetAccessKeyByID(_ context.Context, keyID string) (username, accountID, secret string, status string, err error) {
-	return "", "", "", "", errUnsupported
+	return "", "", "", "", store.ErrUnsupported
 }
 
 func (s *inMemoryStore) SetAccessKeyStatus(_ context.Context, keyID, newStatus string) error {
-	return errUnsupported
+	return store.ErrUnsupported
 }
 
 func (s *inMemoryStore) DeleteAccessKey(_ context.Context, keyID string) error {
-	return errUnsupported
+	return store.ErrUnsupported
 }
 
 func (s *inMemoryStore) TouchAccessKeyLastUsed(_ context.Context, keyID string) error {
-	return errUnsupported
+	return store.ErrUnsupported
 }

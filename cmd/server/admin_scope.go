@@ -1,6 +1,10 @@
 package main
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/worlddrknss/citadel/internal/store"
+)
 
 func uiCanEdit(session *uiSession) bool {
 	return session != nil && uiRoleAtLeast(session.Role, "editor")
@@ -18,7 +22,7 @@ func secretVisibleToSession(session *uiSession, secretName string) bool {
 	return containsFold(session.Accounts, account)
 }
 
-func keyVisibleToSession(session *uiSession, keyID string, aliases []kmsAlias) bool {
+func keyVisibleToSession(session *uiSession, keyID string, aliases []store.KMSAlias) bool {
 	if session == nil || uiCanAdmin(session) || len(session.Accounts) == 0 {
 		return true
 	}

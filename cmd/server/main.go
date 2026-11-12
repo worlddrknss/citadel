@@ -2,11 +2,8 @@ package main
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,13 +34,12 @@ const (
 )
 
 var (
-	errUnsupported  = errors.New("unsupported operation")
 	errAccessDenied = errors.New("access denied")
 )
 
 type server struct {
 	cfg            config.Config
-	store          keyStore
+	store          store.Store
 	ui             *uiRuntime
 	acmeChallenges *acmeChallengeStore
 	// acmeHTTPClient, when set, is used by the Let's Encrypt ACME client. It
@@ -64,100 +60,6 @@ func (s *server) secretsSvc() *secretsService {
 	return s.secretsSvcV
 }
 
-type keyStore interface {
-	ResolveByID(ctx context.Context, keyID string) (kmsKey, error)
-	ResolveDefault(ctx context.Context) (kmsKey, error)
-	EnsureBootstrap(ctx context.Context, k kmsKey) error
-	EnsureAccountDefaultKey(ctx context.Context, accountID string) (kmsKey, error)
-	DeploymentIdentity() (region, accountID string)
-	CreateKey(ctx context.Context, description, keyUsage, keySpec string) (kmsKey, error)
-	ImportSigningKey(ctx context.Context, description string, privPKCS8DER, pubPKIXDER []byte, keySpec string) (kmsKey, error)
-	ListKeys(ctx context.Context) ([]kmsKey, error)
-	GetKeyPolicy(ctx context.Context, keyID, policyName string) (string, error)
-	PutKeyPolicy(ctx context.Context, keyID, policyName, policyDocument string) error
-	CreateAlias(ctx context.Context, aliasName, keyID string) error
-	UpdateAlias(ctx context.Context, aliasName, keyID string) error
-	DeleteAlias(ctx context.Context, aliasName string) error
-	ListAliases(ctx context.Context) ([]kmsAlias, error)
-	SetKeyEnabled(ctx context.Context, keyID string, enabled bool) error
-	ScheduleKeyDeletion(ctx context.Context, keyID string, windowDays int) (time.Time, error)
-	CancelKeyDeletion(ctx context.Context, keyID string) error
-	ForceDeleteKey(ctx context.Context, keyID string) error
-	CreateGrant(ctx context.Context, req createGrantRequest) (kmsGrant, error)
-	ListGrants(ctx context.Context, keyID string) ([]kmsGrant, error)
-	RevokeGrant(ctx context.Context, keyID, grantID string) error
-	RetireGrant(ctx context.Context, grantID, grantToken string) error
-	CreateSecret(ctx context.Context, req createSecretRequest) (secretMetadataRecord, secretValueRecord, error)
-	DescribeSecret(ctx context.Context, secretID string) (secretMetadataRecord, error)
-	secretARNForCtx(ctx context.Context, name string) string
-	GetSecretValue(ctx context.Context, secretID, versionID, versionStage string) (secretValueRecord, error)
-	PutSecretValue(ctx context.Context, req putSecretValueRequest) (secretValueRecord, error)
-	UpdateSecret(ctx context.Context, req updateSecretRequest) (secretMetadataRecord, *secretValueRecord, error)
-	DeleteSecret(ctx context.Context, secretID string, recoveryWindowDays int, forceDelete bool) (secretMetadataRecord, error)
-	RestoreSecret(ctx context.Context, secretID string) (secretMetadataRecord, error)
-	ListSecrets(ctx context.Context) ([]secretMetadataRecord, error)
-	ListSecretVersionIDs(ctx context.Context, secretID string) ([]secretVersionListEntry, error)
-	TagSecret(ctx context.Context, secretID string, tags []secretTag) error
-	UntagSecret(ctx context.Context, secretID string, tagKeys []string) error
-	GetSecretResourcePolicy(ctx context.Context, secretID string) (string, error)
-	PutSecretResourcePolicy(ctx context.Context, secretID, policyDocument string) error
-	RotateSecret(ctx context.Context, secretID, rotationLambdaARN string, automaticallyAfterDays int, rotateImmediately bool, clientRequestToken string) (secretRotationResult, error)
-	CancelRotateSecret(ctx context.Context, secretID string) (secretMetadataRecord, error)
-	UpdateSecretVersionStage(ctx context.Context, secretID, versionStage, moveToVersionID, removeFromVersionID string) (secretMetadataRecord, error)
-	ListAuditEvents(ctx context.Context, limit int) ([]auditRecord, error)
-	RecordAudit(ctx context.Context, event auditEvent) error
-	ListUIUsers(ctx context.Context) ([]store.UIUser, error)
-	UpsertUIUser(ctx context.Context, user store.UIUser) error
-	DeleteUIUser(ctx context.Context, username string) error
-	CreateUIAccount(ctx context.Context, name string) (string, error)
-	GetUIAccount(ctx context.Context, accountID string) (uiAccountInfo, error)
-	ListUIAccounts(ctx context.Context) ([]uiAccountInfo, error)
-	UpsertUIAccount(ctx context.Context, account string) error
-	DeleteUIAccount(ctx context.Context, accountID string) error
-	AddUserAccount(ctx context.Context, username, accountID, role string) error
-	RemoveUserAccount(ctx context.Context, username, accountID string) error
-	ListUserAccounts(ctx context.Context, username string) ([]userAccountInfo, error)
-	ListAccountUsers(ctx context.Context, accountID string) ([]struct{ Username, Role string }, error)
-	CreateAccessKey(ctx context.Context, username, accountID string) (accessKeySecret, error)
-	ListAccessKeys(ctx context.Context, username, accountID string) ([]accessKeyInfo, error)
-	GetAccessKeyByID(ctx context.Context, keyID string) (username, accountID, secret string, status string, err error)
-	SetAccessKeyStatus(ctx context.Context, keyID, newStatus string) error
-	DeleteAccessKey(ctx context.Context, keyID string) error
-	TouchAccessKeyLastUsed(ctx context.Context, keyID string) error
-
-	// STS / IAM identity federation (OIDC providers, roles, temporary sessions)
-	CreateOIDCProvider(ctx context.Context, p oidcProvider) error
-	ListOIDCProviders(ctx context.Context, accountID string) ([]oidcProvider, error)
-	GetOIDCProviderByURL(ctx context.Context, accountID, url string) (oidcProvider, error)
-	DeleteOIDCProvider(ctx context.Context, accountID, providerARN string) error
-	CreateIAMRole(ctx context.Context, role iamRole) error
-	ListIAMRoles(ctx context.Context, accountID string) ([]iamRole, error)
-	GetIAMRole(ctx context.Context, accountID, roleName string) (iamRole, error)
-	GetIAMRoleByARN(ctx context.Context, roleARN string) (iamRole, error)
-	DeleteIAMRole(ctx context.Context, accountID, roleName string) error
-	CreateSTSSession(ctx context.Context, sess stsSession, secret, sessionToken string) error
-	DeleteExpiredSTSSessions(ctx context.Context) (int64, error)
-
-	// Private CA (acm-pca) methods
-	CreateCertificateAuthority(ctx context.Context, ca pcaCertificateAuthority) error
-	DescribeCertificateAuthority(ctx context.Context, arn string) (pcaCertificateAuthority, error)
-	ListCertificateAuthorities(ctx context.Context) ([]pcaCertificateAuthority, error)
-	CreateCertificate(ctx context.Context, cert pcaCertificate) error
-	GetCertificate(ctx context.Context, certID string) (pcaCertificate, error)
-	ListCertificates(ctx context.Context, caID string) ([]pcaCertificate, error)
-	RevokeCertificate(ctx context.Context, certID, reason string) error
-
-	// Let's Encrypt (ACME client) methods
-	GetACMELEAccount(ctx context.Context, directoryURL string) (acmeLEAccount, error)
-	UpsertACMELEAccount(ctx context.Context, account acmeLEAccount) error
-	CreateACMELECertificate(ctx context.Context, cert acmeLECertificate) error
-	GetACMELECertificate(ctx context.Context, certID string) (acmeLECertificate, error)
-	ListACMELECertificates(ctx context.Context) ([]acmeLECertificate, error)
-	CreateACMELEOrder(ctx context.Context, order acmeLEOrder) error
-	GetACMELEOrder(ctx context.Context, orderID string) (acmeLEOrder, error)
-	DeleteACMELEOrder(ctx context.Context, orderID string) error
-}
-
 type dbStore struct {
 	db                *sql.DB
 	wrappingKey       []byte
@@ -169,13 +71,13 @@ type dbStore struct {
 
 type inMemoryStore struct {
 	mu           sync.Mutex
-	k            kmsKey
-	keys         []kmsKey
-	aliases      []kmsAlias
-	grants       []kmsGrant
+	k            store.KMSKey
+	keys         []store.KMSKey
+	aliases      []store.KMSAlias
+	grants       []store.KMSGrant
 	policies     map[string]string
 	secrets      map[string]*inMemorySecret
-	audit        []auditRecord
+	audit        []store.AuditRecord
 	auditSeq     int64
 	auditHMACKey []byte
 	uiUsers      map[string]store.UIUser
@@ -186,95 +88,9 @@ type inMemoryStore struct {
 	params       map[string]*memParameter
 }
 
-type kmsKey struct {
-	ID           string
-	ARN          string
-	MasterKeyRaw []byte
-	PublicKeyRaw []byte
-	Description  string
-	CreatedAt    time.Time
-	Enabled      bool
-	DeletionDate *time.Time
-	KeyUsage     string
-	KeySpec      string
-	// Managed marks an immutable, system-provisioned key (an account's default
-	// key reached via alias/default). Managed keys cannot be disabled, deleted,
-	// or re-aliased.
-	Managed bool
-}
-
-type kmsAlias struct {
-	AliasName   string
-	TargetKeyID string
-}
-
-type pcaCertificateAuthority struct {
-	CAID        string
-	ARN         string
-	Type        string
-	KMSKeyID    string
-	SubjectDN   string
-	State       string
-	CACertB64   string
-	PathLength  *int
-	NotBefore   time.Time
-	NotAfter    time.Time
-	Description string
-	Account     string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-}
-
-type pcaCertificate struct {
-	CertID           string
-	CAID             string
-	Serial           string
-	CSRB64           string
-	CertB64          string
-	Status           string
-	NotBefore        time.Time
-	NotAfter         time.Time
-	RevokedAt        *time.Time
-	RevocationReason string
-	Template         string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-}
-
-type kmsGrant struct {
-	GrantID           string
-	GrantToken        string
-	KeyID             string
-	GranteePrincipal  string
-	RetiringPrincipal string
-	Operations        []string
-	Name              string
-	CreatedAt         time.Time
-}
-
 type awsError struct {
 	Type    string `json:"__type"`
 	Message string `json:"message"`
-}
-
-type auditEvent struct {
-	Action    string
-	KeyID     string
-	Result    string
-	ErrorType string
-	Actor     string
-}
-
-type auditRecord struct {
-	ID        int64
-	Action    string
-	KeyID     string
-	Result    string
-	ErrorType string
-	Actor     string
-	PrevHash  string
-	EventHash string
-	CreatedAt time.Time
 }
 
 type encryptRequest struct {
@@ -543,14 +359,6 @@ type scheduleKeyDeletionRequest struct {
 type scheduleKeyDeletionResponse struct {
 	KeyID        string    `json:"KeyId"`
 	DeletionDate time.Time `json:"DeletionDate"`
-}
-
-type createGrantRequest struct {
-	KeyID             string   `json:"KeyId"`
-	GranteePrincipal  string   `json:"GranteePrincipal"`
-	RetiringPrincipal string   `json:"RetiringPrincipal"`
-	Operations        []string `json:"Operations"`
-	Name              string   `json:"Name"`
 }
 
 type createGrantResponse struct {
@@ -857,7 +665,7 @@ func main() {
 	}
 }
 
-func buildStore(cfg config.Config) (keyStore, func(), error) {
+func buildStore(cfg config.Config) (store.Store, func(), error) {
 	if cfg.DBConnString == "" {
 		if len(cfg.LegacyMasterKey) == 0 {
 			return nil, nil, errors.New("legacy key is required when KMS_DB_URL is not set")
@@ -875,7 +683,7 @@ func buildStore(cfg config.Config) (keyStore, func(), error) {
 		if keyARN == "" {
 			keyARN = arn.Build("kms", region, accountID, "key/"+legacyKeyID)
 		}
-		k := kmsKey{
+		k := store.KMSKey{
 			ID:           legacyKeyID,
 			ARN:          keyARN,
 			MasterKeyRaw: cfg.LegacyMasterKey,
@@ -1473,13 +1281,13 @@ END $$;
 	return nil
 }
 
-func maybeBootstrapFromLegacy(ctx context.Context, cfg config.Config, store keyStore) error {
+func maybeBootstrapFromLegacy(ctx context.Context, cfg config.Config, st store.Store) error {
 	if len(cfg.LegacyMasterKey) == 0 {
 		return nil
 	}
 	legacyKeyID := strings.TrimSpace(cfg.LegacyKeyID)
 	if legacyKeyID == "" {
-		if existing, err := store.ResolveDefault(ctx); err == nil && strings.TrimSpace(existing.ID) != "" {
+		if existing, err := st.ResolveDefault(ctx); err == nil && strings.TrimSpace(existing.ID) != "" {
 			legacyKeyID = existing.ID
 		} else if cfg.DBConnString == "" {
 			legacyKeyID = cryptoutil.DeriveDeterministicLegacyKeyID(cfg.LegacyMasterKey)
@@ -1489,19 +1297,19 @@ func maybeBootstrapFromLegacy(ctx context.Context, cfg config.Config, store keyS
 	}
 	keyARN := cfg.LegacyKeyARN
 	if keyARN == "" {
-		keyARN = bootstrapKeyARN(store, legacyKeyID)
+		keyARN = bootstrapKeyARN(st, legacyKeyID)
 	}
-	k := kmsKey{
+	k := store.KMSKey{
 		ID:           legacyKeyID,
 		ARN:          keyARN,
 		MasterKeyRaw: cfg.LegacyMasterKey,
 		Description:  "go-kms key",
 		CreatedAt:    time.Now().UTC(),
 		Enabled:      true,
-		KeyUsage:     keyUsageEncryptDecrypt,
-		KeySpec:      keySpecSymmetricDefault,
+		KeyUsage:     store.KeyUsageEncryptDecrypt,
+		KeySpec:      store.KeySpecSymmetricDefault,
 	}
-	if err := store.EnsureBootstrap(ctx, k); err != nil {
+	if err := st.EnsureBootstrap(ctx, k); err != nil {
 		return err
 	}
 	return nil
@@ -1509,7 +1317,7 @@ func maybeBootstrapFromLegacy(ctx context.Context, cfg config.Config, store keyS
 
 // bootstrapKeyARN builds the ARN for the bootstrap key using the store's
 // deployment identity.
-func bootstrapKeyARN(store keyStore, keyID string) string {
+func bootstrapKeyARN(store store.Store, keyID string) string {
 	region, accountID := store.DeploymentIdentity()
 	return arn.Build("kms", region, accountID, "key/"+keyID)
 }
@@ -1670,12 +1478,12 @@ func (s *server) handleGetKeyPolicy(w http.ResponseWriter, r *http.Request) {
 	var req getKeyPolicyRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		return
 	}
 	if req.KeyID == "" {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "KeyId is required")
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		return
 	}
 	if req.PolicyName == "" {
@@ -1684,21 +1492,21 @@ func (s *server) handleGetKeyPolicy(w http.ResponseWriter, r *http.Request) {
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key or policy not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:GetKeyPolicy"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
 		return
 	}
 	doc, err := s.store.GetKeyPolicy(r.Context(), req.KeyID, req.PolicyName)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key or policy not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, getKeyPolicyResponse{Policy: doc})
 }
 
@@ -1707,12 +1515,12 @@ func (s *server) handlePutKeyPolicy(w http.ResponseWriter, r *http.Request) {
 	var req putKeyPolicyRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		return
 	}
 	if req.KeyID == "" {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "KeyId is required")
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		return
 	}
 	if req.PolicyName == "" {
@@ -1720,32 +1528,32 @@ func (s *server) handlePutKeyPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.Policy) == "" {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "Policy is required")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		return
 	}
 	normalizedPolicy, err := normalizePolicyDocument(req.Policy)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "MalformedPolicyDocumentException", "Policy must be valid JSON")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "MalformedPolicyDocumentException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "MalformedPolicyDocumentException", Actor: r.RemoteAddr})
 		return
 	}
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:PutKeyPolicy"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.store.PutKeyPolicy(r.Context(), req.KeyID, req.PolicyName, normalizedPolicy); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -1753,18 +1561,18 @@ func (s *server) handleEncrypt(w http.ResponseWriter, r *http.Request) {
 	const action = "TrentService.Encrypt"
 	var req encryptRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
 	if req.Plaintext == "" {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "Plaintext is required")
 		return
 	}
 
 	var (
-		key kmsKey
+		key store.KMSKey
 		err error
 	)
 	if req.KeyID != "" {
@@ -1774,50 +1582,50 @@ func (s *server) handleEncrypt(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+			s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 			writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "unknown key id")
 			return
 		}
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "key lookup failed")
 		return
 	}
-	if keyUsage, _ := keyUsageAndSpecForMetadata(key); keyUsage != keyUsageEncryptDecrypt {
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidKeyUsageException", Actor: r.RemoteAddr})
+	if keyUsage, _ := keyUsageAndSpecForMetadata(key); keyUsage != store.KeyUsageEncryptDecrypt {
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidKeyUsageException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidKeyUsageException", "key does not support encryption")
 		return
 	}
-	if keyUsage, _ := keyUsageAndSpecForMetadata(key); keyUsage != keyUsageEncryptDecrypt {
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidKeyUsageException", Actor: r.RemoteAddr})
+	if keyUsage, _ := keyUsageAndSpecForMetadata(key); keyUsage != store.KeyUsageEncryptDecrypt {
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidKeyUsageException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidKeyUsageException", "key does not support decryption")
 		return
 	}
 	if !key.Enabled {
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DisabledException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DisabledException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "DisabledException", "key is disabled")
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:Encrypt"); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
 		return
 	}
 
 	plaintext, err := base64.StdEncoding.DecodeString(req.Plaintext)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "Plaintext must be base64")
 		return
 	}
 
 	cipherBlob, err := cryptoutil.EncryptBlob(key.MasterKeyRaw, key.ID, plaintext, cryptoutil.CanonicalContext(req.EncryptionContext))
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "encrypt failed")
 		return
 	}
 
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
 
 	writeJSON(w, http.StatusOK, encryptResponse{
 		CiphertextBlob:    base64.StdEncoding.EncodeToString(cipherBlob),
@@ -1830,60 +1638,60 @@ func (s *server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 	const action = "TrentService.Decrypt"
 	var req decryptRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
 	if req.CiphertextBlob == "" {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "CiphertextBlob is required")
 		return
 	}
 
 	cipherBlob, err := base64.StdEncoding.DecodeString(req.CiphertextBlob)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "CiphertextBlob must be base64")
 		return
 	}
 
 	keyID, rawBlob, err := cryptoutil.DecodeCipherBlob(cipherBlob)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "InvalidCiphertextException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidCiphertextException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidCiphertextException", "decrypt failed")
 		return
 	}
 
-	var key kmsKey
+	var key store.KMSKey
 	if keyID == "" {
 		key, err = s.store.ResolveDefault(r.Context())
 	} else {
 		key, err = s.store.ResolveByID(r.Context(), keyID)
 	}
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: keyID, Result: "error", ErrorType: "InvalidCiphertextException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: keyID, Result: "error", ErrorType: "InvalidCiphertextException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidCiphertextException", "decrypt failed")
 		return
 	}
 	if !key.Enabled {
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DisabledException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DisabledException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "DisabledException", "key is disabled")
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:Decrypt"); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
 		return
 	}
 
 	plaintext, err := cryptoutil.DecryptBlob(key.MasterKeyRaw, rawBlob, cryptoutil.CanonicalContext(req.EncryptionContext))
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidCiphertextException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidCiphertextException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidCiphertextException", "decrypt failed")
 		return
 	}
 
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
 
 	writeJSON(w, http.StatusOK, decryptResponse{
 		KeyID:             key.ID,
@@ -1896,13 +1704,13 @@ func (s *server) handleDescribeKey(w http.ResponseWriter, r *http.Request) {
 	const action = "TrentService.DescribeKey"
 	var req describeKeyRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
 
 	var (
-		key kmsKey
+		key store.KMSKey
 		err error
 	)
 	if req.KeyID != "" {
@@ -1911,17 +1719,17 @@ func (s *server) handleDescribeKey(w http.ResponseWriter, r *http.Request) {
 		key, err = s.store.ResolveDefault(r.Context())
 	}
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "unknown key id")
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:DescribeKey"); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
 		return
 	}
 
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
 
 	writeJSON(w, http.StatusOK, describeKeyResponse{
 		KeyMetadata: toKeyMetadata(key),
@@ -1932,23 +1740,23 @@ func (s *server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	const action = "TrentService.CreateKey"
 	var req createKeyRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
 	key, err := s.store.CreateKey(r.Context(), req.Description, req.KeyUsage, req.KeySpec)
 	if err != nil {
 		errType := "DependencyTimeoutException"
-		if errors.Is(err, errUnsupported) {
+		if errors.Is(err, store.ErrUnsupported) {
 			errType = "UnsupportedOperationException"
 			writeAWSJSONError(w, http.StatusBadRequest, errType, "CreateKey requires KMS_DB_URL")
 		} else {
 			writeAWSJSONError(w, http.StatusInternalServerError, errType, "create key failed")
 		}
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: errType, Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: errType, Actor: r.RemoteAddr})
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, createKeyResponse{KeyMetadata: toKeyMetadata(key)})
 }
 
@@ -1956,19 +1764,19 @@ func (s *server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	const action = "TrentService.ListKeys"
 	var req listKeysRequest
 	if err := decodeOptionalJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
 	limit, err := normalizeListLimit(req.Limit)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
 	keys, err := s.store.ListKeys(r.Context())
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "list keys failed")
 		return
 	}
@@ -1978,11 +1786,11 @@ func (s *server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	out, nextMarker, truncated, err := paginateList(out, req.Marker, limit, func(item listKeyEntry) string { return item.KeyID })
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, listKeysResponse{Keys: out, NextMarker: nextMarker, Truncated: truncated})
 }
 
@@ -1990,7 +1798,7 @@ func (s *server) handleCreateAlias(w http.ResponseWriter, r *http.Request) {
 	const action = "TrentService.CreateAlias"
 	var req createAliasRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
@@ -1998,28 +1806,28 @@ func (s *server) handleCreateAlias(w http.ResponseWriter, r *http.Request) {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "AliasName and TargetKeyId are required")
 		return
 	}
-	if req.AliasName == managedDefaultAlias {
+	if req.AliasName == store.ManagedDefaultAlias {
 		writeAWSJSONError(w, http.StatusBadRequest, "UnsupportedOperationException", "alias/default is reserved for the account's managed default key")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
 		return
 	}
 	key, err := s.store.ResolveByID(r.Context(), req.TargetKeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "target key not found or alias exists")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:CreateAlias"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.store.CreateAlias(r.Context(), req.AliasName, req.TargetKeyID); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "target key not found or alias exists")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.TargetKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -2034,28 +1842,28 @@ func (s *server) handleUpdateAlias(w http.ResponseWriter, r *http.Request) {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "AliasName and TargetKeyId are required")
 		return
 	}
-	if req.AliasName == managedDefaultAlias {
+	if req.AliasName == store.ManagedDefaultAlias {
 		writeAWSJSONError(w, http.StatusBadRequest, "UnsupportedOperationException", "alias/default is immutable and cannot be re-pointed")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
 		return
 	}
 	key, err := s.store.ResolveByID(r.Context(), req.TargetKeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "alias or key not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:UpdateAlias"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.store.UpdateAlias(r.Context(), req.AliasName, req.TargetKeyID); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "alias or key not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.TargetKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -2064,19 +1872,19 @@ func (s *server) handleListAliases(w http.ResponseWriter, r *http.Request) {
 	var req listAliasesRequest
 	if err := decodeOptionalJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		return
 	}
 	limit, err := normalizeListLimit(req.Limit)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		return
 	}
 	aliases, err := s.store.ListAliases(r.Context())
 	if err != nil {
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "list aliases failed")
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		return
 	}
 	out := make([]aliasEntry, 0, len(aliases))
@@ -2086,10 +1894,10 @@ func (s *server) handleListAliases(w http.ResponseWriter, r *http.Request) {
 	out, nextMarker, truncated, err := paginateList(out, req.Marker, limit, func(item aliasEntry) string { return item.AliasName })
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, listAliasesResponse{Aliases: out, NextMarker: nextMarker, Truncated: truncated})
 }
 
@@ -2110,7 +1918,7 @@ func (s *server) handleSetKeyEnabled(w http.ResponseWriter, r *http.Request, ena
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
 	policyAction := "kms:DisableKey"
@@ -2119,20 +1927,20 @@ func (s *server) handleSetKeyEnabled(w http.ResponseWriter, r *http.Request, ena
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, policyAction); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
 		return
 	}
 	if !enabled && key.Managed {
 		writeAWSJSONError(w, http.StatusBadRequest, "UnsupportedOperationException", "the account default key cannot be disabled")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.store.SetKeyEnabled(r.Context(), req.KeyID, enabled); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -2157,26 +1965,26 @@ func (s *server) handleScheduleKeyDeletion(w http.ResponseWriter, r *http.Reques
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:ScheduleKeyDeletion"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
 		return
 	}
 	if key.Managed {
 		writeAWSJSONError(w, http.StatusBadRequest, "UnsupportedOperationException", "the account default key cannot be scheduled for deletion")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
 		return
 	}
 	deletionDate, err := s.store.ScheduleKeyDeletion(r.Context(), req.KeyID, req.PendingWindowInDays)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, scheduleKeyDeletionResponse{KeyID: req.KeyID, DeletionDate: deletionDate})
 }
 
@@ -2194,20 +2002,20 @@ func (s *server) handleCancelKeyDeletion(w http.ResponseWriter, r *http.Request)
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:CancelKeyDeletion"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.store.CancelKeyDeletion(r.Context(), req.KeyID); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
 	key, err = s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "reload key failed")
@@ -2218,7 +2026,7 @@ func (s *server) handleCancelKeyDeletion(w http.ResponseWriter, r *http.Request)
 
 func (s *server) handleCreateGrant(w http.ResponseWriter, r *http.Request) {
 	const action = "TrentService.CreateGrant"
-	var req createGrantRequest
+	var req store.CreateGrantRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
@@ -2230,21 +2038,21 @@ func (s *server) handleCreateGrant(w http.ResponseWriter, r *http.Request) {
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:CreateGrant"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
 		return
 	}
 	grant, err := s.store.CreateGrant(r.Context(), req)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "create grant failed")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, createGrantResponse{GrantID: grant.GrantID, GrantToken: grant.GrantToken})
 }
 
@@ -2262,25 +2070,25 @@ func (s *server) handleListGrants(w http.ResponseWriter, r *http.Request) {
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:ListGrants"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
 		return
 	}
 	grants, err := s.store.ListGrants(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "list grants failed")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		return
 	}
 	out := make([]grantListEntry, 0, len(grants))
 	for _, grant := range grants {
 		out = append(out, grantListEntry{GrantID: grant.GrantID, KeyID: grant.KeyID, GranteePrincipal: grant.GranteePrincipal, RetiringPrincipal: grant.RetiringPrincipal, Operations: append([]string(nil), grant.Operations...), Name: grant.Name, CreationDate: grant.CreatedAt})
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, listGrantsResponse{Grants: out})
 }
 
@@ -2298,20 +2106,20 @@ func (s *server) handleRevokeGrant(w http.ResponseWriter, r *http.Request) {
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:RevokeGrant"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
 		return
 	}
 	if err := s.store.RevokeGrant(r.Context(), req.KeyID, req.GrantID); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "grant not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -2328,14 +2136,14 @@ func (s *server) handleRetireGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.store.RetireGrant(r.Context(), req.GrantID, req.GrantToken); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "grant not found")
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
 		return
 	}
-	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
-func keyState(key kmsKey) string {
+func keyState(key store.KMSKey) string {
 	if key.DeletionDate != nil {
 		return "PendingDeletion"
 	}
@@ -2345,7 +2153,7 @@ func keyState(key kmsKey) string {
 	return "Disabled"
 }
 
-func toKeyMetadata(key kmsKey) keyMetadata {
+func toKeyMetadata(key store.KMSKey) keyMetadata {
 	keyUsage, keySpec := keyUsageAndSpecForMetadata(key)
 	return keyMetadata{
 		AWSAccountID:                "000000000000",
@@ -2367,12 +2175,12 @@ func toKeyMetadata(key kmsKey) keyMetadata {
 	}
 }
 
-func keyEncryptionAlgorithms(key kmsKey) []string {
+func keyEncryptionAlgorithms(key store.KMSKey) []string {
 	usage, _ := keyUsageAndSpecForMetadata(key)
-	if usage != keyUsageEncryptDecrypt {
+	if usage != store.KeyUsageEncryptDecrypt {
 		return nil
 	}
-	return []string{keySpecSymmetricDefault}
+	return []string{store.KeySpecSymmetricDefault}
 }
 
 func pendingDeletionDays(deletionDate *time.Time) int {
@@ -2386,17 +2194,17 @@ func pendingDeletionDays(deletionDate *time.Time) int {
 	return days
 }
 
-func (s *server) recordAudit(ctx context.Context, event auditEvent) {
+func (s *server) recordAudit(ctx context.Context, event store.AuditEvent) {
 	if err := s.store.RecordAudit(ctx, event); err != nil {
 		log.Printf("audit write failed action=%s key=%s: %v", event.Action, event.KeyID, err)
 	}
 }
 
-func (s *dbStore) ResolveByID(ctx context.Context, keyID string) (kmsKey, error) {
+func (s *dbStore) ResolveByID(ctx context.Context, keyID string) (store.KMSKey, error) {
 	if strings.HasPrefix(keyID, "alias/") {
 		var target string
 		if err := s.db.QueryRowContext(ctx, `SELECT target_key_id FROM kms_aliases WHERE alias_name = $1 AND account_id = $2`, keyID, s.accountForContext(ctx)).Scan(&target); err != nil {
-			return kmsKey{}, err
+			return store.KMSKey{}, err
 		}
 		keyID = target
 	}
@@ -2407,12 +2215,12 @@ WHERE id = $1
 `
 	query := q
 	args := []any{keyID}
-	if cond, extra := accountFilter(ctx, "account_id", 2); cond != "" {
+	if cond, extra := store.AccountFilter(ctx, "account_id", 2); cond != "" {
 		query += " AND " + cond
 		args = append(args, extra...)
 	}
 	var (
-		k            kmsKey
+		k            store.KMSKey
 		masterB64    string
 		wrappedB64   string
 		nonceB64     string
@@ -2423,44 +2231,44 @@ WHERE id = $1
 	)
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &publicB64, &keyUsage, &keySpec, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt, &k.Managed)
 	if err != nil {
-		return kmsKey{}, err
+		return store.KMSKey{}, err
 	}
 	if deletionDate.Valid {
 		k.DeletionDate = &deletionDate.Time
 	}
-	k.KeyUsage = normalizeKeyUsage(keyUsage)
+	k.KeyUsage = store.NormalizeKeyUsage(keyUsage)
 	if k.KeyUsage == "" {
-		k.KeyUsage = keyUsageEncryptDecrypt
+		k.KeyUsage = store.KeyUsageEncryptDecrypt
 	}
 	k.KeySpec = strings.ToUpper(strings.TrimSpace(keySpec))
 	if k.KeySpec == "" {
-		k.KeySpec = defaultKeySpecForUsage(k.KeyUsage)
+		k.KeySpec = store.DefaultKeySpecForUsage(k.KeyUsage)
 	}
 	if publicB64 != "" {
 		k.PublicKeyRaw, err = base64.StdEncoding.DecodeString(publicB64)
 		if err != nil {
-			return kmsKey{}, err
+			return store.KMSKey{}, err
 		}
 	}
 	k.MasterKeyRaw, err = s.resolveKeyMaterial(ctx, k.ID, masterB64, wrappedB64, nonceB64)
 	if err != nil {
-		return kmsKey{}, fmt.Errorf("load key material for %s: %w", k.ID, err)
+		return store.KMSKey{}, fmt.Errorf("load key material for %s: %w", k.ID, err)
 	}
 	return k, nil
 }
 
-func (s *dbStore) ResolveDefault(ctx context.Context) (kmsKey, error) {
+func (s *dbStore) ResolveDefault(ctx context.Context) (store.KMSKey, error) {
 	// Per-account immutable default: each account's alias/default points at its
 	// managed default key. This is the authoritative resolution path.
 	var aliasTarget string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT target_key_id FROM kms_aliases WHERE alias_name = $1 AND account_id = $2`,
-		managedDefaultAlias, s.accountForContext(ctx)).Scan(&aliasTarget)
+		store.ManagedDefaultAlias, s.accountForContext(ctx)).Scan(&aliasTarget)
 	if err == nil {
 		return s.ResolveByID(ctx, aliasTarget)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return kmsKey{}, err
+		return store.KMSKey{}, err
 	}
 
 	// Legacy fallback for deployments not yet migrated to per-account defaults.
@@ -2475,7 +2283,7 @@ WHERE setting_key = 'default_key_id'
 		return s.ResolveByID(ctx, keyID)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return kmsKey{}, err
+		return store.KMSKey{}, err
 	}
 
 	fallback := `
@@ -2483,19 +2291,19 @@ SELECT id
 FROM kms_keys
 WHERE enabled = TRUE`
 	var args []any
-	if cond, extra := accountFilter(ctx, "account_id", 1); cond != "" {
+	if cond, extra := store.AccountFilter(ctx, "account_id", 1); cond != "" {
 		fallback += "\nAND " + cond
 		args = append(args, extra...)
 	}
 	fallback += "\nORDER BY created_at ASC\nLIMIT 1"
 	err = s.db.QueryRowContext(ctx, fallback, args...).Scan(&keyID)
 	if err != nil {
-		return kmsKey{}, err
+		return store.KMSKey{}, err
 	}
 	return s.ResolveByID(ctx, keyID)
 }
 
-func (s *dbStore) EnsureBootstrap(ctx context.Context, k kmsKey) error {
+func (s *dbStore) EnsureBootstrap(ctx context.Context, k store.KMSKey) error {
 	wrappedB64, nonceB64, err := s.wrapKeyMaterial(k.ID, k.MasterKeyRaw)
 	if err != nil {
 		return fmt.Errorf("wrap bootstrap key material: %w", err)
@@ -2520,13 +2328,13 @@ ON CONFLICT (setting_key) DO NOTHING
 	return nil
 }
 
-func (s *dbStore) CreateKey(ctx context.Context, description, keyUsage, keySpec string) (kmsKey, error) {
-	raw, publicRaw, normalizedUsage, normalizedSpec, err := generateKeyMaterial(keyUsage, keySpec)
+func (s *dbStore) CreateKey(ctx context.Context, description, keyUsage, keySpec string) (store.KMSKey, error) {
+	raw, publicRaw, normalizedUsage, normalizedSpec, err := store.GenerateKeyMaterial(keyUsage, keySpec)
 	if err != nil {
-		return kmsKey{}, err
+		return store.KMSKey{}, err
 	}
 	id := cryptoutil.RandomHex(12)
-	k := kmsKey{
+	k := store.KMSKey{
 		ID:           id,
 		ARN:          s.keyARNForCtx(ctx, id),
 		MasterKeyRaw: raw,
@@ -2539,14 +2347,14 @@ func (s *dbStore) CreateKey(ctx context.Context, description, keyUsage, keySpec 
 	}
 	wrappedB64, nonceB64, err := s.wrapKeyMaterial(k.ID, k.MasterKeyRaw)
 	if err != nil {
-		return kmsKey{}, err
+		return store.KMSKey{}, err
 	}
 	const q = `
 INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at, account_id)
 VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11)
 `
 	if _, err := s.db.ExecContext(ctx, q, k.ID, k.ARN, wrappedB64, nonceB64, base64.StdEncoding.EncodeToString(publicRaw), k.KeyUsage, k.KeySpec, k.Description, k.Enabled, k.CreatedAt, s.accountForContext(ctx)); err != nil {
-		return kmsKey{}, err
+		return store.KMSKey{}, err
 	}
 	return k, nil
 }
@@ -2554,13 +2362,13 @@ VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11)
 // ImportSigningKey persists externally supplied asymmetric key material as a
 // SIGN_VERIFY key. The private key must be PKCS#8 DER and the public key PKIX
 // DER; both are stored using the same wrapping path as generated keys.
-func (s *dbStore) ImportSigningKey(ctx context.Context, description string, privPKCS8DER, pubPKIXDER []byte, keySpec string) (kmsKey, error) {
-	normalizedSpec, err := normalizeKeySpec(keyUsageSignVerify, keySpec)
+func (s *dbStore) ImportSigningKey(ctx context.Context, description string, privPKCS8DER, pubPKIXDER []byte, keySpec string) (store.KMSKey, error) {
+	normalizedSpec, err := store.NormalizeKeySpec(store.KeyUsageSignVerify, keySpec)
 	if err != nil {
-		return kmsKey{}, err
+		return store.KMSKey{}, err
 	}
 	id := cryptoutil.RandomHex(12)
-	k := kmsKey{
+	k := store.KMSKey{
 		ID:           id,
 		ARN:          s.keyARNForCtx(ctx, id),
 		MasterKeyRaw: privPKCS8DER,
@@ -2568,28 +2376,28 @@ func (s *dbStore) ImportSigningKey(ctx context.Context, description string, priv
 		Description:  description,
 		Enabled:      true,
 		CreatedAt:    time.Now().UTC(),
-		KeyUsage:     keyUsageSignVerify,
+		KeyUsage:     store.KeyUsageSignVerify,
 		KeySpec:      normalizedSpec,
 	}
 	wrappedB64, nonceB64, err := s.wrapKeyMaterial(k.ID, k.MasterKeyRaw)
 	if err != nil {
-		return kmsKey{}, err
+		return store.KMSKey{}, err
 	}
 	const q = `
 INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at, account_id)
 VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11)
 `
 	if _, err := s.db.ExecContext(ctx, q, k.ID, k.ARN, wrappedB64, nonceB64, base64.StdEncoding.EncodeToString(pubPKIXDER), k.KeyUsage, k.KeySpec, k.Description, k.Enabled, k.CreatedAt, s.accountForContext(ctx)); err != nil {
-		return kmsKey{}, err
+		return store.KMSKey{}, err
 	}
 	return k, nil
 }
 
-func (s *dbStore) ListKeys(ctx context.Context) ([]kmsKey, error) {
+func (s *dbStore) ListKeys(ctx context.Context) ([]store.KMSKey, error) {
 	q := `
 	SELECT id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at, managed
 FROM kms_keys`
-	cond, args := accountFilter(ctx, "account_id", 1)
+	cond, args := store.AccountFilter(ctx, "account_id", 1)
 	if cond != "" {
 		q += "\nWHERE " + cond
 	}
@@ -2600,10 +2408,10 @@ FROM kms_keys`
 	}
 	defer rows.Close()
 
-	out := make([]kmsKey, 0)
+	out := make([]store.KMSKey, 0)
 	for rows.Next() {
 		var (
-			k            kmsKey
+			k            store.KMSKey
 			masterB64    string
 			wrappedB64   string
 			nonceB64     string
@@ -2618,13 +2426,13 @@ FROM kms_keys`
 		if deletionDate.Valid {
 			k.DeletionDate = &deletionDate.Time
 		}
-		k.KeyUsage = normalizeKeyUsage(keyUsage)
+		k.KeyUsage = store.NormalizeKeyUsage(keyUsage)
 		if k.KeyUsage == "" {
-			k.KeyUsage = keyUsageEncryptDecrypt
+			k.KeyUsage = store.KeyUsageEncryptDecrypt
 		}
 		k.KeySpec = strings.ToUpper(strings.TrimSpace(keySpec))
 		if k.KeySpec == "" {
-			k.KeySpec = defaultKeySpecForUsage(k.KeyUsage)
+			k.KeySpec = store.DefaultKeySpecForUsage(k.KeyUsage)
 		}
 		if publicB64 != "" {
 			k.PublicKeyRaw, err = base64.StdEncoding.DecodeString(publicB64)
@@ -2660,7 +2468,7 @@ WHERE key_id = $1 AND policy_name = $2
 	var doc string
 	err = s.db.QueryRowContext(ctx, q, key.ID, policyName).Scan(&doc)
 	if errors.Is(err, sql.ErrNoRows) {
-		return defaultKeyPolicy(key), nil
+		return store.DefaultKeyPolicy(key), nil
 	}
 	if err != nil {
 		return "", err
@@ -2696,8 +2504,8 @@ VALUES ($1, $2, $3)
 }
 
 func (s *dbStore) UpdateAlias(ctx context.Context, aliasName, keyID string) error {
-	if aliasName == managedDefaultAlias {
-		return errImmutableManagedKey
+	if aliasName == store.ManagedDefaultAlias {
+		return store.ErrImmutableManagedKey
 	}
 	const q = `
 UPDATE kms_aliases
@@ -2719,10 +2527,10 @@ WHERE alias_name = $1
 }
 
 func (s *dbStore) DeleteAlias(ctx context.Context, aliasName string) error {
-	if aliasName == managedDefaultAlias {
-		return errImmutableManagedKey
+	if aliasName == store.ManagedDefaultAlias {
+		return store.ErrImmutableManagedKey
 	}
-	cond, args := accountFilter(ctx, "account_id", 2)
+	cond, args := store.AccountFilter(ctx, "account_id", 2)
 	q := `DELETE FROM kms_aliases WHERE alias_name = $1`
 	if cond != "" {
 		q += " AND " + cond
@@ -2741,11 +2549,11 @@ func (s *dbStore) DeleteAlias(ctx context.Context, aliasName string) error {
 	return nil
 }
 
-func (s *dbStore) ListAliases(ctx context.Context) ([]kmsAlias, error) {
+func (s *dbStore) ListAliases(ctx context.Context) ([]store.KMSAlias, error) {
 	q := `
 SELECT alias_name, target_key_id
 FROM kms_aliases`
-	cond, args := accountFilter(ctx, "account_id", 1)
+	cond, args := store.AccountFilter(ctx, "account_id", 1)
 	if cond != "" {
 		q += "\nWHERE " + cond
 	}
@@ -2755,9 +2563,9 @@ FROM kms_aliases`
 		return nil, err
 	}
 	defer rows.Close()
-	out := make([]kmsAlias, 0)
+	out := make([]store.KMSAlias, 0)
 	for rows.Next() {
-		var a kmsAlias
+		var a store.KMSAlias
 		if err := rows.Scan(&a.AliasName, &a.TargetKeyID); err != nil {
 			return nil, err
 		}
@@ -2771,7 +2579,7 @@ func (s *dbStore) SetKeyEnabled(ctx context.Context, keyID string, enabled bool)
 		if managed, err := s.keyManaged(ctx, keyID); err != nil {
 			return err
 		} else if managed {
-			return errImmutableManagedKey
+			return store.ErrImmutableManagedKey
 		}
 	}
 	const q = `UPDATE kms_keys SET enabled = $2, updated_at = NOW() WHERE id = $1`
@@ -2793,7 +2601,7 @@ func (s *dbStore) ScheduleKeyDeletion(ctx context.Context, keyID string, windowD
 	if managed, err := s.keyManaged(ctx, keyID); err != nil {
 		return time.Time{}, err
 	} else if managed {
-		return time.Time{}, errImmutableManagedKey
+		return time.Time{}, store.ErrImmutableManagedKey
 	}
 	deletionDate := time.Now().UTC().Add(time.Duration(windowDays) * 24 * time.Hour)
 	const q = `UPDATE kms_keys SET deletion_date = $2, updated_at = NOW() WHERE id = $1`
@@ -2831,7 +2639,7 @@ func (s *dbStore) ForceDeleteKey(ctx context.Context, keyID string) error {
 	if managed, err := s.keyManaged(ctx, keyID); err != nil {
 		return err
 	} else if managed {
-		return errImmutableManagedKey
+		return store.ErrImmutableManagedKey
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -2867,8 +2675,8 @@ func (s *dbStore) ForceDeleteKey(ctx context.Context, keyID string) error {
 	return tx.Commit()
 }
 
-func (s *dbStore) CreateGrant(ctx context.Context, req createGrantRequest) (kmsGrant, error) {
-	grant := kmsGrant{
+func (s *dbStore) CreateGrant(ctx context.Context, req store.CreateGrantRequest) (store.KMSGrant, error) {
+	grant := store.KMSGrant{
 		GrantID:           "grant-" + cryptoutil.RandomHex(12),
 		GrantToken:        cryptoutil.RandomHex(16),
 		KeyID:             req.KeyID,
@@ -2880,19 +2688,19 @@ func (s *dbStore) CreateGrant(ctx context.Context, req createGrantRequest) (kmsG
 	}
 	operationsJSON, err := json.Marshal(grant.Operations)
 	if err != nil {
-		return kmsGrant{}, err
+		return store.KMSGrant{}, err
 	}
 	const q = `
 INSERT INTO kms_grants (grant_id, grant_token, key_id, grantee_principal, retiring_principal, operations_json, grant_name, created_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 `
 	if _, err := s.db.ExecContext(ctx, q, grant.GrantID, grant.GrantToken, grant.KeyID, grant.GranteePrincipal, grant.RetiringPrincipal, string(operationsJSON), grant.Name, grant.CreatedAt); err != nil {
-		return kmsGrant{}, err
+		return store.KMSGrant{}, err
 	}
 	return grant, nil
 }
 
-func (s *dbStore) ListGrants(ctx context.Context, keyID string) ([]kmsGrant, error) {
+func (s *dbStore) ListGrants(ctx context.Context, keyID string) ([]store.KMSGrant, error) {
 	const q = `
 SELECT grant_id, grant_token, key_id, grantee_principal, retiring_principal, operations_json, grant_name, created_at
 FROM kms_grants
@@ -2904,9 +2712,9 @@ ORDER BY created_at ASC
 		return nil, err
 	}
 	defer rows.Close()
-	out := make([]kmsGrant, 0)
+	out := make([]store.KMSGrant, 0)
 	for rows.Next() {
-		var grant kmsGrant
+		var grant store.KMSGrant
 		var operationsJSON string
 		if err := rows.Scan(&grant.GrantID, &grant.GrantToken, &grant.KeyID, &grant.GranteePrincipal, &grant.RetiringPrincipal, &operationsJSON, &grant.Name, &grant.CreatedAt); err != nil {
 			return nil, err
@@ -2949,7 +2757,7 @@ func (s *dbStore) RetireGrant(ctx context.Context, grantID, grantToken string) e
 	return nil
 }
 
-func (s *dbStore) RecordAudit(ctx context.Context, event auditEvent) error {
+func (s *dbStore) RecordAudit(ctx context.Context, event store.AuditEvent) error {
 	var prevHash sql.NullString
 	if err := s.db.QueryRowContext(ctx, `SELECT event_hash FROM kms_audit_events ORDER BY id DESC LIMIT 1`).Scan(&prevHash); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
@@ -2959,7 +2767,7 @@ func (s *dbStore) RecordAudit(ctx context.Context, event auditEvent) error {
 		prev = prevHash.String
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	eventHash := hashAuditRecord(s.auditHMACKey, prev, event, now)
+	eventHash := store.HashAuditRecord(s.auditHMACKey, prev, event, now)
 	const q = `
 INSERT INTO kms_audit_events (action, key_id, result, error_type, actor, prev_hash, event_hash, created_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -2968,7 +2776,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	return err
 }
 
-func (s *dbStore) ListAuditEvents(ctx context.Context, limit int) ([]auditRecord, error) {
+func (s *dbStore) ListAuditEvents(ctx context.Context, limit int) ([]store.AuditRecord, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
@@ -2983,9 +2791,9 @@ LIMIT $1
 		return nil, err
 	}
 	defer rows.Close()
-	out := make([]auditRecord, 0, limit)
+	out := make([]store.AuditRecord, 0, limit)
 	for rows.Next() {
-		var entry auditRecord
+		var entry store.AuditRecord
 		if err := rows.Scan(&entry.ID, &entry.Action, &entry.KeyID, &entry.Result, &entry.ErrorType, &entry.Actor, &entry.PrevHash, &entry.EventHash, &entry.CreatedAt); err != nil {
 			return nil, err
 		}
@@ -2994,40 +2802,40 @@ LIMIT $1
 	return out, rows.Err()
 }
 
-func (s *inMemoryStore) ResolveByID(_ context.Context, keyID string) (kmsKey, error) {
+func (s *inMemoryStore) ResolveByID(_ context.Context, keyID string) (store.KMSKey, error) {
 	for _, key := range s.keysSnapshot() {
 		if keyID == "" || keyID == key.ID {
 			return key, nil
 		}
 	}
-	return kmsKey{}, sql.ErrNoRows
+	return store.KMSKey{}, sql.ErrNoRows
 }
 
-func (s *inMemoryStore) ResolveDefault(_ context.Context) (kmsKey, error) {
+func (s *inMemoryStore) ResolveDefault(_ context.Context) (store.KMSKey, error) {
 	keys := s.keysSnapshot()
 	if len(keys) == 0 {
-		return kmsKey{}, sql.ErrNoRows
+		return store.KMSKey{}, sql.ErrNoRows
 	}
 	return keys[0], nil
 }
 
-func (s *inMemoryStore) EnsureBootstrap(_ context.Context, _ kmsKey) error {
+func (s *inMemoryStore) EnsureBootstrap(_ context.Context, _ store.KMSKey) error {
 	return nil
 }
 
-func (s *inMemoryStore) EnsureAccountDefaultKey(_ context.Context, _ string) (kmsKey, error) {
-	return kmsKey{}, errUnsupported
+func (s *inMemoryStore) EnsureAccountDefaultKey(_ context.Context, _ string) (store.KMSKey, error) {
+	return store.KMSKey{}, store.ErrUnsupported
 }
 
-func (s *inMemoryStore) CreateKey(_ context.Context, _ string, _ string, _ string) (kmsKey, error) {
-	return kmsKey{}, errUnsupported
+func (s *inMemoryStore) CreateKey(_ context.Context, _ string, _ string, _ string) (store.KMSKey, error) {
+	return store.KMSKey{}, store.ErrUnsupported
 }
 
-func (s *inMemoryStore) ImportSigningKey(_ context.Context, _ string, _, _ []byte, _ string) (kmsKey, error) {
-	return kmsKey{}, errUnsupported
+func (s *inMemoryStore) ImportSigningKey(_ context.Context, _ string, _, _ []byte, _ string) (store.KMSKey, error) {
+	return store.KMSKey{}, store.ErrUnsupported
 }
 
-func (s *inMemoryStore) ListKeys(_ context.Context) ([]kmsKey, error) {
+func (s *inMemoryStore) ListKeys(_ context.Context) ([]store.KMSKey, error) {
 	return s.keysSnapshot(), nil
 }
 
@@ -3046,7 +2854,7 @@ func (s *inMemoryStore) GetKeyPolicy(_ context.Context, keyID, policyName string
 	if doc, ok := s.policies[policyName]; ok {
 		return doc, nil
 	}
-	return defaultKeyPolicy(s.k), nil
+	return store.DefaultKeyPolicy(s.k), nil
 }
 
 func (s *inMemoryStore) PutKeyPolicy(_ context.Context, keyID, policyName, policyDocument string) error {
@@ -3066,58 +2874,58 @@ func (s *inMemoryStore) PutKeyPolicy(_ context.Context, keyID, policyName, polic
 }
 
 func (s *inMemoryStore) CreateAlias(_ context.Context, _, _ string) error {
-	return errUnsupported
+	return store.ErrUnsupported
 }
 
 func (s *inMemoryStore) UpdateAlias(_ context.Context, _, _ string) error {
-	return errUnsupported
+	return store.ErrUnsupported
 }
 
 func (s *inMemoryStore) DeleteAlias(_ context.Context, _ string) error {
-	return errUnsupported
+	return store.ErrUnsupported
 }
 
-func (s *inMemoryStore) ListAliases(_ context.Context) ([]kmsAlias, error) {
+func (s *inMemoryStore) ListAliases(_ context.Context) ([]store.KMSAlias, error) {
 	if len(s.aliases) == 0 {
 		return nil, nil
 	}
-	out := make([]kmsAlias, len(s.aliases))
+	out := make([]store.KMSAlias, len(s.aliases))
 	copy(out, s.aliases)
 	return out, nil
 }
 
-func (s *inMemoryStore) keysSnapshot() []kmsKey {
+func (s *inMemoryStore) keysSnapshot() []store.KMSKey {
 	if len(s.keys) == 0 {
 		if strings.TrimSpace(s.k.ID) == "" {
 			return nil
 		}
-		return []kmsKey{s.k}
+		return []store.KMSKey{s.k}
 	}
-	out := make([]kmsKey, len(s.keys))
+	out := make([]store.KMSKey, len(s.keys))
 	copy(out, s.keys)
 	return out
 }
 
 func (s *inMemoryStore) SetKeyEnabled(_ context.Context, _ string, _ bool) error {
-	return errUnsupported
+	return store.ErrUnsupported
 }
 
 func (s *inMemoryStore) ScheduleKeyDeletion(_ context.Context, _ string, _ int) (time.Time, error) {
-	return time.Time{}, errUnsupported
+	return time.Time{}, store.ErrUnsupported
 }
 
 func (s *inMemoryStore) CancelKeyDeletion(_ context.Context, _ string) error {
-	return errUnsupported
+	return store.ErrUnsupported
 }
 
 func (s *inMemoryStore) ForceDeleteKey(_ context.Context, _ string) error {
-	return errUnsupported
+	return store.ErrUnsupported
 }
 
-func (s *inMemoryStore) CreateGrant(_ context.Context, req createGrantRequest) (kmsGrant, error) {
+func (s *inMemoryStore) CreateGrant(_ context.Context, req store.CreateGrantRequest) (store.KMSGrant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	grant := kmsGrant{
+	grant := store.KMSGrant{
 		GrantID:           "grant-" + cryptoutil.RandomHex(12),
 		GrantToken:        cryptoutil.RandomHex(16),
 		KeyID:             req.KeyID,
@@ -3131,10 +2939,10 @@ func (s *inMemoryStore) CreateGrant(_ context.Context, req createGrantRequest) (
 	return grant, nil
 }
 
-func (s *inMemoryStore) ListGrants(_ context.Context, keyID string) ([]kmsGrant, error) {
+func (s *inMemoryStore) ListGrants(_ context.Context, keyID string) ([]store.KMSGrant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]kmsGrant, 0)
+	out := make([]store.KMSGrant, 0)
 	for _, grant := range s.grants {
 		if grant.KeyID == keyID {
 			grantCopy := grant
@@ -3169,21 +2977,21 @@ func (s *inMemoryStore) RetireGrant(_ context.Context, grantID, grantToken strin
 	return sql.ErrNoRows
 }
 
-func (s *inMemoryStore) RecordAudit(_ context.Context, event auditEvent) error {
+func (s *inMemoryStore) RecordAudit(_ context.Context, event store.AuditEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.auditSeq++
 	createdAt := time.Now().UTC()
-	entry := auditRecord{ID: s.auditSeq, Action: event.Action, KeyID: event.KeyID, Result: event.Result, ErrorType: event.ErrorType, Actor: event.Actor, CreatedAt: createdAt}
+	entry := store.AuditRecord{ID: s.auditSeq, Action: event.Action, KeyID: event.KeyID, Result: event.Result, ErrorType: event.ErrorType, Actor: event.Actor, CreatedAt: createdAt}
 	if len(s.audit) > 0 {
 		entry.PrevHash = s.audit[len(s.audit)-1].EventHash
 	}
-	entry.EventHash = hashAuditRecord(s.auditHMACKey, entry.PrevHash, event, createdAt.Format(time.RFC3339Nano))
+	entry.EventHash = store.HashAuditRecord(s.auditHMACKey, entry.PrevHash, event, createdAt.Format(time.RFC3339Nano))
 	s.audit = append(s.audit, entry)
 	return nil
 }
 
-func (s *inMemoryStore) ListAuditEvents(_ context.Context, limit int) ([]auditRecord, error) {
+func (s *inMemoryStore) ListAuditEvents(_ context.Context, limit int) ([]store.AuditRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if limit <= 0 || limit > 500 {
@@ -3192,7 +3000,7 @@ func (s *inMemoryStore) ListAuditEvents(_ context.Context, limit int) ([]auditRe
 	if len(s.audit) == 0 {
 		return nil, nil
 	}
-	items := make([]auditRecord, len(s.audit))
+	items := make([]store.AuditRecord, len(s.audit))
 	copy(items, s.audit)
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].ID > items[j].ID
@@ -3421,22 +3229,7 @@ func writeAWSJSONError(w http.ResponseWriter, status int, typ, msg string) {
 	writeJSON(w, status, awsError{Type: typ, Message: msg})
 }
 
-// hashAuditRecord computes the chain hash for an audit record. When key is
-// non-empty it produces an HMAC-SHA256 (authenticity: an attacker with DB write
-// access cannot forge a valid chain without the key); otherwise it falls back to
-// a plain SHA-256 chain (integrity only).
-func hashAuditRecord(key []byte, prevHash string, event auditEvent, ts string) string {
-	payload := []byte(strings.Join([]string{prevHash, event.Action, event.KeyID, event.Result, event.ErrorType, event.Actor, ts}, "|"))
-	if len(key) > 0 {
-		mac := hmac.New(sha256.New, key)
-		mac.Write(payload)
-		return hex.EncodeToString(mac.Sum(nil))
-	}
-	h := sha256.Sum256(payload)
-	return hex.EncodeToString(h[:])
-}
-
-func (s *server) authorizeKeyAction(ctx context.Context, r *http.Request, key kmsKey, action string) error {
+func (s *server) authorizeKeyAction(ctx context.Context, r *http.Request, key store.KMSKey, action string) error {
 	policy, err := s.store.GetKeyPolicy(ctx, key.ID, "default")
 	if err != nil {
 		return err
@@ -3601,25 +3394,4 @@ func normalizePolicyDocument(raw string) (string, error) {
 		return "", err
 	}
 	return string(b), nil
-}
-
-func defaultKeyPolicy(key kmsKey) string {
-	policy := map[string]any{
-		"Version": "2012-10-17",
-		"Id":      "go-kms-default-policy-" + key.ID,
-		"Statement": []map[string]any{
-			{
-				"Sid":       "EnableRootPermissions",
-				"Effect":    "Allow",
-				"Principal": "*",
-				"Action":    "kms:*",
-				"Resource":  "*",
-			},
-		},
-	}
-	b, err := json.MarshalIndent(policy, "", "  ")
-	if err != nil {
-		return "{}"
-	}
-	return string(b)
 }

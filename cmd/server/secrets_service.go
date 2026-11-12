@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // secretsService is the protocol-free business layer for the Infisical-style
@@ -21,14 +23,14 @@ import (
 // folders) is persisted through hierarchyStore when available, which lets the
 // UI model folders that do not yet contain any items.
 type secretsService struct {
-	store     keyStore
-	hierarchy hierarchyStore
+	store     store.Store
+	hierarchy store.HierarchyStore
 	approvals *approvalRegistry
 }
 
-func newSecretsService(store keyStore) *secretsService {
-	svc := &secretsService{store: store, approvals: newApprovalRegistry()}
-	if hs, ok := store.(hierarchyStore); ok {
+func newSecretsService(st store.Store) *secretsService {
+	svc := &secretsService{store: st, approvals: newApprovalRegistry()}
+	if hs, ok := st.(store.HierarchyStore); ok {
 		svc.hierarchy = hs
 	}
 	return svc
@@ -93,7 +95,7 @@ type itemDetail struct {
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	DeletionDate      *time.Time
-	Tags              []secretTag
+	Tags              []store.SecretTag
 	PolicyDocument    string
 	RotationEnabled   bool
 	RotationLambdaARN string
@@ -201,7 +203,7 @@ func (svc *secretsService) ListFolder(ctx context.Context, project, env string, 
 				shadowed = append(shadowed, itemSummary{
 					Project:      project,
 					Env:          env,
-					Path:         folderPath(folder),
+					Path:         store.FolderPath(folder),
 					Key:          "",
 					ARN:          sec.ARN,
 					UpdatedAt:    sec.LastChangedDate.UTC(),
@@ -220,7 +222,7 @@ func (svc *secretsService) ListFolder(ctx context.Context, project, env string, 
 			items = append(items, itemSummary{
 				Project:      pi.Project,
 				Env:          pi.Env,
-				Path:         folderPath(pi.Folder),
+				Path:         store.FolderPath(pi.Folder),
 				Key:          pi.Key,
 				ARN:          sec.ARN,
 				UpdatedAt:    sec.LastChangedDate.UTC(),
@@ -255,7 +257,7 @@ func (svc *secretsService) PutItem(ctx context.Context, coord itemCoord, value, 
 	}
 	name := coord.backingName()
 	if _, derr := svc.store.DescribeSecret(ctx, name); derr != nil {
-		if _, _, cerr := svc.store.CreateSecret(ctx, createSecretRequest{
+		if _, _, cerr := svc.store.CreateSecret(ctx, store.CreateSecretRequest{
 			Name:         name,
 			Description:  "citadel:" + coord.Project + "/" + coord.Env,
 			KMSKeyID:     strings.TrimSpace(kmsKeyID),
@@ -265,23 +267,23 @@ func (svc *secretsService) PutItem(ctx context.Context, coord itemCoord, value, 
 		}
 		return true, nil
 	}
-	if _, perr := svc.store.PutSecretValue(ctx, putSecretValueRequest{SecretID: name, SecretString: value}); perr != nil {
+	if _, perr := svc.store.PutSecretValue(ctx, store.PutSecretValueRequest{SecretID: name, SecretString: value}); perr != nil {
 		return false, perr
 	}
 	return false, nil
 }
 
 // RevealItem returns the decrypted value (and version) of a single item.
-func (svc *secretsService) RevealItem(ctx context.Context, coord itemCoord, versionID, versionStage string) (secretValueRecord, error) {
+func (svc *secretsService) RevealItem(ctx context.Context, coord itemCoord, versionID, versionStage string) (store.SecretValueRecord, error) {
 	if err := coord.validate(); err != nil {
-		return secretValueRecord{}, err
+		return store.SecretValueRecord{}, err
 	}
 	val, err := svc.store.GetSecretValue(ctx, coord.backingName(), versionID, versionStage)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return secretValueRecord{}, errItemNotFound
+			return store.SecretValueRecord{}, errItemNotFound
 		}
-		return secretValueRecord{}, err
+		return store.SecretValueRecord{}, err
 	}
 	return val, nil
 }
@@ -293,7 +295,7 @@ const referenceDepthLimit = 8
 // RevealItemResolved is like RevealItem but expands any ${KEY} /
 // ${/abs/path/KEY} references contained in the value against the same
 // environment before returning it (PLAN.md §6 P8 "secret references").
-func (svc *secretsService) RevealItemResolved(ctx context.Context, coord itemCoord, versionID, versionStage string) (secretValueRecord, error) {
+func (svc *secretsService) RevealItemResolved(ctx context.Context, coord itemCoord, versionID, versionStage string) (store.SecretValueRecord, error) {
 	val, err := svc.RevealItem(ctx, coord, versionID, versionStage)
 	if err != nil {
 		return val, err
@@ -517,28 +519,6 @@ func (svc *secretsService) resolveOneReference(ctx context.Context, coord itemCo
 	return svc.resolveReferences(ctx, target, *val.SecretString, depth-1)
 }
 
-// hierarchyStore is the optional structure backend a keyStore may implement to
-// persist projects, environments, and empty folders that cannot be derived from
-// secret names alone.
-type hierarchyStore interface {
-	ListHierarchy(ctx context.Context) ([]hierarchyProject, error)
-	ListFolders(ctx context.Context, project, env string, folder []string) ([]string, error)
-	CreateProject(ctx context.Context, slug, name string) error
-	CreateEnvironment(ctx context.Context, project, slug, name string) error
-	CreateFolder(ctx context.Context, project, env string, folder []string) error
-	RenameProject(ctx context.Context, slug, newName string) error
-	RenameEnvironment(ctx context.Context, project, slug, newName string) error
-	DeleteProject(ctx context.Context, slug string) error
-	DeleteEnvironment(ctx context.Context, project, slug string) error
-	DeleteFolder(ctx context.Context, project, env string, folder []string) error
-}
-
-type hierarchyProject struct {
-	Project      string
-	Name         string
-	Environments []string
-}
-
 var errNoHierarchyStore = errors.New("hierarchy structure is not supported by this store")
 
 // CreateProject registers a structure-only project so that empty projects show
@@ -728,7 +708,7 @@ func (svc *secretsService) DescribeItem(ctx context.Context, coord itemCoord) (i
 	return itemDetail{
 		Project:           coord.Project,
 		Env:               coord.Env,
-		Path:              folderPath(coord.Folder),
+		Path:              store.FolderPath(coord.Folder),
 		Key:               coord.Key,
 		ARN:               meta.ARN,
 		Description:       meta.Description,
@@ -761,7 +741,7 @@ func (svc *secretsService) UpdateItemMetadata(ctx context.Context, coord itemCoo
 	}
 	name := coord.backingName()
 	desiredKey := strings.TrimSpace(kmsKeyID)
-	req := updateSecretRequest{
+	req := store.UpdateSecretRequest{
 		SecretID:    name,
 		Description: description,
 		KMSKeyID:    desiredKey,
@@ -791,7 +771,7 @@ func (svc *secretsService) ReKeyItem(ctx context.Context, coord itemCoord, newKM
 	if newKey == "" {
 		return errors.New("kmsKeyId is required")
 	}
-	req := updateSecretRequest{SecretID: coord.backingName(), KMSKeyID: newKey}
+	req := store.UpdateSecretRequest{SecretID: coord.backingName(), KMSKeyID: newKey}
 	if err := svc.attachCurrentValue(ctx, coord, &req); err != nil {
 		return err
 	}
@@ -840,7 +820,7 @@ func (svc *secretsService) ReKeyEnvironment(ctx context.Context, project, env, n
 // the subsequent UpdateSecret writes a new, re-encrypted version. It refuses to
 // proceed when there is no value to re-encrypt, since that would let the caller
 // move the key pointer without re-sealing the ciphertext.
-func (svc *secretsService) attachCurrentValue(ctx context.Context, coord itemCoord, req *updateSecretRequest) error {
+func (svc *secretsService) attachCurrentValue(ctx context.Context, coord itemCoord, req *store.UpdateSecretRequest) error {
 	current, err := svc.RevealItem(ctx, coord, "", "")
 	if err != nil {
 		return mapItemErr(err)
@@ -865,12 +845,12 @@ func (svc *secretsService) PromoteItemVersion(ctx context.Context, coord itemCoo
 	if strings.TrimSpace(versionID) == "" {
 		return errors.New("versionId is required")
 	}
-	_, err := svc.store.UpdateSecretVersionStage(ctx, coord.backingName(), currentVersionStage, strings.TrimSpace(versionID), "")
+	_, err := svc.store.UpdateSecretVersionStage(ctx, coord.backingName(), store.CurrentVersionStage, strings.TrimSpace(versionID), "")
 	return mapItemErr(err)
 }
 
 // TagItem adds or updates tags on an item.
-func (svc *secretsService) TagItem(ctx context.Context, coord itemCoord, tags []secretTag) error {
+func (svc *secretsService) TagItem(ctx context.Context, coord itemCoord, tags []store.SecretTag) error {
 	if err := coord.validate(); err != nil {
 		return err
 	}
@@ -935,8 +915,4 @@ func mapItemErr(err error) error {
 		return errItemNotFound
 	}
 	return err
-}
-
-func fmtHierarchyKey(parts ...string) string {
-	return strings.Join(parts, "\x00")
 }

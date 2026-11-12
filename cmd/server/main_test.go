@@ -14,10 +14,11 @@ import (
 
 	"github.com/worlddrknss/citadel/internal/config"
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 func TestEncryptDecryptRoundTrip(t *testing.T) {
-	k := kmsKey{
+	k := store.KMSKey{
 		ID:           "go-kms-default-key",
 		ARN:          "arn:aws:kms:local:000000000000:key/go-kms-default-key",
 		MasterKeyRaw: bytes.Repeat([]byte{1}, 32),
@@ -62,7 +63,7 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 }
 
 func TestEncryptRejectsUnknownKeyID(t *testing.T) {
-	k := kmsKey{
+	k := store.KMSKey{
 		ID:           "kms-a",
 		ARN:          "arn:aws:kms:local:000000000000:key/kms-a",
 		MasterKeyRaw: bytes.Repeat([]byte{2}, 32),
@@ -85,7 +86,7 @@ func TestEncryptRejectsUnknownKeyID(t *testing.T) {
 }
 
 func TestDecryptLegacyBlobCompatibility(t *testing.T) {
-	k := kmsKey{
+	k := store.KMSKey{
 		ID:           "go-kms-default-key",
 		ARN:          "arn:aws:kms:local:000000000000:key/go-kms-default-key",
 		MasterKeyRaw: bytes.Repeat([]byte{3}, 32),
@@ -124,7 +125,7 @@ func TestDecryptLegacyBlobCompatibility(t *testing.T) {
 }
 
 func TestGetKeyPolicyReturnsDefaultPolicy(t *testing.T) {
-	k := kmsKey{
+	k := store.KMSKey{
 		ID:           "go-kms-default-key",
 		ARN:          "arn:aws:kms:local:000000000000:key/go-kms-default-key",
 		MasterKeyRaw: bytes.Repeat([]byte{4}, 32),
@@ -151,7 +152,7 @@ func TestGetKeyPolicyReturnsDefaultPolicy(t *testing.T) {
 }
 
 func TestPutAndGetKeyPolicy(t *testing.T) {
-	k := kmsKey{
+	k := store.KMSKey{
 		ID:           "go-kms-default-key",
 		ARN:          "arn:aws:kms:local:000000000000:key/go-kms-default-key",
 		MasterKeyRaw: bytes.Repeat([]byte{5}, 32),
@@ -280,7 +281,7 @@ func TestDecodeCipherBlobLegacyFallbackOnMalformedHeader(t *testing.T) {
 }
 
 func TestListKeysPagination(t *testing.T) {
-	keys := []kmsKey{
+	keys := []store.KMSKey{
 		{
 			ID:           "key-1",
 			ARN:          "arn:aws:kms:local:000000000000:key/key-1",
@@ -344,7 +345,7 @@ func TestListKeysPagination(t *testing.T) {
 }
 
 func TestListKeysRejectsInvalidMarker(t *testing.T) {
-	k := kmsKey{
+	k := store.KMSKey{
 		ID:           "key-1",
 		ARN:          "arn:aws:kms:local:000000000000:key/key-1",
 		MasterKeyRaw: bytes.Repeat([]byte{1}, 32),
@@ -363,14 +364,14 @@ func TestListKeysRejectsInvalidMarker(t *testing.T) {
 }
 
 func TestListAliasesPagination(t *testing.T) {
-	k := kmsKey{
+	k := store.KMSKey{
 		ID:           "key-1",
 		ARN:          "arn:aws:kms:local:000000000000:key/key-1",
 		MasterKeyRaw: bytes.Repeat([]byte{1}, 32),
 		CreatedAt:    time.Unix(1, 0).UTC(),
 		Enabled:      true,
 	}
-	aliases := []kmsAlias{
+	aliases := []store.KMSAlias{
 		{AliasName: "alias/app-1", TargetKeyID: "key-1"},
 		{AliasName: "alias/app-2", TargetKeyID: "key-1"},
 		{AliasName: "alias/app-3", TargetKeyID: "key-1"},
@@ -409,7 +410,7 @@ func TestListAliasesPagination(t *testing.T) {
 }
 
 func TestListKeysAllowsEmptyBody(t *testing.T) {
-	k := kmsKey{
+	k := store.KMSKey{
 		ID:           "key-1",
 		ARN:          "arn:aws:kms:local:000000000000:key/key-1",
 		MasterKeyRaw: bytes.Repeat([]byte{1}, 32),
@@ -557,7 +558,7 @@ func TestPhaseACompatibilitySuite(t *testing.T) {
 
 	t.Run("list aliases allows empty body", func(t *testing.T) {
 		key := sampleKey(1)
-		s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: key, aliases: []kmsAlias{{AliasName: "alias/app", TargetKeyID: key.ID}}}}
+		s := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: key, aliases: []store.KMSAlias{{AliasName: "alias/app", TargetKeyID: key.ID}}}}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", s.handleKMS)
 
@@ -673,7 +674,7 @@ func TestSecretsManagerLifecycle(t *testing.T) {
 		if entry["VersionId"] == pendingVersionID {
 			stages, _ := entry["VersionStages"].([]any)
 			for _, stage := range stages {
-				if stage == pendingVersionStage {
+				if stage == store.PendingVersionStage {
 					foundPending = true
 				}
 			}
@@ -685,12 +686,12 @@ func TestSecretsManagerLifecycle(t *testing.T) {
 
 	callKMS(t, mux, "secretsmanager.UpdateSecretVersionStage", map[string]any{
 		"SecretId":        "prod/app/database",
-		"VersionStage":    currentVersionStage,
+		"VersionStage":    store.CurrentVersionStage,
 		"MoveToVersionId": pendingVersionID,
 	})
 	currentResp = callKMS(t, mux, "secretsmanager.GetSecretValue", map[string]any{
 		"SecretId":     "prod/app/database",
-		"VersionStage": currentVersionStage,
+		"VersionStage": store.CurrentVersionStage,
 	})
 	if got, _ := currentResp["VersionId"].(string); got != pendingVersionID {
 		t.Fatalf("expected promoted current version id: %q want %q", got, pendingVersionID)
@@ -744,8 +745,8 @@ func TestSecretResourcePolicyDeniesGetSecretValue(t *testing.T) {
 	assertAWSErrorType(t, rec.Body.Bytes(), "AccessDeniedException")
 }
 
-func sampleKey(seed byte) kmsKey {
-	return kmsKey{
+func sampleKey(seed byte) store.KMSKey {
+	return store.KMSKey{
 		ID:           "key-" + string(rune('0'+seed)),
 		ARN:          "arn:aws:kms:local:000000000000:key/key-" + string(rune('0'+seed)),
 		MasterKeyRaw: bytes.Repeat([]byte{seed}, 32),

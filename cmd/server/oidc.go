@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // ecCurve maps a JWK "crv" name to its elliptic.Curve.
@@ -171,7 +173,7 @@ func verifyWebIdentityToken(ctx context.Context, client *http.Client, token stri
 	}
 
 	return oidcClaims{
-		Issuer:    normalizeIssuerURL(raw.Issuer),
+		Issuer:    store.NormalizeIssuerURL(raw.Issuer),
 		Subject:   raw.Subject,
 		Audiences: decodeAudience(raw.Audience),
 		ExpiresAt: exp,
@@ -244,7 +246,7 @@ func verifyJWTSignature(alg string, pub crypto.PublicKey, signingInput, signatur
 // keyFor returns the public key for the given issuer and kid, fetching and
 // caching the issuer's JWKS as needed.
 func (c *jwksCache) keyFor(ctx context.Context, client *http.Client, issuer, kid string) (crypto.PublicKey, error) {
-	issuer = normalizeIssuerURL(issuer)
+	issuer = store.NormalizeIssuerURL(issuer)
 	c.mu.Lock()
 	entry, ok := c.entries[issuer]
 	fresh := ok && time.Since(entry.fetchedAt) < jwksCacheTTL

@@ -8,13 +8,14 @@ import (
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 func (s *server) handleCreateCertificateAuthority(w http.ResponseWriter, r *http.Request) {
 	const action = "acm-pca.CreateCertificateAuthority"
 	var req createCertificateAuthorityRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
@@ -29,25 +30,25 @@ func (s *server) handleCreateCertificateAuthority(w http.ResponseWriter, r *http
 	keySpec := ""
 	switch req.CertificateAuthorityConfiguration.KeyAlgorithm {
 	case "RSA_2048":
-		keySpec = keySpecRSA2048
+		keySpec = store.KeySpecRSA2048
 	case "RSA_3072":
-		keySpec = keySpecRSA3072
+		keySpec = store.KeySpecRSA3072
 	case "RSA_4096":
-		keySpec = keySpecRSA4096
+		keySpec = store.KeySpecRSA4096
 	case "EC_prime256v1":
-		keySpec = keySpecECCP256
+		keySpec = store.KeySpecECCP256
 	case "EC_secp384r1":
-		keySpec = keySpecECCP384
+		keySpec = store.KeySpecECCP384
 	default:
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "unsupported KeyAlgorithm")
 		return
 	}
 
 	// Create the signing key via KMS
-	signingKey, err := s.store.CreateKey(r.Context(), "Private CA key", keyUsageSignVerify, keySpec)
+	signingKey, err := s.store.CreateKey(r.Context(), "Private CA key", store.KeyUsageSignVerify, keySpec)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "failed to create CA key")
 		return
 	}
@@ -58,7 +59,7 @@ func (s *server) handleCreateCertificateAuthority(w http.ResponseWriter, r *http
 
 	// TODO: Build and self-sign root cert or accept cert for subordinate
 	// For Phase A: Create CA and generate self-signed root cert
-	ca := pcaCertificateAuthority{
+	ca := store.PCACertificateAuthority{
 		CAID:        caID,
 		ARN:         caARN,
 		Type:        caType,
@@ -89,7 +90,7 @@ func (s *server) handleCreateCertificateAuthority(w http.ResponseWriter, r *http
 	// Create KMS signer for the CA key
 	signer, err := newKMSSigner(r.Context(), s.store, signingKey, signingAlgorithm)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "failed to create CA signer")
 		return
 	}
@@ -97,7 +98,7 @@ func (s *server) handleCreateCertificateAuthority(w http.ResponseWriter, r *http
 	// Generate the self-signed root certificate
 	_, certDER, err := buildRootCAWithSigner(ca, signingKey, signer)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "failed to generate CA certificate")
 		return
 	}
@@ -107,7 +108,7 @@ func (s *server) handleCreateCertificateAuthority(w http.ResponseWriter, r *http
 
 	// Store the CA in the database
 	if err := s.store.CreateCertificateAuthority(r.Context(), ca); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "failed to store CA")
 		return
 	}
@@ -116,7 +117,7 @@ func (s *server) handleCreateCertificateAuthority(w http.ResponseWriter, r *http
 	s.assignCAKeyAlias(r.Context(), signingKey.ID, req.CertificateAuthorityConfiguration.Subject.CommonName, caID)
 
 	// Record audit event with CA reference
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: signingKey.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: signingKey.ID, Result: "ok", Actor: r.RemoteAddr})
 
 	writeJSON(w, http.StatusOK, createCertificateAuthorityResponse{
 		CertificateAuthorityARN: ca.ARN,
@@ -127,13 +128,13 @@ func (s *server) handleDescribeCertificateAuthority(w http.ResponseWriter, r *ht
 	const action = "acm-pca.DescribeCertificateAuthority"
 	var req describeCertificateAuthorityRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
 
 	if req.CertificateAuthorityARN == "" {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "CertificateAuthorityArn is required")
 		return
 	}
@@ -141,12 +142,12 @@ func (s *server) handleDescribeCertificateAuthority(w http.ResponseWriter, r *ht
 	// Load from database
 	ca, err := s.store.DescribeCertificateAuthority(r.Context(), req.CertificateAuthorityARN)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ResourceNotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ResourceNotFoundException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ResourceNotFoundException", err.Error())
 		return
 	}
 
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: ca.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: ca.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 	writeJSON(w, http.StatusOK, describeCertificateAuthorityResponse{
 		CertificateAuthority: certificateAuthorityRecord{
 			ARN:         ca.ARN,
@@ -162,13 +163,13 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	const action = "acm-pca.IssueCertificate"
 	var req issueCertificateRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
 
 	if req.CertificateAuthorityARN == "" || req.CSR == "" {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "CertificateAuthorityArn and Csr are required")
 		return
 	}
@@ -176,7 +177,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	// Load CA from database
 	ca, err := s.store.DescribeCertificateAuthority(r.Context(), req.CertificateAuthorityARN)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ResourceNotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ResourceNotFoundException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ResourceNotFoundException", err.Error())
 		return
 	}
@@ -184,7 +185,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	// Load CA's KMS key
 	caKey, err := s.store.ResolveByID(r.Context(), ca.KMSKeyID)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "failed to load CA key")
 		return
 	}
@@ -192,7 +193,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	// Parse CSR from base64
 	csrDER, err := base64.StdEncoding.DecodeString(req.CSR)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "CSR must be base64-encoded")
 		return
 	}
@@ -200,7 +201,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	// Parse the CSR
 	csr, err := parseCSR(csrDER)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", fmt.Sprintf("invalid CSR: %v", err))
 		return
 	}
@@ -214,7 +215,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	// Create KMS signer for the CA key
 	signer, err := newKMSSigner(r.Context(), s.store, caKey, signingAlgorithm)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "failed to create signer")
 		return
 	}
@@ -222,7 +223,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	// Parse CA's public key
 	caPubKey, err := x509.ParsePKIXPublicKey(caKey.PublicKeyRaw)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "failed to parse CA public key")
 		return
 	}
@@ -230,7 +231,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	// Build and sign the leaf certificate
 	_, certDER, err := buildLeafCertificateWithSigner(csr, ca, req.Validity, signer, caPubKey, signingAlgorithm, nil)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", fmt.Sprintf("failed to build certificate: %v", err))
 		return
 	}
@@ -242,12 +243,12 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	// Parse certificate to get serial number and validity
 	parsedCert, err := x509.ParseCertificate(certDER)
 	if err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "failed to parse generated certificate")
 		return
 	}
 
-	cert := pcaCertificate{
+	cert := store.PCACertificate{
 		CertID:    certID,
 		CAID:      ca.CAID,
 		Serial:    parsedCert.SerialNumber.String(),
@@ -262,12 +263,12 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := s.store.CreateCertificate(r.Context(), cert); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "failed to store certificate")
 		return
 	}
 
-	s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: ca.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: ca.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
 
 	// Return certificate ARN
 	writeJSON(w, http.StatusOK, issueCertificateResponse{
@@ -279,13 +280,13 @@ func (s *server) handleGetCertificate(w http.ResponseWriter, r *http.Request) {
 	const action = "acm-pca.GetCertificate"
 	var req getCertificateRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
 
 	// TODO: Look up certificate in database, return PEM
-	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ResourceNotFoundException", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ResourceNotFoundException", Actor: r.RemoteAddr})
 	writeAWSJSONError(w, http.StatusBadRequest, "ResourceNotFoundException", "certificate not found")
 }
 
@@ -293,19 +294,19 @@ func (s *server) handleRevokeCertificate(w http.ResponseWriter, r *http.Request)
 	const action = "acm-pca.RevokeCertificate"
 	var req revokeCertificateRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
 
 	if req.CertificateAuthorityARN == "" || req.CertificateARN == "" {
-		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "CertificateAuthorityArn and CertificateArn are required")
 		return
 	}
 
 	// TODO: Mark certificate as revoked, update CRL
-	s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "ResourceNotFoundException", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ResourceNotFoundException", Actor: r.RemoteAddr})
 	writeAWSJSONError(w, http.StatusBadRequest, "ResourceNotFoundException", "certificate not found")
 }
 

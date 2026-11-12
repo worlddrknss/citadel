@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/arn"
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // Native /v1 IAM endpoints backing the web console's Identity & Access page.
@@ -79,7 +80,7 @@ func (s *server) handleV1CreateOIDCProvider(w http.ResponseWriter, r *http.Reque
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	issuer := normalizeIssuerURL(req.Url)
+	issuer := store.NormalizeIssuerURL(req.Url)
 	host, err := issuerHost(issuer)
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "url must be a valid https issuer URL")
@@ -91,7 +92,7 @@ func (s *server) handleV1CreateOIDCProvider(w http.ResponseWriter, r *http.Reque
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "at least one client ID (audience) is required")
 		return
 	}
-	provider := oidcProvider{
+	provider := store.OIDCProvider{
 		ProviderARN: providerARN,
 		AccountID:   sess.AccountID,
 		URL:         issuer,
@@ -101,7 +102,7 @@ func (s *server) handleV1CreateOIDCProvider(w http.ResponseWriter, r *http.Reque
 		writeNativeError(w, http.StatusInternalServerError, "create_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.CreateOIDCProvider", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateOIDCProvider", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"providerArn": providerARN})
 }
 
@@ -119,7 +120,7 @@ func (s *server) handleV1DeleteOIDCProvider(w http.ResponseWriter, r *http.Reque
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.DeleteOIDCProvider", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteOIDCProvider", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
@@ -179,7 +180,7 @@ func (s *server) handleV1CreateRole(w http.ResponseWriter, r *http.Request) {
 	if maxSecs > 43200 {
 		maxSecs = 43200
 	}
-	role := iamRole{
+	role := store.IAMRole{
 		RoleARN:        arn.Build("iam", "", sess.AccountID, "role/"+roleName),
 		AccountID:      sess.AccountID,
 		RoleName:       roleName,
@@ -191,7 +192,7 @@ func (s *server) handleV1CreateRole(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusInternalServerError, "create_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.CreateRole", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateRole", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"roleArn": role.RoleARN})
 }
 
@@ -209,13 +210,13 @@ func (s *server) handleV1DeleteRole(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.DeleteRole", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteRole", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
 // ---- helpers ---------------------------------------------------------------
 
-func toNativeRole(role iamRole) nativeRole {
+func toNativeRole(role store.IAMRole) nativeRole {
 	return nativeRole{
 		RoleArn:     role.RoleARN,
 		RoleName:    role.RoleName,
@@ -235,8 +236,8 @@ func toNativeRole(role iamRole) nativeRole {
 
 // validateTrustPolicy normalizes and validates a UI-supplied trust policy. For
 // OIDC trust it confirms the referenced provider is registered for the account.
-func validateTrustPolicy(ctx context.Context, s *server, accountID string, in nativeTrustPolicy) (trustPolicy, error) {
-	out := trustPolicy{
+func validateTrustPolicy(ctx context.Context, s *server, accountID string, in nativeTrustPolicy) (store.TrustPolicy, error) {
+	out := store.TrustPolicy{
 		Type:       strings.TrimSpace(in.Type),
 		Audiences:  trimList(in.Audiences),
 		Subjects:   trimList(in.Subjects),
@@ -244,25 +245,25 @@ func validateTrustPolicy(ctx context.Context, s *server, accountID string, in na
 	}
 	switch out.Type {
 	case trustTypeOIDC:
-		out.ProviderURL = normalizeIssuerURL(in.ProviderUrl)
+		out.ProviderURL = store.NormalizeIssuerURL(in.ProviderUrl)
 		if out.ProviderURL == "" {
-			return trustPolicy{}, errTrust("providerUrl is required for an OIDC trust policy")
+			return store.TrustPolicy{}, errTrust("providerUrl is required for an OIDC trust policy")
 		}
 		if _, err := s.store.GetOIDCProviderByURL(ctx, accountID, out.ProviderURL); err != nil {
-			return trustPolicy{}, errTrust("no OIDC provider is registered for that issuer URL")
+			return store.TrustPolicy{}, errTrust("no OIDC provider is registered for that issuer URL")
 		}
 		if len(out.Audiences) == 0 {
-			return trustPolicy{}, errTrust("at least one audience is required for an OIDC trust policy")
+			return store.TrustPolicy{}, errTrust("at least one audience is required for an OIDC trust policy")
 		}
 		if len(out.Subjects) == 0 {
-			return trustPolicy{}, errTrust("at least one subject is required for an OIDC trust policy")
+			return store.TrustPolicy{}, errTrust("at least one subject is required for an OIDC trust policy")
 		}
 	case trustTypeAccount:
 		if len(out.Principals) == 0 {
-			return trustPolicy{}, errTrust("at least one principal account ID is required")
+			return store.TrustPolicy{}, errTrust("at least one principal account ID is required")
 		}
 	default:
-		return trustPolicy{}, errTrust("trust type must be 'oidc' or 'account'")
+		return store.TrustPolicy{}, errTrust("trust type must be 'oidc' or 'account'")
 	}
 	return out, nil
 }

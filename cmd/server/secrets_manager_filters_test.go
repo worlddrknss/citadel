@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // TestListSecretsAcceptsFiltersBody guards the Secrets Manager wire contract:
@@ -49,13 +51,13 @@ func TestListSecretsEmptyBodyStillDecodes(t *testing.T) {
 }
 
 func TestSecretMatchesFilters(t *testing.T) {
-	secret := func(name string) secretMetadataRecord {
-		return secretMetadataRecord{Name: name, Description: "rider stuff"}
+	secret := func(name string) store.SecretMetadataRecord {
+		return store.SecretMetadataRecord{Name: name, Description: "rider stuff"}
 	}
 
 	cases := []struct {
 		desc    string
-		item    secretMetadataRecord
+		item    store.SecretMetadataRecord
 		filters []secretsFilter
 		want    bool
 	}{
@@ -164,8 +166,8 @@ func TestValidateSecretsFilters(t *testing.T) {
 // pending delete under d76riders/prod/ failed the whole ExternalSecret.
 func TestListSecretsLeavesOutPlannedDeletions(t *testing.T) {
 	when := time.Now().Add(7 * 24 * time.Hour)
-	live := secretMetadataRecord{Name: "d76riders/prod/API_URL"}
-	pending := secretMetadataRecord{Name: "d76riders/prod/OLD_KEY", DeletedDate: &when}
+	live := store.SecretMetadataRecord{Name: "d76riders/prod/API_URL"}
+	pending := store.SecretMetadataRecord{Name: "d76riders/prod/OLD_KEY", DeletedDate: &when}
 	byName := []secretsFilter{{Key: "name", Values: []string{"d76riders/prod/"}}}
 
 	if !listableSecret(live, listSecretsRequest{Filters: byName}) {

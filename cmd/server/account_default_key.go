@@ -11,17 +11,8 @@ import (
 
 	"github.com/worlddrknss/citadel/internal/arn"
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
+	"github.com/worlddrknss/citadel/internal/store"
 )
-
-// managedDefaultAlias is the per-account alias that always resolves to that
-// account's immutable, system-provisioned default encryption key. Every account
-// owns exactly one such alias; it cannot be deleted, re-pointed, or created by
-// callers.
-const managedDefaultAlias = "alias/default"
-
-// errImmutableManagedKey is returned when an operation would disable, delete, or
-// re-alias an account's managed default key (or its alias/default alias).
-var errImmutableManagedKey = errors.New("the account default key is immutable: it cannot be disabled, deleted, or re-aliased")
 
 // keyManaged reports whether the key identified by keyID is a managed (immutable)
 // key. A missing key reports false so callers surface their own not-found error.
@@ -45,27 +36,27 @@ func (s *dbStore) keyManaged(ctx context.Context, keyID string) (bool, error) {
 // already owned by accountID, that key is adopted as the managed default
 // (preserving existing ciphertext) instead of minting a new one. This makes the
 // pre-existing deployment default the root account's managed default on upgrade.
-func (s *dbStore) EnsureAccountDefaultKey(ctx context.Context, accountID string) (kmsKey, error) {
+func (s *dbStore) EnsureAccountDefaultKey(ctx context.Context, accountID string) (store.KMSKey, error) {
 	accountID = strings.TrimSpace(accountID)
 	if !arn.IsValidAccountID(accountID) {
-		return kmsKey{}, fmt.Errorf("invalid account id %q", accountID)
+		return store.KMSKey{}, fmt.Errorf("invalid account id %q", accountID)
 	}
 
 	// Fast path: alias/default already exists for this account.
 	var existingKeyID string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT target_key_id FROM kms_aliases WHERE alias_name = $1 AND account_id = $2`,
-		managedDefaultAlias, accountID).Scan(&existingKeyID)
+		store.ManagedDefaultAlias, accountID).Scan(&existingKeyID)
 	if err == nil {
 		return s.resolveByIDForAccount(ctx, existingKeyID, accountID)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return kmsKey{}, err
+		return store.KMSKey{}, err
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return kmsKey{}, err
+		return store.KMSKey{}, err
 	}
 	defer tx.Rollback()
 
@@ -73,13 +64,13 @@ func (s *dbStore) EnsureAccountDefaultKey(ctx context.Context, accountID string)
 	// duplicate alias/default for the same account.
 	if e := tx.QueryRowContext(ctx,
 		`SELECT target_key_id FROM kms_aliases WHERE alias_name = $1 AND account_id = $2 FOR UPDATE`,
-		managedDefaultAlias, accountID).Scan(&existingKeyID); e == nil {
+		store.ManagedDefaultAlias, accountID).Scan(&existingKeyID); e == nil {
 		if ce := tx.Commit(); ce != nil {
-			return kmsKey{}, ce
+			return store.KMSKey{}, ce
 		}
 		return s.resolveByIDForAccount(ctx, existingKeyID, accountID)
 	} else if !errors.Is(e, sql.ErrNoRows) {
-		return kmsKey{}, e
+		return store.KMSKey{}, e
 	}
 
 	// Adopt the legacy global default key when it belongs to this account and is
@@ -93,28 +84,28 @@ func (s *dbStore) EnsureAccountDefaultKey(ctx context.Context, accountID string)
 			var owned bool
 			if e2 := tx.QueryRowContext(ctx,
 				`SELECT TRUE FROM kms_keys WHERE id = $1 AND account_id = $2 AND key_usage = $3`,
-				adoptID, accountID, keyUsageEncryptDecrypt).Scan(&owned); e2 == nil && owned {
+				adoptID, accountID, store.KeyUsageEncryptDecrypt).Scan(&owned); e2 == nil && owned {
 				keyID = adoptID
 			} else if e2 != nil && !errors.Is(e2, sql.ErrNoRows) {
-				return kmsKey{}, e2
+				return store.KMSKey{}, e2
 			}
 		}
 	} else if !errors.Is(e, sql.ErrNoRows) {
-		return kmsKey{}, e
+		return store.KMSKey{}, e
 	}
 
 	region, _ := s.DeploymentIdentity()
 
 	if keyID == "" {
 		// Mint a fresh symmetric encryption key owned by this account.
-		raw, _, usage, spec, gerr := generateKeyMaterial(keyUsageEncryptDecrypt, keySpecSymmetricDefault)
+		raw, _, usage, spec, gerr := store.GenerateKeyMaterial(store.KeyUsageEncryptDecrypt, store.KeySpecSymmetricDefault)
 		if gerr != nil {
-			return kmsKey{}, gerr
+			return store.KMSKey{}, gerr
 		}
 		keyID = cryptoutil.RandomHex(12)
 		wrappedB64, nonceB64, werr := s.wrapKeyMaterial(keyID, raw)
 		if werr != nil {
-			return kmsKey{}, werr
+			return store.KMSKey{}, werr
 		}
 		arn := arn.Build("kms", region, accountID, "key/"+keyID)
 		if _, e := tx.ExecContext(ctx,
@@ -122,25 +113,25 @@ func (s *dbStore) EnsureAccountDefaultKey(ctx context.Context, accountID string)
 			 VALUES ($1, $2, '', $3, $4, '', $5, $6, $7, TRUE, TRUE, NULL, $8, $9)`,
 			keyID, arn, wrappedB64, nonceB64, usage, spec,
 			"default", time.Now().UTC(), accountID); e != nil {
-			return kmsKey{}, e
+			return store.KMSKey{}, e
 		}
 	} else {
 		// Promote the adopted key to a managed, enabled, non-deleting state.
 		if _, e := tx.ExecContext(ctx,
 			`UPDATE kms_keys SET managed = TRUE, enabled = TRUE, deletion_date = NULL, description = 'default', updated_at = NOW() WHERE id = $1 AND account_id = $2`,
 			keyID, accountID); e != nil {
-			return kmsKey{}, e
+			return store.KMSKey{}, e
 		}
 	}
 
 	if _, e := tx.ExecContext(ctx,
 		`INSERT INTO kms_aliases (alias_name, target_key_id, account_id) VALUES ($1, $2, $3)`,
-		managedDefaultAlias, keyID, accountID); e != nil {
-		return kmsKey{}, e
+		store.ManagedDefaultAlias, keyID, accountID); e != nil {
+		return store.KMSKey{}, e
 	}
 
 	if e := tx.Commit(); e != nil {
-		return kmsKey{}, e
+		return store.KMSKey{}, e
 	}
 	return s.resolveByIDForAccount(ctx, keyID, accountID)
 }
@@ -148,14 +139,14 @@ func (s *dbStore) EnsureAccountDefaultKey(ctx context.Context, accountID string)
 // resolveByIDForAccount loads a key scoped to an explicit account, independent of
 // any caller account already present in ctx. Used when provisioning keys for an
 // account other than the authenticated caller (e.g. account creation, backfill).
-func (s *dbStore) resolveByIDForAccount(ctx context.Context, keyID, accountID string) (kmsKey, error) {
-	return s.ResolveByID(withCallerAccount(ctx, accountID), keyID)
+func (s *dbStore) resolveByIDForAccount(ctx context.Context, keyID, accountID string) (store.KMSKey, error) {
+	return s.ResolveByID(store.WithCallerAccount(ctx, accountID), keyID)
 }
 
 // ensureManagedDefaultKeys provisions the immutable per-account default key for
 // every known account at startup. It is idempotent and only operates on
 // DB-backed deployments.
-func ensureManagedDefaultKeys(ctx context.Context, store keyStore) error {
+func ensureManagedDefaultKeys(ctx context.Context, store store.Store) error {
 	db, ok := store.(*dbStore)
 	if !ok {
 		return nil

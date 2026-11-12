@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 func TestACMEChallengeStoreRoundTrip(t *testing.T) {
@@ -91,18 +93,18 @@ func TestLEDirectoryEnvLabel(t *testing.T) {
 }
 
 func TestACMELEStoreUnsupportedInMemory(t *testing.T) {
-	var store keyStore = &inMemoryStore{}
+	var st store.Store = &inMemoryStore{}
 	ctx := context.Background()
-	if _, err := store.GetACMELEAccount(ctx, leStagingDirectoryURL); err != errUnsupported {
+	if _, err := st.GetACMELEAccount(ctx, leStagingDirectoryURL); err != store.ErrUnsupported {
 		t.Fatalf("GetACMELEAccount err = %v, want errUnsupported", err)
 	}
-	if err := store.UpsertACMELEAccount(ctx, acmeLEAccount{}); err != errUnsupported {
+	if err := st.UpsertACMELEAccount(ctx, store.ACMELEAccount{}); err != store.ErrUnsupported {
 		t.Fatalf("UpsertACMELEAccount err = %v, want errUnsupported", err)
 	}
-	if err := store.CreateACMELECertificate(ctx, acmeLECertificate{}); err != errUnsupported {
+	if err := st.CreateACMELECertificate(ctx, store.ACMELECertificate{}); err != store.ErrUnsupported {
 		t.Fatalf("CreateACMELECertificate err = %v, want errUnsupported", err)
 	}
-	if _, err := store.ListACMELECertificates(ctx); err != errUnsupported {
+	if _, err := st.ListACMELECertificates(ctx); err != store.ErrUnsupported {
 		t.Fatalf("ListACMELECertificates err = %v, want errUnsupported", err)
 	}
 }

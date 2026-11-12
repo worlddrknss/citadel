@@ -4,10 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"testing"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 func TestGenerateKeyMaterialSymmetricDefaults(t *testing.T) {
-	raw, publicRaw, usage, spec, err := generateKeyMaterial("", "")
+	raw, publicRaw, usage, spec, err := store.GenerateKeyMaterial("", "")
 	if err != nil {
 		t.Fatalf("generateKeyMaterial: %v", err)
 	}
@@ -17,20 +19,20 @@ func TestGenerateKeyMaterialSymmetricDefaults(t *testing.T) {
 	if publicRaw != nil {
 		t.Fatalf("expected nil public key for symmetric key, got %d bytes", len(publicRaw))
 	}
-	if usage != keyUsageEncryptDecrypt {
-		t.Fatalf("expected %q, got %q", keyUsageEncryptDecrypt, usage)
+	if usage != store.KeyUsageEncryptDecrypt {
+		t.Fatalf("expected %q, got %q", store.KeyUsageEncryptDecrypt, usage)
 	}
-	if spec != keySpecSymmetricDefault {
-		t.Fatalf("expected %q, got %q", keySpecSymmetricDefault, spec)
+	if spec != store.KeySpecSymmetricDefault {
+		t.Fatalf("expected %q, got %q", store.KeySpecSymmetricDefault, spec)
 	}
 }
 
 func TestGenerateKeyMaterialAndSignVerify(t *testing.T) {
-	raw, publicRaw, usage, spec, err := generateKeyMaterial(keyUsageSignVerify, keySpecECCP256)
+	raw, publicRaw, usage, spec, err := store.GenerateKeyMaterial(store.KeyUsageSignVerify, store.KeySpecECCP256)
 	if err != nil {
 		t.Fatalf("generateKeyMaterial: %v", err)
 	}
-	key := kmsKey{
+	key := store.KMSKey{
 		ID:           "test-key",
 		MasterKeyRaw: raw,
 		PublicKeyRaw: publicRaw,
@@ -62,11 +64,11 @@ func TestGenerateKeyMaterialAndSignVerify(t *testing.T) {
 }
 
 func TestKeySigningAlgorithms(t *testing.T) {
-	_, publicRaw, usage, spec, err := generateKeyMaterial(keyUsageSignVerify, keySpecRSA2048)
+	_, publicRaw, usage, spec, err := store.GenerateKeyMaterial(store.KeyUsageSignVerify, store.KeySpecRSA2048)
 	if err != nil {
 		t.Fatalf("generateKeyMaterial: %v", err)
 	}
-	key := kmsKey{PublicKeyRaw: publicRaw, KeyUsage: usage, KeySpec: spec}
+	key := store.KMSKey{PublicKeyRaw: publicRaw, KeyUsage: usage, KeySpec: spec}
 	algs := keySigningAlgorithms(key)
 	if len(algs) != 1 || algs[0] != defaultSignAlgRSA {
 		t.Fatalf("unexpected signing algorithms: %#v", algs)

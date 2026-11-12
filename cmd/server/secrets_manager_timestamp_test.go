@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // TestAWSTimestampMarshalsAsNumber guards against regressing the Secrets Manager
@@ -13,7 +15,7 @@ import (
 func TestAWSTimestampMarshalsAsNumber(t *testing.T) {
 	ts := time.Date(2017, 11, 1, 0, 0, 0, 0, time.UTC) // 1.5092352e9
 
-	b, err := json.Marshal(awsTimestamp(ts))
+	b, err := json.Marshal(store.AWSTimestamp(ts))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -33,7 +35,7 @@ func TestGetSecretValueResponseTimestampIsNumber(t *testing.T) {
 		ARN:         "arn:aws:secretsmanager:us-west-2:348107687147:secret:eso-kms-test/demo",
 		Name:        "eso-kms-test/demo",
 		VersionID:   "v1",
-		CreatedDate: awsTimestamp(time.Now().UTC()),
+		CreatedDate: store.AWSTimestamp(time.Now().UTC()),
 	}
 	b, err := json.Marshal(resp)
 	if err != nil {
@@ -59,7 +61,7 @@ func TestGetSecretValueResponseTimestampIsNumber(t *testing.T) {
 // TestAWSTimestampZeroMarshalsNull ensures a zero time renders as null rather
 // than a misleading negative epoch number.
 func TestAWSTimestampZeroMarshalsNull(t *testing.T) {
-	b, err := json.Marshal(awsTimestamp(time.Time{}))
+	b, err := json.Marshal(store.AWSTimestamp(time.Time{}))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}

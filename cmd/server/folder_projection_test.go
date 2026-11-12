@@ -4,15 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // TestFolderJSONProjection verifies the P4 dual projection: a folder coordinate
 // resolves to a JSON object of every key directly within it, while individual
 // keys remain independently retrievable.
 func TestFolderJSONProjection(t *testing.T) {
-	store := newTenantTestStore()
-	svc := newSecretsService(store)
-	ctx := withCallerAccount(context.Background(), "111111111111")
+	st := newTenantTestStore()
+	svc := newSecretsService(st)
+	ctx := store.WithCallerAccount(context.Background(), "111111111111")
 
 	put := func(folder []string, key, val string) {
 		if _, err := svc.PutItem(ctx, itemCoord{Project: "payments", Env: "prod", Folder: folder, Key: key}, val, ""); err != nil {

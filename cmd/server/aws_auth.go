@@ -11,6 +11,7 @@ import (
 
 	"github.com/worlddrknss/citadel/internal/arn"
 	"github.com/worlddrknss/citadel/internal/sigv4"
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // AWS API authentication.
@@ -41,17 +42,12 @@ type awsCallerCtxKey struct{}
 
 func withAWSCaller(ctx context.Context, c awsCaller) context.Context {
 	ctx = context.WithValue(ctx, awsCallerCtxKey{}, c)
-	return withCallerAccount(ctx, c.AccountID)
+	return store.WithCallerAccount(ctx, c.AccountID)
 }
 
 func awsCallerFromContext(ctx context.Context) (awsCaller, bool) {
 	c, ok := ctx.Value(awsCallerCtxKey{}).(awsCaller)
 	return c, ok
-}
-
-// stsSessionResolver is implemented by stores that persist STS sessions.
-type stsSessionResolver interface {
-	getSTSSessionSecret(ctx context.Context, keyID string) (accountID, secret, sessionToken string, expiresAt time.Time, err error)
 }
 
 var errAWSUnsigned = errors.New("request is not signed")
@@ -83,12 +79,12 @@ func (s *server) verifyAWSRequest(r *http.Request, bodyHash string) (awsCaller, 
 		_, acct := s.store.DeploymentIdentity()
 		caller = awsCaller{AccessKeyID: comp.AccessKey, Username: comp.AccessKey, AccountID: acct}
 		secret = s.cfg.SecretAccessKey
-	case isTempAccessKeyID(comp.AccessKey):
-		resolver, ok := s.store.(stsSessionResolver)
+	case store.IsTempAccessKeyID(comp.AccessKey):
+		resolver, ok := s.store.(store.STSSessionResolver)
 		if !ok {
 			return awsCaller{}, errors.New("temporary credentials are not supported by this store")
 		}
-		acct, sec, token, _, err := resolver.getSTSSessionSecret(r.Context(), comp.AccessKey)
+		acct, sec, token, _, err := resolver.GetSTSSessionSecret(r.Context(), comp.AccessKey)
 		if err != nil {
 			return awsCaller{}, err
 		}

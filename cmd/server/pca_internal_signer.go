@@ -3,13 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // internalSignerFunc performs cryptographic signing for certificate operations
 type internalSignerFunc func(ctx context.Context, keyID, algorithm string, digest []byte) ([]byte, error)
 
 // newInternalSigner creates a signing function that uses the KMS engine
-func newInternalSigner(store keyStore) internalSignerFunc {
+func newInternalSigner(store store.Store) internalSignerFunc {
 	return func(ctx context.Context, keyID, algorithm string, digest []byte) ([]byte, error) {
 		// Resolve the key
 		key, err := store.ResolveByID(ctx, keyID)

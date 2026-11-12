@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // Native read/write /v1 detail endpoints backing the SPA drawers for KMS keys
@@ -143,7 +145,7 @@ func (s *server) handleV1PutKMSKeyPolicy(w http.ResponseWriter, r *http.Request)
 		writeNativeError(w, http.StatusBadRequest, "policy_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.PutKeyPolicy", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PutKeyPolicy", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"keyId": keyID, "saved": true})
 }
 
@@ -200,7 +202,7 @@ func (s *server) handleV1CreateKMSAlias(w http.ResponseWriter, r *http.Request) 
 		writeNativeError(w, http.StatusBadRequest, "alias_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.CreateAlias", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateAlias", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"aliasName": aliasName, "keyId": keyID, "created": true})
 }
 
@@ -237,7 +239,7 @@ func (s *server) handleV1UpdateKMSAlias(w http.ResponseWriter, r *http.Request) 
 		writeNativeError(w, http.StatusBadRequest, "alias_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.UpdateAlias", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpdateAlias", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"aliasName": aliasName, "keyId": keyID, "updated": true})
 }
 
@@ -261,7 +263,7 @@ func (s *server) handleV1DeleteKMSAlias(w http.ResponseWriter, r *http.Request) 
 		writeNativeError(w, http.StatusBadRequest, "alias_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, auditEvent{Action: "citadel.DeleteAlias", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteAlias", Result: "ok", Actor: r.RemoteAddr})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"aliasName": aliasName, "deleted": true})
 }
 

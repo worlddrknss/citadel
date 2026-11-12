@@ -13,6 +13,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // makeSelfSignedCA returns a self-signed CA certificate and its signer for tests.
@@ -95,7 +97,7 @@ func TestBuildLeafCertificateChainsAndOverrides(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			caSigner, sigAlg := tc.newCA(t)
 			caCert := makeSelfSignedCA(t, caSigner, sigAlg)
-			ca := pcaCertificateAuthority{
+			ca := store.PCACertificateAuthority{
 				SubjectDN: caCert.Subject.String(),
 				CACertB64: base64.StdEncoding.EncodeToString(caCert.Raw),
 			}
@@ -124,7 +126,7 @@ func TestBuildLeafCertificateChainsAndOverrides(t *testing.T) {
 			}
 
 			// SANs from the CSR and the overrides must both be present.
-			if !containsString(leaf.DNSNames, "leaf.example.com") || !containsString(leaf.DNSNames, "api.example.com") {
+			if !store.ContainsString(leaf.DNSNames, "leaf.example.com") || !store.ContainsString(leaf.DNSNames, "api.example.com") {
 				t.Fatalf("missing DNS SANs: %v", leaf.DNSNames)
 			}
 			if len(leaf.IPAddresses) != 1 || leaf.IPAddresses[0].String() != "10.0.0.5" {

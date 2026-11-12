@@ -5,10 +5,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 func TestTrustPolicySubjectAllowed(t *testing.T) {
-	p := trustPolicy{Subjects: []string{"system:serviceaccount:app:secrets", "system:serviceaccount:ci:*"}}
+	p := store.TrustPolicy{Subjects: []string{"system:serviceaccount:app:secrets", "system:serviceaccount:ci:*"}}
 	cases := []struct {
 		sub  string
 		want bool
@@ -20,44 +22,44 @@ func TestTrustPolicySubjectAllowed(t *testing.T) {
 		{"", false},
 	}
 	for _, c := range cases {
-		if got := p.subjectAllowed(c.sub); got != c.want {
+		if got := p.SubjectAllowed(c.sub); got != c.want {
 			t.Errorf("subjectAllowed(%q) = %v, want %v", c.sub, got, c.want)
 		}
 	}
 
-	wild := trustPolicy{Subjects: []string{"*"}}
-	if !wild.subjectAllowed("anything") {
+	wild := store.TrustPolicy{Subjects: []string{"*"}}
+	if !wild.SubjectAllowed("anything") {
 		t.Error("wildcard subject should allow any non-empty subject")
 	}
-	if wild.subjectAllowed("") {
+	if wild.SubjectAllowed("") {
 		t.Error("wildcard subject must still reject empty subject")
 	}
 }
 
 func TestTrustPolicyAudienceAllowed(t *testing.T) {
-	p := trustPolicy{Audiences: []string{"sts.citadel.local", "other"}}
-	if !p.audienceAllowed([]string{"unrelated", "sts.citadel.local"}) {
+	p := store.TrustPolicy{Audiences: []string{"sts.citadel.local", "other"}}
+	if !p.AudienceAllowed([]string{"unrelated", "sts.citadel.local"}) {
 		t.Error("expected audience match")
 	}
-	if p.audienceAllowed([]string{"nope"}) {
+	if p.AudienceAllowed([]string{"nope"}) {
 		t.Error("did not expect audience match")
 	}
-	empty := trustPolicy{}
-	if empty.audienceAllowed([]string{"sts.citadel.local"}) {
+	empty := store.TrustPolicy{}
+	if empty.AudienceAllowed([]string{"sts.citadel.local"}) {
 		t.Error("policy with no audiences must reject all")
 	}
 }
 
 func TestTrustPolicyPrincipalAllowed(t *testing.T) {
-	p := trustPolicy{Principals: []string{"123456789012"}}
-	if !p.principalAllowed("123456789012") {
+	p := store.TrustPolicy{Principals: []string{"123456789012"}}
+	if !p.PrincipalAllowed("123456789012") {
 		t.Error("expected principal match")
 	}
-	if p.principalAllowed("999999999999") {
+	if p.PrincipalAllowed("999999999999") {
 		t.Error("did not expect principal match")
 	}
-	wild := trustPolicy{Principals: []string{"*"}}
-	if !wild.principalAllowed("123456789012") {
+	wild := store.TrustPolicy{Principals: []string{"*"}}
+	if !wild.PrincipalAllowed("123456789012") {
 		t.Error("wildcard principal should allow any account")
 	}
 }
@@ -67,10 +69,10 @@ func TestTempAccessKeyID(t *testing.T) {
 	if !strings.HasPrefix(id, "ASIA") {
 		t.Errorf("temp key ID %q must start with ASIA", id)
 	}
-	if !isTempAccessKeyID(id) {
+	if !store.IsTempAccessKeyID(id) {
 		t.Errorf("isTempAccessKeyID(%q) = false, want true", id)
 	}
-	if isTempAccessKeyID("AKIAEXAMPLE") {
+	if store.IsTempAccessKeyID("AKIAEXAMPLE") {
 		t.Error("long-lived AKIA key must not be classified as temporary")
 	}
 	if a, b := generateTempAccessKeyID(), generateTempAccessKeyID(); a == b {
@@ -132,7 +134,7 @@ func TestIssuerHost(t *testing.T) {
 }
 
 func TestNormalizeIssuerURL(t *testing.T) {
-	if got := normalizeIssuerURL("https://x/ "); got != "https://x" {
+	if got := store.NormalizeIssuerURL("https://x/ "); got != "https://x" {
 		t.Errorf("normalizeIssuerURL trailing slash/space = %q", got)
 	}
 }

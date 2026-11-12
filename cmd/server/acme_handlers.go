@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // ACME HTTP handlers implementing RFC 8555
@@ -318,7 +320,7 @@ func (s *server) handleACMEFinalize(w http.ResponseWriter, r *http.Request) {
 		writeAWSJSONError(w, http.StatusInternalServerError, "InternalServerError", "failed to parse certificate")
 		return
 	}
-	cert := pcaCertificate{
+	cert := store.PCACertificate{
 		CertID:    certID,
 		CAID:      ca.CAID,
 		Serial:    parsedCert.SerialNumber.String(),
