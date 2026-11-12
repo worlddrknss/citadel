@@ -12,6 +12,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -112,18 +115,14 @@ func VerifySignature(r *http.Request, bodyHash, secretKey string) error {
 	// client already sorted per spec).
 	var canonicalHeaders strings.Builder
 	for _, h := range comp.SignedHeaders {
-		value := r.Header.Get(h)
-		if strings.EqualFold(h, "host") {
-			value = r.Host
-		}
 		canonicalHeaders.WriteString(strings.ToLower(h))
 		canonicalHeaders.WriteByte(':')
-		canonicalHeaders.WriteString(strings.TrimSpace(value))
+		canonicalHeaders.WriteString(CanonicalHeaderValue(r, h))
 		canonicalHeaders.WriteByte('\n')
 	}
 	signedHeaders := strings.Join(comp.SignedHeaders, ";")
 
-	canonicalQuery := r.URL.Query().Encode()
+	canonicalQuery := CanonicalQueryString(r.URL.RawQuery)
 	path := r.URL.EscapedPath()
 	if path == "" {
 		path = "/"
@@ -152,6 +151,92 @@ func VerifySignature(r *http.Request, bodyHash, secretKey string) error {
 		return errors.New("signature mismatch")
 	}
 	return nil
+}
+
+// CanonicalHeaderValue returns a signed header's canonical value: all values
+// joined with commas, trimmed, sequential spaces collapsed. Go's server moves
+// Host and Content-Length out of the header map, so they are read from the
+// request itself.
+func CanonicalHeaderValue(r *http.Request, name string) string {
+	switch strings.ToLower(name) {
+	case "host":
+		return r.Host
+	case "content-length":
+		if v := r.Header.Get("Content-Length"); v != "" {
+			return strings.TrimSpace(v)
+		}
+		if r.ContentLength >= 0 {
+			return strconv.FormatInt(r.ContentLength, 10)
+		}
+		return ""
+	}
+	values := r.Header.Values(name)
+	for i, v := range values {
+		values[i] = strings.Join(strings.Fields(v), " ")
+	}
+	return strings.Join(values, ",")
+}
+
+// CanonicalQueryString builds the SigV4 canonical query string from a raw
+// query: each name and value URI-encoded per RFC 3986 (unreserved characters
+// kept, everything else %XX with uppercase hex, so a space is %20 and never
+// "+"), then sorted by name and value. url.Values.Encode writes a space as
+// "+", which breaks the signature of any query value containing a space.
+func CanonicalQueryString(rawQuery string) string {
+	if rawQuery == "" {
+		return ""
+	}
+	type pair struct{ k, v string }
+	var pairs []pair
+	for _, part := range strings.Split(rawQuery, "&") {
+		if part == "" {
+			continue
+		}
+		k, v, _ := strings.Cut(part, "=")
+		pairs = append(pairs, pair{URIEncode(queryUnescape(k)), URIEncode(queryUnescape(v))})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].k != pairs[j].k {
+			return pairs[i].k < pairs[j].k
+		}
+		return pairs[i].v < pairs[j].v
+	})
+	var b strings.Builder
+	for i, p := range pairs {
+		if i > 0 {
+			b.WriteByte('&')
+		}
+		b.WriteString(p.k)
+		b.WriteByte('=')
+		b.WriteString(p.v)
+	}
+	return b.String()
+}
+
+// queryUnescape decodes %XX escapes. A literal "+" stays "+": AWS clients
+// encode a plus as %2B and a space as %20, so "+" in a raw query is a plus.
+func queryUnescape(s string) string {
+	if u, err := url.PathUnescape(s); err == nil {
+		return u
+	}
+	return s
+}
+
+// URIEncode percent-encodes s per the SigV4 rules (RFC 3986 unreserved set).
+func URIEncode(s string) string {
+	const hexDigits = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' || c == '~' {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hexDigits[c>>4])
+		b.WriteByte(hexDigits[c&15])
+	}
+	return b.String()
 }
 
 // DrainAndHashBody reads (up to the limit), returns a fresh ReadCloser for
