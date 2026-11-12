@@ -8,7 +8,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -160,7 +160,7 @@ func (k *kmsSignerSet) load(ctx context.Context) error {
 		sg, ok := k.signers[wk.KID]
 		if !ok {
 			if sg, err = k.s.newKMSSigner(ctx, wk); err != nil {
-				log.Printf("workload identity: signing key %s unusable: %v", wk.KID, err)
+				slog.Error("workload identity: signing key unusable", "kid", wk.KID, "error", err)
 				continue
 			}
 			k.signers[wk.KID] = sg
@@ -219,7 +219,7 @@ func (k *kmsSignerSet) Published(ctx context.Context) ([]jose.Signer, error) {
 func (s *Server) workloadIssuerSettings(ctx context.Context) store.WorkloadIssuerSettings {
 	st, err := s.store.GetWorkloadIssuerSettings(ctx)
 	if err != nil {
-		log.Printf("workload identity: load settings: %v", err)
+		slog.Error("workload identity: load settings", "error", err)
 	}
 	if !jose.IsSupported(st.Algorithm) {
 		st.Algorithm = defaultWorkloadAlg
@@ -254,7 +254,7 @@ func (s *Server) rotateWorkloadKey(ctx context.Context, expectKID string) (store
 	next := store.WorkloadSigningKey{KID: kid, KMSKeyID: key.ID, Algorithm: settings.Algorithm, ActivatedAt: now}
 	if err := s.store.RotateWorkloadSigningKey(ctx, next, expectKID, now, now.Add(workloadKeyOverlap)); err != nil {
 		if _, derr := s.store.ScheduleKeyDeletion(dctx, key.ID, orphanKeyDeletionDays); derr != nil {
-			log.Printf("workload identity: schedule deletion of unused key %s: %v", key.ID, derr)
+			slog.Error("workload identity: schedule deletion of unused key", "kmsKeyId", key.ID, "error", derr)
 		}
 		return store.WorkloadSigningKey{}, err
 	}
@@ -306,7 +306,7 @@ func (s *Server) workloadRotationJob(ctx context.Context) error {
 	}
 	for _, k := range gone {
 		if _, err := s.store.ScheduleKeyDeletion(s.deploymentCtx(ctx), k.KMSKeyID, orphanKeyDeletionDays); err != nil {
-			log.Printf("workload identity: schedule deletion of retired key %s: %v", k.KMSKeyID, err)
+			slog.Error("workload identity: schedule deletion of retired key", "kmsKeyId", k.KMSKeyID, "error", err)
 		}
 	}
 	if len(gone) > 0 {

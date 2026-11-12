@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -161,7 +161,7 @@ func (s *Server) enabledSSOProvider(ctx context.Context, id string) (store.SSOPr
 	p, err := s.store.GetSSOProvider(ctx, id)
 	if err != nil {
 		if !errors.Is(err, store.ErrSSOProviderNotFound) {
-			log.Printf("sso: load provider: %v", err)
+			slog.Error("sso: load provider", "error", err)
 		}
 		return store.SSOProvider{}, false
 	}
@@ -182,7 +182,7 @@ func (s *Server) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 	}
 	rp, err := s.ssoRelyingParty(r.Context(), p)
 	if err != nil {
-		log.Printf("sso: provider %s: %v", p.ID, err)
+		slog.Error("sso: provider", "provider", p.ID, "error", err)
 		s.auditSSO(r, p.ID, "", p.AccountID, "error", "ProviderMisconfigured")
 		ssoErrorRedirect(w, r, ssoErrProvider)
 		return
@@ -193,7 +193,7 @@ func (s *Server) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 	}
 	authURL, cookie, err := rp.Start(r.Context(), p.ID, returnTo)
 	if err != nil {
-		log.Printf("sso: start %s: %v", p.ID, err)
+		slog.Error("sso: start", "provider", p.ID, "error", err)
 		s.auditSSO(r, p.ID, "", p.AccountID, "error", "DiscoveryFailed")
 		ssoErrorRedirect(w, r, ssoErrProvider)
 		return
@@ -226,7 +226,7 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	rp, err := s.ssoRelyingParty(r.Context(), p)
 	if err != nil {
-		log.Printf("sso: provider %s: %v", p.ID, err)
+		slog.Error("sso: provider", "provider", p.ID, "error", err)
 		s.auditSSO(r, p.ID, "", p.AccountID, "error", "ProviderMisconfigured")
 		ssoErrorRedirect(w, r, ssoErrProvider)
 		return
@@ -235,7 +235,7 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, rp.ClearCookie())
 	if err != nil {
 		code, errType := ssoErrorCode(err)
-		log.Printf("sso: callback %s: %v", p.ID, err)
+		slog.Error("sso: callback", "provider", p.ID, "error", err)
 		s.auditSSO(r, p.ID, "", p.AccountID, "denied", errType)
 		ssoErrorRedirect(w, r, code)
 		return
@@ -244,7 +244,7 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	memberships, err := s.ssoMemberships(r.Context(), p, ident.Groups)
 	if err != nil {
 		if !errors.Is(err, oidclogin.ErrNoMembership) {
-			log.Printf("sso: role mapping %s: %v", p.ID, err)
+			slog.Error("sso: role mapping", "provider", p.ID, "error", err)
 		}
 		s.auditSSO(r, p.ID, subjectActor, p.AccountID, "denied", "NoRole")
 		ssoErrorRedirect(w, r, ssoErrNoRole)
@@ -252,13 +252,13 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	username, err := s.ssoProvisionUser(r.Context(), p, ident)
 	if err != nil {
-		log.Printf("sso: provision %s: %v", p.ID, err)
+		slog.Error("sso: provision", "provider", p.ID, "error", err)
 		s.auditSSO(r, p.ID, subjectActor, p.AccountID, "error", "ProvisioningFailed")
 		ssoErrorRedirect(w, r, ssoErrProvider)
 		return
 	}
 	if err := s.syncSSOMemberships(r.Context(), username, memberships); err != nil {
-		log.Printf("sso: memberships %s: %v", username, err)
+		slog.Error("sso: memberships", "user", username, "error", err)
 		s.auditSSO(r, p.ID, username, p.AccountID, "error", "ProvisioningFailed")
 		ssoErrorRedirect(w, r, ssoErrProvider)
 		return
@@ -270,7 +270,7 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if _, err := s.issueConsoleSession(r.Context(), w, r, username, account, store.SessionMethodSSO); err != nil {
-		log.Printf("sso: create session: %v", err)
+		slog.Error("sso: create session", "error", err)
 		s.auditSSO(r, p.ID, username, account, "error", "SessionFailed")
 		ssoErrorRedirect(w, r, ssoErrProvider)
 		return
@@ -338,7 +338,7 @@ func (s *Server) ssoProvisionUser(ctx context.Context, p store.SSOProvider, iden
 	if link, err := s.store.GetExternalIdentity(ctx, p.ID, ident.Subject); err == nil {
 		if _, found := s.lookupUser(ctx, link.Username); found {
 			if err := s.store.TouchExternalIdentity(ctx, p.ID, ident.Subject, email, now); err != nil {
-				log.Printf("sso: touch identity: %v", err)
+				slog.Error("sso: touch identity", "error", err)
 			}
 			return link.Username, nil
 		}

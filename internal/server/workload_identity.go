@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"mime"
 	"net/http"
 	"regexp"
@@ -250,7 +250,7 @@ func (s *Server) onWorkloadTokenIssued(ctx context.Context, w workloadid.Workloa
 	info := workloadInfo(ctx)
 	info.workload = &w
 	if err := s.store.TouchWorkloadClientIssued(ctx, c.ID, s.identity().now().UTC()); err != nil {
-		log.Printf("workload identity: touch client: %v", err)
+		slog.Error("workload identity: touch client", "error", err)
 	}
 }
 
@@ -285,7 +285,7 @@ func (s *Server) issueWorkloadToken(r *http.Request, body []byte, parse func([]b
 		bodyHash := hex.EncodeToString(sum[:])
 		caller, verr := s.verifyAWSRequest(r, bodyHash)
 		if verr != nil {
-			log.Printf("workload identity: sigv4: %v", verr)
+			slog.Error("workload identity: sigv4", "error", verr)
 			e := &workloadid.Error{Status: http.StatusUnauthorized, Code: "invalid_client", Description: "workload authentication failed"}
 			s.auditWorkloadToken(r, ctx, req.clientID, info, e)
 			return nil, e
@@ -300,7 +300,7 @@ func (s *Server) issueWorkloadToken(r *http.Request, body []byte, parse func([]b
 			e = &workloadid.Error{Status: 500, Code: "server_error", Description: "internal error", Err: ierr}
 		}
 		if e.Err != nil {
-			log.Printf("workload identity: client %q: %v", req.clientID, e.Err)
+			slog.Warn("workload identity: token request refused", "client", req.clientID, "error", e.Err)
 		}
 		s.auditWorkloadToken(r, ctx, req.clientID, info, e)
 		return nil, e
@@ -491,7 +491,7 @@ func (s *Server) handleOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		log.Printf("workload identity: keys: %v", err)
+		slog.Error("workload identity: keys", "error", err)
 		writeWorkloadError(w, &workloadid.Error{Status: 500, Code: "server_error", Description: "keys unavailable"}, false)
 		return
 	}
@@ -554,7 +554,7 @@ func (s *Server) issuerInfo(ctx context.Context) (map[string]any, error) {
 func (s *Server) writeIssuerInfo(w http.ResponseWriter, ctx context.Context) {
 	info, err := s.issuerInfo(ctx)
 	if err != nil {
-		log.Printf("workload identity: issuer info: %v", err)
+		slog.Error("workload identity: issuer info", "error", err)
 		writeNativeError(w, http.StatusInternalServerError, "load_failed", "could not load the issuer")
 		return
 	}
@@ -607,7 +607,7 @@ func (s *Server) handleV1WorkloadIssuerSettings(w http.ResponseWriter, r *http.R
 		return
 	}
 	if err := s.store.PutWorkloadIssuerSettings(ctx, store.WorkloadIssuerSettings{Algorithm: in.Algorithm, RotationDays: in.RotationDays, UpdatedAt: time.Now().UTC().Truncate(time.Second), UpdatedBy: sess.Username}); err != nil {
-		log.Printf("workload identity: save settings: %v", err)
+		slog.Error("workload identity: save settings", "error", err)
 		writeNativeError(w, http.StatusInternalServerError, "save_failed", "could not save the issuer settings")
 		return
 	}
@@ -617,7 +617,7 @@ func (s *Server) handleV1WorkloadIssuerSettings(w http.ResponseWriter, r *http.R
 		if next, err := s.rotateWorkloadKey(ctx, cur.KID); err == nil {
 			s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RotateWorkloadSigningKey", KeyID: next.KID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 		} else {
-			log.Printf("workload identity: rotate after algorithm change: %v", err)
+			slog.Error("workload identity: rotate after algorithm change", "error", err)
 		}
 	}
 	s.writeIssuerInfo(w, ctx)
@@ -643,7 +643,7 @@ func (s *Server) handleV1WorkloadIssuerRotate(w http.ResponseWriter, r *http.Req
 		writeNativeError(w, http.StatusConflict, "conflict", "the signing key changed concurrently; reload and retry")
 		return
 	}
-	log.Printf("workload identity: rotate: %v", err)
+	slog.Error("workload identity: rotate", "error", err)
 	s.recordAudit(ctx, store.AuditEvent{Action: action, Result: "error", ErrorType: "RotationFailed", AuditOrigin: s.auditOrigin(r)})
 	writeNativeError(w, http.StatusInternalServerError, "rotate_failed", "could not rotate the signing key")
 }
@@ -835,7 +835,7 @@ func (s *Server) handleV1ListWorkloadClients(w http.ResponseWriter, r *http.Requ
 	}
 	cs, err := s.store.ListWorkloadClients(ctx, sess.AccountID)
 	if err != nil {
-		log.Printf("workload identity: list clients: %v", err)
+		slog.Error("workload identity: list clients", "error", err)
 		writeNativeError(w, http.StatusInternalServerError, "list_failed", "could not list clients")
 		return
 	}
@@ -870,7 +870,7 @@ func (s *Server) handleV1CreateWorkloadClient(w http.ResponseWriter, r *http.Req
 	now := time.Now().UTC().Truncate(time.Second)
 	c.CreatedAt, c.UpdatedAt = now, now
 	if err := s.store.CreateWorkloadClient(ctx, c); err != nil {
-		log.Printf("workload identity: create client: %v", err)
+		slog.Error("workload identity: create client", "error", err)
 		writeNativeError(w, http.StatusInternalServerError, "create_failed", "could not create the client")
 		return
 	}
@@ -892,7 +892,7 @@ func (s *Server) handleV1UpdateWorkloadClient(w http.ResponseWriter, r *http.Req
 	cur, err := s.store.GetWorkloadClient(ctx, strings.TrimSpace(in.ClientID))
 	if err != nil || cur.AccountID != sess.AccountID {
 		if err != nil && !errors.Is(err, store.ErrWorkloadClientNotFound) {
-			log.Printf("workload identity: load client: %v", err)
+			slog.Error("workload identity: load client", "error", err)
 		}
 		writeNativeError(w, http.StatusNotFound, "not_found", "client not found")
 		return
@@ -908,7 +908,7 @@ func (s *Server) handleV1UpdateWorkloadClient(w http.ResponseWriter, r *http.Req
 			writeNativeError(w, http.StatusNotFound, "not_found", "client not found")
 			return
 		}
-		log.Printf("workload identity: update client: %v", err)
+		slog.Error("workload identity: update client", "error", err)
 		writeNativeError(w, http.StatusInternalServerError, "update_failed", "could not update the client")
 		return
 	}
@@ -933,7 +933,7 @@ func (s *Server) handleV1DeleteWorkloadClient(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err != nil {
-		log.Printf("workload identity: delete client: %v", err)
+		slog.Error("workload identity: delete client", "error", err)
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", "could not delete the client")
 		return
 	}

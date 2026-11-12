@@ -4,7 +4,7 @@ import (
 	"crypto/hkdf"
 	"crypto/sha256"
 	"crypto/subtle"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -125,11 +125,11 @@ func (s *Server) initBootstrapToken() string {
 	}
 	if s.cfg.BootstrapToken != "" {
 		st.bootToken = s.cfg.BootstrapToken
-		log.Printf("Bootstrap setup requires the token from KMS_BOOTSTRAP_TOKEN.")
+		slog.Info("bootstrap setup requires the token from KMS_BOOTSTRAP_TOKEN")
 		return st.bootToken
 	}
 	st.bootToken = cryptoutil.RandomHex(16)
-	log.Printf("Bootstrap token (one-time, needed to complete first-run setup): %s", st.bootToken)
+	slog.Warn("bootstrap token (one-time, needed to complete first-run setup)", "bootstrapToken", st.bootToken)
 	return st.bootToken
 }
 

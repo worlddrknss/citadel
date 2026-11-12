@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"slices"
@@ -161,7 +161,7 @@ func (s *Server) validateSSOInput(ctx context.Context, in ssoProviderInput, p *s
 	}
 	accounts, err := s.store.ListUIAccounts(ctx)
 	if err != nil {
-		log.Printf("sso admin: list accounts: %v", err)
+		slog.Error("sso admin: list accounts", "error", err)
 		return "could not validate accounts"
 	}
 	p.RoleMappings = nil
@@ -203,7 +203,7 @@ func (s *Server) handleV1ListSSOProviders(w http.ResponseWriter, r *http.Request
 	}
 	ps, err := s.store.ListSSOProviders(ctx, false)
 	if err != nil {
-		log.Printf("sso admin: list: %v", err)
+		slog.Error("sso admin: list", "error", err)
 		writeNativeError(w, http.StatusInternalServerError, "list_failed", "could not list SSO providers")
 		return
 	}
@@ -262,14 +262,14 @@ func (s *Server) handleV1CreateSSOProvider(w http.ResponseWriter, r *http.Reques
 	p.ID = "sso-" + cryptoutil.RandomHex(6)
 	sealed, err := s.sealSSOSecret(p.ID, *in.ClientSecret)
 	if err != nil {
-		log.Printf("sso admin: seal secret: %v", err)
+		slog.Error("sso admin: seal secret", "error", err)
 		writeNativeError(w, http.StatusConflict, "not_configured", "single sign-on needs a configured wrapping key")
 		return
 	}
 	now := time.Now().UTC().Truncate(time.Second)
 	p.CreatedAt, p.UpdatedAt = now, now
 	if err := s.store.CreateSSOProvider(ctx, p, sealed); err != nil {
-		log.Printf("sso admin: create: %v", err)
+		slog.Error("sso admin: create", "error", err)
 		writeNativeError(w, http.StatusInternalServerError, "create_failed", "could not create the SSO provider")
 		return
 	}
@@ -291,7 +291,7 @@ func (s *Server) loadManagedSSO(w http.ResponseWriter, r *http.Request, ctx cont
 		return store.SSOProvider{}, false
 	}
 	if err != nil {
-		log.Printf("sso admin: load: %v", err)
+		slog.Error("sso admin: load", "error", err)
 		writeNativeError(w, http.StatusInternalServerError, "load_failed", "could not load the SSO provider")
 		return store.SSOProvider{}, false
 	}
@@ -336,7 +336,7 @@ func (s *Server) handleV1UpdateSSOProvider(w http.ResponseWriter, r *http.Reques
 		}
 		var err error
 		if sealed, err = s.sealSSOSecret(cur.ID, *in.ClientSecret); err != nil {
-			log.Printf("sso admin: seal secret: %v", err)
+			slog.Error("sso admin: seal secret", "error", err)
 			writeNativeError(w, http.StatusConflict, "not_configured", "single sign-on needs a configured wrapping key")
 			return
 		}
@@ -346,7 +346,7 @@ func (s *Server) handleV1UpdateSSOProvider(w http.ResponseWriter, r *http.Reques
 		next.UpdatedAt = cur.UpdatedAt.Add(time.Millisecond)
 	}
 	if err := s.store.UpdateSSOProvider(ctx, next, sealed); err != nil {
-		log.Printf("sso admin: update: %v", err)
+		slog.Error("sso admin: update", "error", err)
 		writeNativeError(w, http.StatusInternalServerError, "update_failed", "could not update the SSO provider")
 		return
 	}
@@ -365,7 +365,7 @@ func (s *Server) handleV1DeleteSSOProvider(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := s.store.DeleteSSOProvider(ctx, p.ID); err != nil {
-		log.Printf("sso admin: delete: %v", err)
+		slog.Error("sso admin: delete", "error", err)
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", "could not delete the SSO provider")
 		return
 	}
@@ -393,13 +393,13 @@ func (s *Server) handleV1TestSSOProvider(w http.ResponseWriter, r *http.Request)
 	}
 	rp, err := s.ssoRelyingParty(ctx, p)
 	if err != nil {
-		log.Printf("sso admin: test %s: %v", p.ID, err)
+		slog.Warn("sso admin: provider test failed", "provider", p.ID, "error", err)
 		writeNativeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": "the provider configuration is incomplete (KMS_PUBLIC_URL, client secret or wrapping key)"})
 		return
 	}
 	doc, err := rp.Discover(ctx, p.ID)
 	if err != nil {
-		log.Printf("sso admin: test %s: %v", p.ID, err)
+		slog.Warn("sso admin: provider test failed", "provider", p.ID, "error", err)
 		writeNativeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": "could not fetch a valid discovery document from the issuer (check the issuer URL; it must match the document's issuer exactly and support S256 PKCE)"})
 		return
 	}
