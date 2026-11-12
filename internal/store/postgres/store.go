@@ -48,7 +48,7 @@ func New(db *sql.DB, opts Options) *Store {
 // identity (region and account ID) and runs the data migrations, returning a
 // ready store.
 func Open(ctx context.Context, db *sql.DB, opts Options) (*Store, error) {
-	if err := ensureSchema(ctx, db); err != nil {
+	if err := Migrate(ctx, db); err != nil {
 		return nil, err
 	}
 	store := New(db, opts)

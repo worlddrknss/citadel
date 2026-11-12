@@ -1,13 +1,9 @@
-package postgres
+-- 0001_initial: the Citadel schema as it stood when versioned migrations were
+-- introduced. It is the DDL that used to run on every startup, verbatim, and is
+-- idempotent: on a database created before migrations existed it is re-run once
+-- (bringing older layouts up to date exactly as the startup DDL did) and then
+-- recorded in schema_migrations.
 
-import (
-	"context"
-	"database/sql"
-	"fmt"
-)
-
-func ensureSchema(ctx context.Context, db *sql.DB) error {
-	const ddl = `
 -- Migrate legacy tenant objects to the account naming (idempotent).
 DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ui_tenants')
@@ -544,9 +540,3 @@ BEGIN
 		ALTER TABLE kms_aliases ADD PRIMARY KEY (account_id, alias_name);
 	END IF;
 END $$;
-`
-	if _, err := db.ExecContext(ctx, ddl); err != nil {
-		return fmt.Errorf("initialize schema: %w", err)
-	}
-	return nil
-}

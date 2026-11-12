@@ -30,6 +30,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
+	"github.com/worlddrknss/citadel/internal/store/postgres"
 )
 
 const (
@@ -98,16 +101,16 @@ func TestLetsEncryptIssue93rdAvenue(t *testing.T) {
 
 	db := waitForPostgres(t, "postgres://postgres:postgres@localhost:"+itestPGPort+"/kms?sslmode=disable")
 	defer db.Close()
-	if err := ensureSchema(ctx, db); err != nil {
-		t.Fatalf("ensureSchema: %v", err)
+	if err := postgres.Migrate(ctx, db); err != nil {
+		t.Fatalf("migrate: %v", err)
 	}
-	store := newDBStore(db, pgOptions{WrappingKey: bytes.Repeat([]byte{0x42}, 32)})
-	if err := putSetting(ctx, db, settingACMELEDirectoryURL, itestPebbleDir); err != nil {
+	st := postgres.New(db, postgres.Options{WrappingKey: bytes.Repeat([]byte{0x42}, 32)})
+	if err := postgres.PutSetting(ctx, db, settingACMELEDirectoryURL, itestPebbleDir); err != nil {
 		t.Fatalf("putSetting directory: %v", err)
 	}
 
 	s := &server{
-		store:          store,
+		store:          st,
 		acmeChallenges: newACMEChallengeStore(),
 		acmeHTTPClient: httpClient,
 	}
@@ -142,7 +145,7 @@ func TestLetsEncryptIssue93rdAvenue(t *testing.T) {
 		t.Errorf("NotAfter = %v, want future", cert.NotAfter)
 	}
 	leaf := parsePEMCert(t, cert.CertB64)
-	if !containsString(leaf.DNSNames, itestDomain) {
+	if !store.ContainsString(leaf.DNSNames, itestDomain) {
 		t.Errorf("leaf DNSNames = %v, want to contain %q", leaf.DNSNames, itestDomain)
 	}
 	chainPEM, _ := base64.StdEncoding.DecodeString(cert.ChainB64)
