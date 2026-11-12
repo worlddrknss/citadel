@@ -476,11 +476,11 @@ func TestPhaseACompatibilitySuite(t *testing.T) {
 	})
 
 	t.Run("unknown access key returns UnrecognizedClientException", func(t *testing.T) {
-		s := &server{cfg: config{expectedAccessKey: "vault", secretAccessKey: "s3cret"}, store: &inMemoryStore{k: sampleKey(1)}}
+		s := &server{cfg: config{expectedAccessKey: "vault", secretAccessKey: "vault-secret-0123456789"}, store: &inMemoryStore{k: sampleKey(1)}}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", s.handleKMS)
 
-		rec := postSigned(t, mux, "TrentService.ListKeys", map[string]any{}, "intruder", "s3cret", time.Now().UTC())
+		rec := postSigned(t, mux, "TrentService.ListKeys", map[string]any{}, "intruder", "vault-secret-0123456789", time.Now().UTC())
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("status got %d want %d", rec.Code, http.StatusForbidden)
 		}

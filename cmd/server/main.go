@@ -883,6 +883,9 @@ func main() {
 	}
 }
 
+// minSecretAccessKeyLen is the shortest static secret accepted. See loadConfig.
+const minSecretAccessKeyLen = 20
+
 // checkSecurityPosture refuses configurations that would leave Citadel open.
 // Outside insecure dev mode the console needs at least one user, and the AWS
 // APIs need a source of credentials to verify signatures against.
@@ -909,6 +912,12 @@ func loadConfig() (config, error) {
 	cfg.secretAccessKey = os.Getenv("KMS_SECRET_ACCESS_KEY")
 	if (cfg.expectedAccessKey == "") != (cfg.secretAccessKey == "") {
 		return config{}, errors.New("KMS_ACCESS_KEY_ID and KMS_SECRET_ACCESS_KEY must be set together")
+	}
+	// SigV4's first HMAC key is "AWS4"+secret. FIPS 140-3 forbids HMAC keys
+	// under 112 bits, so a short secret would fail every request; AWS-issued
+	// and Citadel-issued secrets are 40 characters.
+	if cfg.secretAccessKey != "" && len(cfg.secretAccessKey) < minSecretAccessKeyLen {
+		return config{}, fmt.Errorf("KMS_SECRET_ACCESS_KEY must be at least %d characters", minSecretAccessKeyLen)
 	}
 	cfg.insecureDev = strings.EqualFold(os.Getenv("KMS_INSECURE_DEV"), "true")
 	if v := os.Getenv("KMS_SIGV4_STRICT"); v != "" {

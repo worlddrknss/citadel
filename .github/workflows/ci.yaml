@@ -37,7 +37,13 @@ jobs:
           if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
       - name: go vet
         run: go vet ./...
-      - name: go test
+      # Production runs the Go Cryptographic Module with GODEBUG=fips140=only
+      # (FIPS 140-3), where non-approved algorithms panic. Tests run the same
+      # way so a non-approved primitive fails CI rather than a deployment.
+      - name: go test (FIPS 140-only)
+        env:
+          GOFIPS140: latest
+          GODEBUG: fips140=only
         run: go test -race -count=1 -coverprofile=coverage.out ./...
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
