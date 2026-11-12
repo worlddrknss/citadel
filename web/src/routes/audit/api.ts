@@ -129,7 +129,8 @@ export const auditApi = {
 
 const CSV_COLS: (keyof AuditRow)[] = ['id', 'createdAt', 'actor', 'action', 'resource', 'result', 'errorType', 'sourceIp', 'prevHash', 'hash'];
 
-function toCsv(rows: AuditRow[]): string {
+/** CSV for the legacy export fallback. Exported for tests. */
+export function toCsv(rows: AuditRow[]): string {
   const cell = (v: unknown) => {
     const s = v == null ? '' : String(v);
     // Quote everything; neutralise spreadsheet formula injection.
