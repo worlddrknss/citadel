@@ -285,8 +285,7 @@ ON CONFLICT (id) DO UPDATE SET
 }
 
 func (s *Store) ListSSOProviders(ctx context.Context, enabledOnly bool) ([]store.SSOProvider, error) {
-	q := `SELECT id, name, issuer, client_id, scopes_json, group_claim, role_mappings_json, default_role, enabled, created_at, updated_at
-FROM console_sso_providers`
+	q := ssoProviderSelect
 	if enabledOnly {
 		q += ` WHERE enabled`
 	}
@@ -298,18 +297,10 @@ FROM console_sso_providers`
 	defer rows.Close()
 	out := []store.SSOProvider{}
 	for rows.Next() {
-		var (
-			p                       store.SSOProvider
-			scopesJSON, mappingJSON string
-		)
-		if err := rows.Scan(&p.ID, &p.Name, &p.Issuer, &p.ClientID, &scopesJSON, &p.GroupClaim, &mappingJSON,
-			&p.DefaultRole, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		p, err := scanSSOProvider(rows)
+		if err != nil {
 			return nil, err
 		}
-		_ = json.Unmarshal([]byte(scopesJSON), &p.Scopes)
-		_ = json.Unmarshal([]byte(mappingJSON), &p.RoleMappings)
-		p.CreatedAt = p.CreatedAt.UTC()
-		p.UpdatedAt = p.UpdatedAt.UTC()
 		out = append(out, p)
 	}
 	return out, rows.Err()

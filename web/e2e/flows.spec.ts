@@ -37,6 +37,37 @@ test.describe('sign-in', () => {
     await expect(page.locator('main h1')).toHaveCount(0);
   });
 
+  test('first run asks for the one-time setup token', async ({ page, api, allowConsole }) => {
+    allowConsole(FAILED_401);
+    api.signedIn = false;
+    const posted: Record<string, unknown>[] = [];
+    await page.route('**/v1/bootstrap', async (route) => {
+      const req = route.request();
+      if (req.method() === 'GET') return route.fulfill({ status: 200, json: { required: true } });
+      const body = req.postDataJSON() as Record<string, unknown>;
+      posted.push(body);
+      if (body.bootstrapToken !== 'tok-from-the-log') {
+        return route.fulfill({ status: 401, json: { error: 'invalid_bootstrap_token', message: 'The bootstrap token is missing or wrong.' } });
+      }
+      return route.fulfill({ status: 201, json: { accountId: ACCOUNT, organization: 'Acme', username: 'founder' } });
+    });
+    await page.goto('/app/');
+    await expect(page.getByRole('heading', { name: 'Create your organization' })).toBeVisible();
+
+    await page.getByLabel('Setup token').fill('wrong');
+    await page.getByLabel('Organization name').fill('Acme');
+    await page.getByLabel('First account name').fill('production');
+    await page.getByLabel('Admin username').fill('founder');
+    await page.getByLabel('Password', { exact: true }).fill('a-long-passphrase-here');
+    await page.getByRole('button', { name: 'Create organization' }).click();
+    await expect(page.getByRole('alert')).toContainText('bootstrap token is missing or wrong');
+
+    await page.getByLabel('Setup token').fill('tok-from-the-log');
+    await page.getByRole('button', { name: 'Create organization' }).click();
+    await expect(page.getByRole('heading', { name: 'Acme is ready' })).toBeVisible();
+    expect(posted.map((b) => b.bootstrapToken)).toEqual(['wrong', 'tok-from-the-log']);
+  });
+
   test('a fresh visit without a session shows no expired notice', async ({ page, api, allowConsole }) => {
     allowConsole(FAILED_401);
     api.signedIn = false;

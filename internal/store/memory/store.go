@@ -32,6 +32,7 @@ type Store struct {
 	sessions     map[string]store.ConsoleSession
 	orgSettings  store.OrgSettings
 	ssoProviders []store.SSOProvider
+	idn          *memIdentity
 	Region       string
 	AccountID    string
 	hier         map[string]*memProject

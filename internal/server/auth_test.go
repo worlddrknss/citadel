@@ -415,7 +415,7 @@ func TestSecretsSummaryIsAccountScoped(t *testing.T) {
 
 func newBootstrapEnv(t *testing.T) (*Server, *memory.Store, http.Handler) {
 	st := &memory.Store{DefaultKey: sampleKey(1)}
-	s := &Server{cfg: config.Config{SessionIdleTTL: 30 * time.Minute, SessionAbsTTL: 12 * time.Hour}, store: st}
+	s := &Server{cfg: config.Config{SessionIdleTTL: 30 * time.Minute, SessionAbsTTL: 12 * time.Hour, BootstrapToken: testBootstrapToken}, store: st}
 	return s, st, s.Handler()
 }
 
@@ -435,11 +435,11 @@ func TestBootstrapFlow(t *testing.T) {
 	wantStatus(t, doReq(t, h, "GET", "/v1/server/info", nil, nil), http.StatusOK)
 	wantStatus(t, doReq(t, h, "GET", "/v1/auth/providers", nil, nil), http.StatusOK)
 
-	body := map[string]string{"organizationName": "Acme", "accountName": "Production", "username": "founder", "password": "a-long-password-1"}
+	body := map[string]string{"organizationName": "Acme", "accountName": "Production", "username": "founder", "password": "a-long-password-1", "bootstrapToken": testBootstrapToken}
 	wantStatus(t, doReq(t, h, "POST", "/v1/bootstrap", body, nil, noCSRF), http.StatusForbidden)
-	short := map[string]string{"organizationName": "Acme", "accountName": "Production", "username": "founder", "password": "short"}
+	short := map[string]string{"organizationName": "Acme", "accountName": "Production", "username": "founder", "password": "short", "bootstrapToken": testBootstrapToken}
 	wantStatus(t, doReq(t, h, "POST", "/v1/bootstrap", short, nil), http.StatusBadRequest)
-	badUser := map[string]string{"organizationName": "Acme", "accountName": "Production", "username": "../x", "password": "a-long-password-1"}
+	badUser := map[string]string{"organizationName": "Acme", "accountName": "Production", "username": "../x", "password": "a-long-password-1", "bootstrapToken": testBootstrapToken}
 	wantStatus(t, doReq(t, h, "POST", "/v1/bootstrap", badUser, nil), http.StatusBadRequest)
 
 	rec = doReq(t, h, "POST", "/v1/bootstrap", body, nil)
@@ -487,7 +487,7 @@ func TestBootstrapConcurrentRequests(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			body := map[string]string{"organizationName": "Org", "accountName": "acct" + string(rune('a'+i)), "username": "admin" + string(rune('a'+i)), "password": "a-long-password-1"}
+			body := map[string]string{"organizationName": "Org", "accountName": "acct" + string(rune('a'+i)), "username": "admin" + string(rune('a'+i)), "password": "a-long-password-1", "bootstrapToken": testBootstrapToken}
 			codes[i] = doReq(t, h, "POST", "/v1/bootstrap", body, nil).Code
 		}()
 	}
@@ -509,7 +509,7 @@ func TestBootstrapConcurrentRequests(t *testing.T) {
 
 func TestBootstrapRateLimited(t *testing.T) {
 	_, _, h := newBootstrapEnv(t)
-	bad := map[string]string{"organizationName": "Acme", "accountName": "P", "username": "u", "password": "short"}
+	bad := map[string]string{"organizationName": "Acme", "accountName": "P", "username": "u", "password": "short", "bootstrapToken": testBootstrapToken}
 	for range 5 {
 		wantStatus(t, doReq(t, h, "POST", "/v1/bootstrap", bad, nil), http.StatusBadRequest)
 	}
@@ -521,7 +521,7 @@ func TestBootstrapNotOfferedWithUsers(t *testing.T) {
 	if decode(t, e.do("GET", "/v1/bootstrap", nil, nil))["required"] != false {
 		t.Fatal("bootstrap offered although users exist")
 	}
-	body := map[string]string{"organizationName": "Acme", "accountName": "Production", "username": "evil", "password": "a-long-password-1"}
+	body := map[string]string{"organizationName": "Acme", "accountName": "Production", "username": "evil", "password": "a-long-password-1", "bootstrapToken": testBootstrapToken}
 	wantStatus(t, e.do("POST", "/v1/bootstrap", body, nil), http.StatusConflict)
 }
 
@@ -620,12 +620,12 @@ func TestOrgSettings(t *testing.T) {
 	rec := e.do("GET", "/v1/admin/settings", nil, alice)
 	wantStatus(t, rec, http.StatusOK)
 	def := decode(t, rec)
-	if def["allowSelfApproval"] != false || def["approvalMinApprovers"] != 1.0 || def["sessionIdleMinutes"] != 30.0 {
+	if _, hasSelf := def["allowSelfApproval"]; hasSelf || def["approvalMinApprovers"] != 1.0 || def["sessionIdleMinutes"] != 30.0 {
 		t.Fatalf("defaults = %v", def)
 	}
 	wantStatus(t, e.do("GET", "/v1/admin/settings", nil, bob), http.StatusForbidden)
 
-	in := map[string]any{"approvalEnvironments": []string{"prod"}, "approvalMinApprovers": 2, "allowSelfApproval": false, "sessionIdleMinutes": 15, "sessionMaxHours": 8}
+	in := map[string]any{"approvalEnvironments": []string{"prod"}, "approvalMinApprovers": 2, "sessionIdleMinutes": 15, "sessionMaxHours": 8}
 	wantStatus(t, e.do("POST", "/v1/admin/settings", in, alice), http.StatusForbidden)
 	rec = e.do("POST", "/v1/admin/settings", in, root)
 	wantStatus(t, rec, http.StatusOK)

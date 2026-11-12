@@ -48,6 +48,19 @@ type Config struct {
 	// (KMS_KEY_ARN); empty means derive it from the deployment identity.
 	LegacyKeyARN string
 
+	// BootstrapToken (KMS_BOOTSTRAP_TOKEN) is the one-time token first-run
+	// setup requires. When unset and setup is needed, the server generates
+	// one at startup and logs it once.
+	BootstrapToken string
+	// WorkloadK8sReviewerToken (KMS_WORKLOAD_K8S_REVIEWER_TOKEN) or the file
+	// WorkloadK8sReviewerTokenFile (KMS_WORKLOAD_K8S_REVIEWER_TOKEN_FILE,
+	// default: the in-cluster service account token when running in
+	// Kubernetes) holds the bearer token Citadel presents to Kubernetes
+	// TokenReview; the file is read on every use. Neither set disables the
+	// k8s-token-review method. Use K8sReviewerToken to read it.
+	WorkloadK8sReviewerToken     string
+	WorkloadK8sReviewerTokenFile string
+
 	// PprofAddr enables the loopback pprof listener (KMS_PPROF_ADDR).
 	PprofAddr string
 	// MetricsAddr enables a separate Prometheus listener (KMS_METRICS_ADDR,
@@ -191,6 +204,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.PublicURL = publicURL
+	if err := loadIdentityEnv(&cfg); err != nil {
+		return Config{}, err
+	}
 
 	cfg.AWSRegion = strings.TrimSpace(envOrDefault("KMS_AWS_REGION", arn.DefaultRegion))
 	cfg.AWSAccountID = strings.TrimSpace(os.Getenv("KMS_AWS_ACCOUNT_ID"))

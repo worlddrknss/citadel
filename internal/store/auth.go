@@ -69,6 +69,15 @@ type SSOProvider struct {
 	Enabled      bool
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+	// AccountID is the owning account: the default role is granted there,
+	// and account admins of it may manage the provider while its role
+	// mappings stay within it (see IdentityStore).
+	AccountID string
+	// AllowedEmailDomains restricts sign-in to these email domains (empty:
+	// any).
+	AllowedEmailDomains []string
+	// ClientSecretSet reports whether a client secret is stored.
+	ClientSecretSet bool
 }
 
 // SSORoleMapping grants a role in an account ("*" = every account) to members

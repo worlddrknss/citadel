@@ -75,6 +75,9 @@ func (s *Server) handleV1AuthProviders(w http.ResponseWriter, r *http.Request) {
 		log.Printf("list SSO providers failed: %v", err)
 		providers = nil
 	}
+	if s.publicURL() == "" {
+		providers = nil // SSO needs KMS_PUBLIC_URL for its callback URL
+	}
 	out := make([]authProviderJSON, 0, len(providers))
 	for _, p := range providers {
 		out = append(out, authProviderJSON{ID: p.ID, Name: p.Name, Type: "oidc"})
@@ -102,6 +105,7 @@ type bootstrapRequest struct {
 	AccountName      string `json:"accountName"`
 	Username         string `json:"username"`
 	Password         string `json:"password"`
+	BootstrapToken   string `json:"bootstrapToken"`
 }
 
 var (
@@ -148,6 +152,11 @@ func (s *Server) handleV1Bootstrap(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
+	if !s.checkBootstrapToken(req.BootstrapToken) {
+		s.recordAudit(r.Context(), store.AuditEvent{Action: "citadel.Bootstrap", Result: "denied", ErrorType: "InvalidBootstrapToken", AuditOrigin: s.userAuditOrigin(r, "anonymous", "")})
+		writeNativeError(w, http.StatusUnauthorized, "invalid_bootstrap_token", "the bootstrap token is missing or wrong; it is printed in the server log at startup")
+		return
+	}
 	org := strings.TrimSpace(req.OrganizationName)
 	accountName := strings.TrimSpace(req.AccountName)
 	username := strings.TrimSpace(req.Username)
@@ -184,6 +193,7 @@ func (s *Server) handleV1Bootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auth().bootstrapped.Store(true)
+	s.consumeBootstrapToken()
 	s.invalidateOrgSettings()
 	if _, err := s.store.EnsureAccountDefaultKey(r.Context(), accountID); err != nil {
 		log.Printf("warning: failed to provision default key for account %s: %v", accountID, err)
@@ -470,7 +480,6 @@ func (s *Server) handleV1RevokeOtherSessions(w http.ResponseWriter, r *http.Requ
 type orgSettingsJSON struct {
 	ApprovalEnvironments []string `json:"approvalEnvironments"`
 	ApprovalMinApprovers int      `json:"approvalMinApprovers"`
-	AllowSelfApproval    bool     `json:"allowSelfApproval"`
 	SessionIdleMinutes   int      `json:"sessionIdleMinutes"`
 	SessionMaxHours      int      `json:"sessionMaxHours"`
 	UpdatedAt            string   `json:"updatedAt,omitempty"`
@@ -482,7 +491,6 @@ func (s *Server) orgSettingsJSON(ctx context.Context, st store.OrgSettings) orgS
 	out := orgSettingsJSON{
 		ApprovalEnvironments: st.ApprovalEnvironments,
 		ApprovalMinApprovers: max(st.ApprovalMinApprovers, 1),
-		AllowSelfApproval:    st.AllowSelfApproval,
 		SessionIdleMinutes:   int(idle / time.Minute),
 		SessionMaxHours:      int(abs / time.Hour),
 		UpdatedBy:            st.UpdatedBy,
@@ -512,8 +520,8 @@ func (s *Server) handleV1GetOrgSettings(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleV1PutOrgSettings saves the organization settings. They span every
-// account, so only platform admins may change them. allowSelfApproval is
-// stored and audited; it defaults to false.
+// account, so only platform admins may change them. Self-approval is never
+// allowed, so there is no setting for it.
 func (s *Server) handleV1PutOrgSettings(w http.ResponseWriter, r *http.Request) {
 	sess, ctx, ok := s.nativeSession(w, r, "admin")
 	if !ok {
@@ -567,7 +575,6 @@ func (s *Server) handleV1PutOrgSettings(w http.ResponseWriter, r *http.Request) 
 		OrganizationName:     current.OrganizationName,
 		ApprovalEnvironments: envs,
 		ApprovalMinApprovers: req.ApprovalMinApprovers,
-		AllowSelfApproval:    req.AllowSelfApproval,
 		SessionIdleMinutes:   req.SessionIdleMinutes,
 		SessionMaxHours:      req.SessionMaxHours,
 		UpdatedAt:            time.Now().UTC().Truncate(time.Second),
@@ -580,9 +587,6 @@ func (s *Server) handleV1PutOrgSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	s.invalidateOrgSettings()
 	resource := "org-settings"
-	if next.AllowSelfApproval {
-		resource = "org-settings:allowSelfApproval=true"
-	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpdateOrgSettings", KeyID: resource, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, s.orgSettingsJSON(ctx, next))
 }

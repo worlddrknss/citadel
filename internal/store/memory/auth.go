@@ -199,6 +199,7 @@ func (s *Store) ListSSOProviders(_ context.Context, enabledOnly bool) ([]store.S
 		}
 		p.Scopes = slices.Clone(p.Scopes)
 		p.RoleMappings = slices.Clone(p.RoleMappings)
+		p.AllowedEmailDomains = slices.Clone(p.AllowedEmailDomains)
 		out = append(out, p)
 	}
 	return out, nil
