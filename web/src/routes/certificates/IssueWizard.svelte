@@ -73,8 +73,17 @@
   const EMAIL_RE = /^[^\s@]+@[^\s@]+$/;
   const validName = (s: string) => NAME_RE.test(s) || IP_RE.test(s) || EMAIL_RE.test(s);
 
+  // The server takes any common name up to 64 characters (client
+  // certificates often use a service or user name); only names that are
+  // valid SANs are copied into the SAN list.
   const cnError = $derived(
-    !cn.trim() ? 'A common name is required.' : !NAME_RE.test(cn.trim()) ? 'Use a DNS name such as orders.internal.example.com.' : ''
+    !cn.trim()
+      ? 'A common name is required.'
+      : cn.trim().length > 64
+        ? 'Use at most 64 characters.'
+        : /[\u0000-\u001f\u007f]/.test(cn)
+          ? 'Remove control characters.'
+          : ''
   );
   const sanError = $derived(sanDraft.trim() && !validName(sanDraft.trim()) ? `“${sanDraft.trim()}” isn't a DNS name, IP address or email.` : '');
   const validityError = $derived(
@@ -105,7 +114,7 @@
   }
 
   // The CN is always the first SAN, as the hint promises.
-  const allSans = $derived(cn.trim() ? [cn.trim(), ...sans.filter((s) => s !== cn.trim())] : sans);
+  const allSans = $derived(cn.trim() && validName(cn.trim()) ? [cn.trim(), ...sans.filter((s) => s !== cn.trim())] : sans);
 
   function next() {
     touched = true;
@@ -216,7 +225,7 @@
           {#if touched && cnError}
             <span class="field-error" id="iw-cn-hint">{cnError}</span>
           {:else}
-            <span class="field-hint" id="iw-cn-hint">The primary DNS name. It is also added as the first SAN.</span>
+            <span class="field-hint" id="iw-cn-hint">Usually the primary DNS name, which is also added as the first SAN. With a CSR it replaces the CSR's common name.</span>
           {/if}
         </div>
         <div class="field">

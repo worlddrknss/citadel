@@ -230,7 +230,11 @@
     }}
   />
 {:else if tab === 'acme'}
-  <AcmeServerPanel accountId={session.me?.accountId ?? ''} canManage={canAdmin} />
+  <AcmeServerPanel
+    accountId={session.me?.accountId ?? ''}
+    canManage={canAdmin}
+    cas={cas.map((c) => ({ id: c.id, name: nameOf(c), status: c.status }))}
+  />
 {:else}
   <div class="layout">
     <CATree

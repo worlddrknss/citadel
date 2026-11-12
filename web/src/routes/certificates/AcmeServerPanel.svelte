@@ -1,5 +1,7 @@
-<!-- Citadel's built-in RFC 8555 ACME server: where clients point, how to
-     configure common clients, and External Account Binding keys. -->
+<!-- Citadel's built-in RFC 8555 ACME server: where clients point, which
+     names they may request and which CA signs them (the issuance policy;
+     with none saved every order is refused), how to configure common
+     clients, and External Account Binding keys. -->
 <script lang="ts">
   import Icon from '$lib/components/Icon.svelte';
   import Badge from '$lib/components/Badge.svelte';
@@ -11,24 +13,100 @@
   import { errorMessage } from '$lib/api';
   import { toast } from '$lib/stores/toast.svelte';
   import { confirm } from '$lib/stores/confirm.svelte';
-  import { certApi, type EabKey } from './api';
+  import { certApi, type AcmeSettings, type EabKey } from './api';
   import { fmtDateTime } from './certs';
 
-  let { accountId, canManage }: { accountId: string; canManage: boolean } = $props();
+  interface CaOption {
+    id: string;
+    name: string;
+    status: string;
+  }
 
-  const origin = typeof location !== 'undefined' ? location.origin : '';
-  const directory = `${origin}/acme/directory`;
-  const host = origin.replace(/^https?:\/\//, '');
+  let { accountId, canManage, cas = [] }: { accountId: string; canManage: boolean; cas?: CaOption[] } = $props();
+
+  // ---- issuance policy -----------------------------------------------------
+  let settings = $state<AcmeSettings | null>(null);
+  let settingsError = $state('');
+  let issuingCaId = $state('');
+  let domainsText = $state('');
+  let ipsText = $state('');
+  let cidrsText = $state('');
+  let saving = $state(false);
+  let saveError = $state('');
+
+  const lines = (t: string) =>
+    t
+      .split(/[\s,]+/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+
+  function fill(s: AcmeSettings) {
+    settings = s;
+    issuingCaId = s.issuingCaId ?? '';
+    domainsText = (s.allowedDomains ?? []).join('\n');
+    ipsText = (s.allowedIpRanges ?? []).join('\n');
+    cidrsText = (s.validationAllowedCidrs ?? []).join('\n');
+  }
+
+  async function loadSettings() {
+    settingsError = '';
+    try {
+      fill(await certApi.acmeSettings());
+    } catch (e) {
+      settingsError = errorMessage(e, 'Could not load the ACME settings.');
+    }
+  }
+
+  const dirty = $derived(
+    !!settings &&
+      (issuingCaId !== (settings.issuingCaId ?? '') ||
+        lines(domainsText).join() !== (settings.allowedDomains ?? []).join() ||
+        lines(ipsText).join() !== (settings.allowedIpRanges ?? []).join() ||
+        lines(cidrsText).join() !== (settings.validationAllowedCidrs ?? []).join())
+  );
+
+  async function saveSettings(e: SubmitEvent) {
+    e.preventDefault();
+    saving = true;
+    saveError = '';
+    try {
+      fill(
+        await certApi.saveAcmeSettings({
+          issuingCaId,
+          allowedDomains: lines(domainsText),
+          allowedIpRanges: lines(ipsText),
+          validationAllowedCidrs: lines(cidrsText)
+        })
+      );
+      toast.success('ACME settings saved');
+    } catch (err) {
+      saveError = errorMessage(err, 'Could not save the ACME settings.');
+    } finally {
+      saving = false;
+    }
+  }
+
+  const activeCas = $derived(cas.filter((c) => (c.status ?? '').toUpperCase() === 'ACTIVE'));
+  const caLabel = (id?: string) => {
+    if (!id) return '';
+    const c = cas.find((x) => x.id === id);
+    return c ? c.name : id;
+  };
+  const nothingAllowed = $derived(!!settings && !settings.allowedDomains?.length && !settings.allowedIpRanges?.length);
+
+  const directory = $derived(settings?.directoryUrl ?? '');
+  const host = $derived(directory.replace(/^https?:\/\//, '').replace(/\/.*$/, ''));
+  const shown = $derived(directory || 'https://citadel.example.com/acme/directory');
 
   let client = $state<'certbot' | 'acmesh' | 'certmanager'>('certbot');
   const snippets = $derived({
     certbot: `certbot certonly --standalone \\
-  --server ${directory} \\
+  --server ${shown} \\
   --eab-kid "<KID>" --eab-hmac-key "<HMAC_KEY>" \\
   -d orders.internal.example.com`,
-    acmesh: `acme.sh --register-account --server ${directory} \\
+    acmesh: `acme.sh --register-account --server ${shown} \\
   --eab-kid "<KID>" --eab-hmac-key "<HMAC_KEY>"
-acme.sh --issue --server ${directory} \\
+acme.sh --issue --server ${shown} \\
   --standalone -d orders.internal.example.com`,
     certmanager: `apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -36,7 +114,7 @@ metadata:
   name: citadel
 spec:
   acme:
-    server: ${directory}
+    server: ${shown}
     privateKeySecretRef:
       name: citadel-acme-account
     externalAccountBinding:
@@ -68,6 +146,7 @@ spec:
   $effect(() => {
     void accountId;
     load();
+    loadSettings();
   });
 
   // Create
@@ -141,14 +220,26 @@ spec:
         Any ACME client (certbot, acme.sh, cert-manager, Caddy, Traefik) can get certificates from your private CA by pointing at Citadel instead
         of Let's Encrypt. Clients prove control of each name with HTTP-01, then Citadel signs the order with the default private CA.
       </p>
-      <div class="field">
-        <span class="field-label">Directory URL</span>
-        <div class="urlbox">
-          <code class="mono">{directory}</code>
-          <CopyButton value={directory} label="Copy directory URL" />
+      {#if settingsError}
+        <div class="callout callout-danger" role="alert">
+          <Icon name="alert-circle" size={16} /><span>{settingsError}</span>
+          <button type="button" class="btn btn-ghost btn-sm push" onclick={loadSettings}>Retry</button>
         </div>
-        <span class="field-hint">Clients must trust your root CA, and reach <span class="mono">{host}</span> over HTTPS.</span>
-      </div>
+      {:else if settings && !settings.enabled}
+        <div class="callout callout-warning" role="status">
+          <Icon name="alert-triangle" size={16} />
+          <span>The ACME server is off on this deployment: set <span class="mono">KMS_PUBLIC_URL</span> to the address clients use to reach Citadel, then restart it.</span>
+        </div>
+      {:else if settings}
+        <div class="field">
+          <span class="field-label">Directory URL</span>
+          <div class="urlbox">
+            <code class="mono" data-testid="acme-directory">{directory}</code>
+            <CopyButton value={directory} label="Copy directory URL" />
+          </div>
+          <span class="field-hint">Clients must trust your root CA, and reach <span class="mono">{host}</span> over HTTPS.</span>
+        </div>
+      {/if}
       <div class="field">
         <div class="snip-head">
           <span class="field-label">Client setup</span>
@@ -170,6 +261,65 @@ spec:
       </div>
     </div>
   </section>
+
+  {#if settings}
+    <section class="card" aria-labelledby="acme-policy-title">
+      <div class="card-head">
+        <div>
+          <h2 id="acme-policy-title">Issuance policy</h2>
+          <p class="subtle small sub">What ACME clients in <span class="mono">{accountId || 'this account'}</span> may request, and which CA signs it.</p>
+        </div>
+        <Badge tone={settings.enabled ? 'success' : 'neutral'}>{settings.enabled ? 'Enabled' : 'Off'}</Badge>
+      </div>
+      <form class="card-pad policy" onsubmit={saveSettings} novalidate>
+        {#if nothingAllowed}
+          <div class="callout callout-warning" role="status">
+            <Icon name="alert-triangle" size={16} />
+            <span>No names are allowed yet, so every order is refused. Add the domains (or IP ranges) your clients may request.</span>
+          </div>
+        {/if}
+        <div class="field">
+          <label class="field-label" for="acme-ca">Issuing CA</label>
+          <select id="acme-ca" class="select" bind:value={issuingCaId} disabled={!canManage}>
+            <option value="">Automatic (oldest active CA)</option>
+            {#each activeCas as c (c.id)}<option value={c.id}>{c.name}</option>{/each}
+            {#if issuingCaId && !activeCas.some((c) => c.id === issuingCaId)}<option value={issuingCaId}>{caLabel(issuingCaId)}</option>{/if}
+          </select>
+          {#if settings.effectiveIssuingCaId}
+            <span class="field-hint">Orders are signed by <span class="strong" data-testid="acme-effective-ca">{caLabel(settings.effectiveIssuingCaId)}</span>.</span>
+          {:else}
+            <span class="field-error">No active CA can sign ACME orders. Create or activate a CA first.</span>
+          {/if}
+        </div>
+        <div class="field">
+          <label class="field-label" for="acme-domains">Allowed domains</label>
+          <textarea id="acme-domains" class="textarea mono" rows="3" bind:value={domainsText} disabled={!canManage} placeholder="internal.example.com" spellcheck="false"></textarea>
+          <span class="field-hint">One per line. Each domain also allows its subdomains; wildcards aren't needed.</span>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label class="field-label" for="acme-ips">Allowed IP ranges <span class="subtle">(optional)</span></label>
+            <textarea id="acme-ips" class="textarea mono" rows="2" bind:value={ipsText} disabled={!canManage} placeholder="10.0.0.0/8" spellcheck="false"></textarea>
+            <span class="field-hint">IP addresses clients may put in certificates. CIDRs or single IPs.</span>
+          </div>
+          <div class="field">
+            <label class="field-label" for="acme-cidrs">Validation exemptions <span class="subtle">(optional)</span></label>
+            <textarea id="acme-cidrs" class="textarea mono" rows="2" bind:value={cidrsText} disabled={!canManage} placeholder="127.0.0.1/32" spellcheck="false"></textarea>
+            <span class="field-hint">Addresses Citadel may connect to for HTTP-01 even though they are loopback, link-local or private.</span>
+          </div>
+        </div>
+        {#if saveError}
+          <div class="callout callout-danger" role="alert"><Icon name="alert-circle" size={16} /><span>{saveError}</span></div>
+        {/if}
+        <div class="policy-foot">
+          <span class="subtle small">{settings.updatedAt ? `Updated ${fmtDateTime(settings.updatedAt)}${settings.updatedBy ? ` by ${settings.updatedBy}` : ''}` : 'Not configured yet'}</span>
+          {#if canManage}
+            <button type="submit" class="btn btn-primary btn-sm" disabled={saving || !dirty}>{saving ? 'Saving…' : 'Save policy'}</button>
+          {/if}
+        </div>
+      </form>
+    </section>
+  {/if}
 
   <section class="card" aria-labelledby="eab-title">
     <div class="card-head">
@@ -238,7 +388,7 @@ spec:
   <form id="eab-form" onsubmit={create} novalidate>
     <div class="field">
       <label class="field-label" for="eab-label">Label</label>
-      <input id="eab-label" class="input" bind:value={label} placeholder="prod-eu cert-manager" autocomplete="off" maxlength="64" aria-invalid={!!createError} />
+      <input id="eab-label" class="input" bind:value={label} placeholder="prod-eu cert-manager" autocomplete="off" maxlength="128" aria-invalid={!!createError} />
       {#if createError}<span class="field-error">{createError}</span>{/if}
     </div>
   </form>
@@ -344,5 +494,26 @@ spec:
   }
   .push {
     margin-left: auto;
+  }
+  .policy {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .policy .field + .field {
+    margin-top: 0;
+  }
+  .policy textarea {
+    max-width: 640px;
+  }
+  .policy select {
+    max-width: 420px;
+  }
+  .policy-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
   }
 </style>

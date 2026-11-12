@@ -231,7 +231,8 @@
         {#if canIssue && (row.status ?? '').toUpperCase() === 'ACTIVE'}
           <button type="button" class="btn btn-primary btn-sm" onclick={() => onissuefrom(row)}><Icon name="plus" size={14} />Issue from this CA</button>
         {/if}
-        {#if canAdmin}
+        <!-- The server gives subordinates pathLen 0, so only active roots can sign CAs. -->
+        {#if canAdmin && (row.status ?? '').toUpperCase() === 'ACTIVE' && (row.caType ?? '').toUpperCase() !== 'SUBORDINATE'}
           <button type="button" class="btn btn-secondary btn-sm" onclick={() => onsubordinate(row)}><Icon name="git-pull-request" size={14} />New subordinate</button>
         {/if}
       {:else if row.source === 'pca-cert' && !isRevoked(row)}

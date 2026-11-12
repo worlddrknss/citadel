@@ -84,6 +84,20 @@ export const certApi = {
       { method: 'POST', body: JSON.stringify(body) }
     ),
 
+  // ACME server: what the account's ACME clients may request.
+  acmeSettings: () => req<AcmeSettings>('/v1/certificates/acme/settings'),
+  /** Replaces the whole policy; the server rejects any other field. */
+  saveAcmeSettings: (body: AcmeSettingsInput) =>
+    req<AcmeSettings>('/v1/certificates/acme/settings', {
+      method: 'POST',
+      body: JSON.stringify({
+        issuingCaId: body.issuingCaId,
+        allowedDomains: body.allowedDomains,
+        allowedIpRanges: body.allowedIpRanges,
+        validationAllowedCidrs: body.validationAllowedCidrs
+      })
+    }),
+
   // ACME server: External Account Binding keys for the current account.
   eabKeys: () => req<{ keys: EabKey[] }>('/v1/certificates/acme/eab'),
   createEabKey: (label: string) =>
@@ -96,6 +110,28 @@ export const certApi = {
       method: 'DELETE'
     })
 };
+
+export interface AcmeSettingsInput {
+  /** "" lets the server pick the oldest active, unexpired CA. */
+  issuingCaId: string;
+  /** Each domain also allows its subdomains. */
+  allowedDomains: string[];
+  /** IP identifiers ACME clients may request (CIDRs or bare IPs). */
+  allowedIpRanges: string[];
+  /** Addresses exempt from the loopback/link-local/metadata block during HTTP-01 validation. */
+  validationAllowedCidrs: string[];
+}
+
+/** GET/POST /v1/certificates/acme/settings. */
+export interface AcmeSettings extends AcmeSettingsInput {
+  /** False when the server has no KMS_PUBLIC_URL; /acme/* then answers 404. */
+  enabled: boolean;
+  directoryUrl?: string;
+  /** The CA orders are signed with now; absent when no usable CA exists. */
+  effectiveIssuingCaId?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
 
 export interface EabKey {
   kid: string;
