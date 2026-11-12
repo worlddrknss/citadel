@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "sync": "svelte-kit sync",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "test": "TZ=America/New_York vitest run",
+    "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test"
   },

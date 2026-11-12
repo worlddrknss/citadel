@@ -20,8 +20,9 @@ function apply(d: Density) {
 }
 
 function createDensity() {
-  let value = $state<Density>(typeof localStorage === 'undefined' ? 'comfortable' : read());
-  apply(value);
+  const initial: Density = typeof localStorage === 'undefined' ? 'comfortable' : read();
+  apply(initial);
+  let value = $state<Density>(initial);
   return {
     get value() {
       return value;

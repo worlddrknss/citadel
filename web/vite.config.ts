@@ -15,6 +15,9 @@ export default defineConfig({
     }
   },
   test: {
+    // A non-UTC default zone, so date code is exercised the way users see it.
+    // Set here rather than in the npm script so it works on Windows too.
+    env: { TZ: 'America/New_York' },
     include: ['src/**/*.test.ts'],
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
