@@ -64,10 +64,11 @@ func (s *Server) workloadIssuer() (*workloadid.Issuer, error) {
 		}
 		st.k8sAuth = &workloadid.KubernetesAuthenticator{
 			ReviewerToken: func(context.Context, workloadid.Client) (string, error) {
-				if s.cfg.WorkloadK8sReviewerToken == "" {
-					return "", errors.New("no TokenReview reviewer token configured")
+				tok, err := s.cfg.K8sReviewerToken()
+				if err == nil && tok == "" {
+					err = errors.New("no TokenReview reviewer token configured")
 				}
-				return s.cfg.WorkloadK8sReviewerToken, nil
+				return tok, err
 			},
 			AllowInsecureHTTP: s.insecureIdentityURLs(),
 		}
@@ -224,7 +225,7 @@ func (s *Server) authenticateAccessKeyWorkload(ctx context.Context, req *workloa
 // authenticateK8sWorkload checks a Kubernetes service account token with
 // TokenReview and maps its attributes to the subject template names.
 func (s *Server) authenticateK8sWorkload(ctx context.Context, req *workloadid.AuthRequest) (workloadid.Workload, error) {
-	if s.cfg.WorkloadK8sReviewerToken == "" {
+	if !s.cfg.K8sReviewConfigured() {
 		return workloadid.Workload{}, fmt.Errorf("%w: Kubernetes TokenReview is not configured", workloadid.ErrUnauthenticated)
 	}
 	w, err := s.identity().k8sAuth.Authenticate(ctx, req)
@@ -767,8 +768,8 @@ func (s *Server) validateWorkloadClient(ctx context.Context, accountID string, i
 			return "kubernetes settings on an access-key client"
 		}
 	case store.WorkloadAuthK8s:
-		if s.cfg.WorkloadK8sReviewerToken == "" {
-			return "Kubernetes TokenReview is not configured on this server (KMS_WORKLOAD_K8S_REVIEWER_TOKEN)"
+		if !s.cfg.K8sReviewConfigured() {
+			return "Kubernetes TokenReview is not configured on this server (KMS_WORKLOAD_K8S_REVIEWER_TOKEN_FILE)"
 		}
 		c.APIServer = strings.TrimRight(strings.TrimSpace(in.Auth.APIServer), "/")
 		if err := jose.CheckURL(c.APIServer, s.insecureIdentityURLs()); err != nil || len(c.APIServer) > 512 {

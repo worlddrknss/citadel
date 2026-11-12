@@ -52,12 +52,14 @@ type Config struct {
 	// setup requires. When unset and setup is needed, the server generates
 	// one at startup and logs it once.
 	BootstrapToken string
-	// WorkloadK8sReviewerToken is the bearer token Citadel presents to
-	// Kubernetes TokenReview for workload identity clients
-	// (KMS_WORKLOAD_K8S_REVIEWER_TOKEN, or read from the file named by
-	// KMS_WORKLOAD_K8S_REVIEWER_TOKEN_FILE). Empty disables the
-	// k8s-token-review method.
-	WorkloadK8sReviewerToken string
+	// WorkloadK8sReviewerToken (KMS_WORKLOAD_K8S_REVIEWER_TOKEN) or the file
+	// WorkloadK8sReviewerTokenFile (KMS_WORKLOAD_K8S_REVIEWER_TOKEN_FILE,
+	// default: the in-cluster service account token when running in
+	// Kubernetes) holds the bearer token Citadel presents to Kubernetes
+	// TokenReview; the file is read on every use. Neither set disables the
+	// k8s-token-review method. Use K8sReviewerToken to read it.
+	WorkloadK8sReviewerToken     string
+	WorkloadK8sReviewerTokenFile string
 
 	// PprofAddr enables the loopback pprof listener (KMS_PPROF_ADDR).
 	PprofAddr string

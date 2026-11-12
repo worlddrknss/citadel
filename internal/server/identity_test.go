@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -717,7 +719,11 @@ func TestWorkloadTokenRateLimit(t *testing.T) {
 
 func TestWorkloadTokenKubernetes(t *testing.T) {
 	e := newWorkloadEnv(t)
-	e.s.cfg.WorkloadK8sReviewerToken = "reviewer-token"
+	tokFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokFile, []byte("old-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.s.cfg.WorkloadK8sReviewerTokenFile = tokFile
 	var gotAuth string
 	var gotAud []string
 	user := "system:serviceaccount:ci:builder"
@@ -752,6 +758,14 @@ func TestWorkloadTokenKubernetes(t *testing.T) {
 	wantStatus(t, rec, http.StatusCreated)
 	id := decode(t, rec)["clientId"].(string)
 
+	wantStatus(t, e.token(map[string]any{"clientId": id, "audience": "vault", "kubernetesToken": "sa-token"}), http.StatusOK)
+	if gotAuth != "Bearer old-token" {
+		t.Fatalf("reviewer auth = %q", gotAuth)
+	}
+	// A rotated token file is picked up without a restart.
+	if err := os.WriteFile(tokFile, []byte("reviewer-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	rec = e.token(map[string]any{"clientId": id, "audience": "vault", "kubernetesToken": "sa-token"})
 	wantStatus(t, rec, http.StatusOK)
 	claims := e.verifyToken(decode(t, rec)["token"].(string), "vault")
