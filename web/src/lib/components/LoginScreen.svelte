@@ -326,7 +326,7 @@
               {#each providers as p (p.id)}
                 <button type="button" class="btn btn-secondary btn-tall" onclick={() => startSso(p)}>
                   <Icon name="link" />
-                  {providers.length === 1 ? 'Continue with SSO (OIDC)' : `Continue with ${p.name}`}
+                  Continue with {p.name}
                 </button>
               {/each}
             </div>
