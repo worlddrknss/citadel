@@ -306,7 +306,7 @@
     background: none;
     color: var(--text);
     font-family: var(--font-mono);
-    font-size: 12.5px;
+    font-size: 13.5px;
     font-weight: 500;
     cursor: pointer;
     text-align: start;
@@ -345,7 +345,7 @@
     border-radius: 50%;
     background: var(--accent-soft);
     color: var(--accent-text);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     flex-shrink: 0;
   }

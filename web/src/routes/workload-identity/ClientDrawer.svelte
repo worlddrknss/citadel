@@ -107,7 +107,7 @@
     gap: 4px;
   }
   .chips .badge {
-    font-size: 11.5px;
+    font-size: 12.5px;
   }
   .badge.outline {
     background: transparent;
@@ -146,7 +146,7 @@
   .code {
     margin: 12px;
     padding-right: 44px;
-    font-size: 12px;
+    font-size: 13px;
     white-space: pre;
   }
   .copy {

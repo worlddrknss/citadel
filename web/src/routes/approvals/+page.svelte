@@ -532,7 +532,7 @@
     background: transparent;
     color: var(--text-muted);
     font: inherit;
-    font-size: 12.5px;
+    font-size: 13.5px;
     font-weight: 500;
     cursor: pointer;
   }
@@ -616,7 +616,7 @@
     border-radius: 50%;
     background: var(--accent-soft);
     color: var(--accent-text);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
   }
   .badge-accent {
@@ -629,7 +629,7 @@
   }
   .mini {
     height: 20px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .pad {
     padding: 16px;
@@ -670,7 +670,7 @@
   }
   .d-head h2 {
     margin: 0;
-    font: 600 20px/28px var(--font-display);
+    font: 600 22px/28px var(--font-display);
     letter-spacing: -0.01em;
   }
   .who {
@@ -718,7 +718,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 12.5px;
+    font-size: 13.5px;
   }
   .ps.ok {
     color: var(--success);
@@ -733,7 +733,7 @@
   }
   .sec-head h3 {
     margin: 0;
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 600;
   }
   .scroll {

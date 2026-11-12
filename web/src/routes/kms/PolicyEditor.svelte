@@ -156,7 +156,7 @@
     gap: 2px;
   }
   .editor {
-    font-size: 12px;
+    font-size: 13px;
     line-height: 19px;
     background: var(--surface-sunken);
     tab-size: 2;

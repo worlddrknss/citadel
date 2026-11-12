@@ -285,7 +285,7 @@
   }
   .sub {
     display: block;
-    font-size: 11.5px;
+    font-size: 12.5px;
     max-width: 48ch;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -298,7 +298,7 @@
     align-items: center;
   }
   .chips .badge {
-    font-size: 11.5px;
+    font-size: 12.5px;
   }
   .danger:hover:not(:disabled) {
     color: var(--danger);

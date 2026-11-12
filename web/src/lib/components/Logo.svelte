@@ -57,10 +57,10 @@
     height: 20px;
   }
   .word {
-    font: 600 16px/1 var(--font-display);
+    font: 600 17px/1 var(--font-display);
     letter-spacing: -0.01em;
   }
   .logo-lg .word {
-    font-size: 18px;
+    font-size: 19px;
   }
 </style>

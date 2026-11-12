@@ -265,7 +265,7 @@
     background: transparent;
     color: var(--text-muted);
     box-shadow: inset 0 0 0 1px var(--border-strong);
-    font-size: 11.5px;
+    font-size: 12.5px;
   }
   .sk {
     display: flex;
@@ -287,7 +287,7 @@
     gap: 4px;
   }
   .sans .badge {
-    font-size: 11.5px;
+    font-size: 12.5px;
   }
   .idrow {
     display: flex;
@@ -308,7 +308,7 @@
     flex-wrap: wrap;
   }
   .pem {
-    font-size: 11.5px;
+    font-size: 12.5px;
     max-height: 420px;
     white-space: pre;
   }
@@ -335,7 +335,7 @@
   }
   .crlurl {
     overflow-wrap: anywhere;
-    font-size: 12px;
+    font-size: 13px;
   }
   .foot {
     position: sticky;

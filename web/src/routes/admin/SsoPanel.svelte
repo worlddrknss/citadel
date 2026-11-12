@@ -181,7 +181,7 @@
   }
   .sub2 {
     display: block;
-    font-size: 11.5px;
+    font-size: 12.5px;
   }
   .scroll {
     overflow-x: auto;

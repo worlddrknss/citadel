@@ -154,9 +154,31 @@ func (s *Server) userMemberships(ctx context.Context, user store.UIUser) []membe
 		}
 		out = append(out, membership{AccountID: id, Role: role})
 	}
+	// Accounts configured on the user itself. 1.x stored account names here
+	// as well as IDs: resolve names to IDs, and drop anything that isn't an
+	// account, so no phantom account without an ID appears.
+	var byName map[string]string
 	for _, a := range user.Accounts {
 		id := strings.TrimSpace(a)
-		if id == "" || seen[id] {
+		if id == "" {
+			continue
+		}
+		if !arn.IsValidAccountID(id) {
+			if byName == nil {
+				byName = map[string]string{}
+				if accts, err := s.store.ListUIAccounts(ctx); err == nil {
+					for _, acct := range accts {
+						byName[strings.ToLower(strings.TrimSpace(acct.Name))] = acct.AccountID
+					}
+				}
+			}
+			resolved, ok := byName[strings.ToLower(id)]
+			if !ok {
+				continue
+			}
+			id = resolved
+		}
+		if seen[id] {
 			continue
 		}
 		seen[id] = true

@@ -359,7 +359,7 @@
     border-radius: 999px;
     box-shadow: inset 0 0 0 1px var(--border-strong);
     color: var(--text-muted);
-    font-size: 11.5px;
+    font-size: 12.5px;
     font-weight: 500;
   }
   .tabs-wrap {
@@ -419,7 +419,7 @@
     display: inline-flex;
   }
   .pem {
-    font-size: 11px;
+    font-size: 12px;
     white-space: pre-wrap;
     word-break: break-all;
     max-height: 220px;

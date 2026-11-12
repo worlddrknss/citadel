@@ -502,7 +502,7 @@
   }
   .banner-text span {
     color: var(--text-muted);
-    font-size: 12.5px;
+    font-size: 13.5px;
   }
   .banner-neutral .banner-text strong {
     color: var(--text);
@@ -572,7 +572,7 @@
     padding-right: 2px;
   }
   .chip.mono {
-    font-size: 11.5px;
+    font-size: 12.5px;
   }
   .chip-x {
     display: inline-grid;
@@ -607,7 +607,7 @@
     padding-right: 0;
   }
   .sm {
-    font-size: 12px;
+    font-size: 13px;
   }
   .res {
     max-width: 320px;
@@ -632,7 +632,7 @@
     border-radius: 50%;
     background: var(--accent-soft);
     color: var(--accent-text);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
   }
   .detail td {
@@ -658,7 +658,7 @@
   }
   .mini {
     height: 20px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .detail-actions {
     display: flex;
@@ -667,7 +667,7 @@
   }
   .code {
     padding: 14px 16px;
-    font-size: 12px;
+    font-size: 13px;
     line-height: 19px;
     white-space: pre;
     overflow-x: auto;

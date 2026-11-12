@@ -389,7 +389,7 @@
     border-radius: 50%;
     border: 2px solid var(--accent);
     color: var(--accent);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
   }
   .done .dot {
@@ -455,7 +455,7 @@
     font-weight: 600;
   }
   .csub {
-    font-size: 12px;
+    font-size: 13px;
     line-height: 16px;
   }
   .chips {
@@ -477,7 +477,7 @@
     border-color: var(--danger);
   }
   .chip {
-    font-size: 11.5px;
+    font-size: 12.5px;
     padding-right: 2px;
   }
   .chip .x {
@@ -492,7 +492,7 @@
     outline: none;
     background: transparent;
     color: var(--text);
-    font-size: 12.5px;
+    font-size: 13.5px;
   }
   .spacer {
     flex: 1 1 auto;

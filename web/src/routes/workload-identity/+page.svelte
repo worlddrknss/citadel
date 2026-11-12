@@ -515,7 +515,7 @@
   }
   .sub {
     display: block;
-    font-size: 11.5px;
+    font-size: 12.5px;
   }
   .chips {
     display: inline-flex;
@@ -524,7 +524,7 @@
     align-items: center;
   }
   .chips .badge {
-    font-size: 11.5px;
+    font-size: 12.5px;
   }
   .select.inline {
     width: auto;
