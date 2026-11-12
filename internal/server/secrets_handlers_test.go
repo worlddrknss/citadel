@@ -286,6 +286,16 @@ func TestChangeRequestLifecycle(t *testing.T) {
 	if ch["change"] != "modified" || prev["length"] != float64(9) || prop["length"] != float64(9) || prev["sha256"] == prop["sha256"] || len(prop["sha256"].(string)) != 12 || prev["version"] != "v1" || prop["version"] != "v2" {
 		t.Fatalf("changes = %v", ch)
 	}
+	if prop["fingerprint"] != "hmac:"+prop["sha256"].(string) {
+		t.Fatalf("proposed fingerprint = %v", prop)
+	}
+	if b["canReject"] != true {
+		t.Fatal("requester may not withdraw their request")
+	}
+	_, lb := e.do("bob", "GET", "/v1/change-requests", nil)
+	if row := lb["changeRequests"].([]any)[0].(map[string]any); row["canApprove"] != true || row["approvalsRequired"] != float64(2) || row["approvals"] != float64(0) {
+		t.Fatalf("list row for an approver = %v", row)
+	}
 	if b["comment"] != "rotate" || b["requesterRole"] != "editor" {
 		t.Fatalf("detail = %v", b)
 	}

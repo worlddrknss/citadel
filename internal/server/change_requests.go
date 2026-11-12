@@ -205,7 +205,7 @@ func (s *Server) newChangeRequest(ctx context.Context, sess *uiSession, coord it
 
 // handleV1ListChangeRequests lists the caller account's change requests.
 func (s *Server) handleV1ListChangeRequests(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.secretsSession(w, r, "viewer")
+	sess, ctx, ok := s.secretsSession(w, r, "viewer")
 	if !ok {
 		return
 	}
@@ -217,7 +217,18 @@ func (s *Server) handleV1ListChangeRequests(w http.ResponseWriter, r *http.Reque
 	}
 	out := make([]map[string]any, 0, len(requests))
 	for _, cr := range requests {
-		out = append(out, changeRequestSummaryJSON(cr))
+		item := changeRequestSummaryJSON(cr)
+		// Pending requests say whether the caller may approve them, so the
+		// console can count "waiting for me" without a detail call each.
+		if cr.Status == store.ChangeRequestPending {
+			item["approvals"] = len(cr.Approvals)
+			if policy, err := s.policyForRequest(ctx, cr); err == nil {
+				item["approvalsRequired"] = policy.ApprovalsRequired
+				item["approverRoles"] = policy.ApproverRoles
+				item["canApprove"] = approvalBlocker(sess, cr, policy) == ""
+			}
+		}
+		out = append(out, item)
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{"changeRequests": out})
 }
@@ -273,14 +284,14 @@ func (s *Server) handleV1ChangeRequestDetail(w http.ResponseWriter, r *http.Requ
 		ordinals, total := s.versionOrdinals(ctx, coord.backingName())
 		if prev, ok := s.previousValue(ctx, coord, cr); ok {
 			change["change"] = "modified"
-			fp := map[string]any{"sha256": s.valueFingerprint(*prev.SecretString), "length": utf8.RuneCountInString(*prev.SecretString)}
+			fp := s.fingerprintJSON(*prev.SecretString, utf8.RuneCountInString(*prev.SecretString))
 			if n := ordinals[prev.VersionID]; n > 0 {
 				fp["version"] = "v" + strconv.Itoa(n)
 			}
 			change["previous"] = fp
 		}
 		if proposed, err := s.openProposedValue(ctx, cr); err == nil {
-			fp := map[string]any{"sha256": s.valueFingerprint(proposed), "length": cr.ProposedLength}
+			fp := s.fingerprintJSON(proposed, cr.ProposedLength)
 			if cr.Status == store.ChangeRequestPending {
 				fp["version"] = "v" + strconv.Itoa(total+1)
 			}
@@ -309,7 +320,26 @@ func (s *Server) handleV1ChangeRequestDetail(w http.ResponseWriter, r *http.Requ
 	if reason != "" {
 		out["cannotApproveReason"] = reason
 	}
+	out["canReject"] = canReject(sess, cr, policy)
 	writeNativeJSON(w, http.StatusOK, out)
+}
+
+// fingerprintJSON describes a value without revealing it: its keyed
+// fingerprint ("hmac:" + 12 hex, the same form as the secret detail's
+// fingerprint) and its length. "sha256" carries the bare hex for older
+// consoles; despite the name it is the keyed HMAC, never a plain hash.
+func (s *Server) fingerprintJSON(value string, length int) map[string]any {
+	fp := s.valueFingerprint(value)
+	return map[string]any{"fingerprint": "hmac:" + fp, "sha256": fp, "length": length}
+}
+
+// canReject reports whether sess may reject cr: approvers per the policy, and
+// the requester withdrawing their own request (see handleV1RejectChangeRequest).
+func canReject(sess *uiSession, cr store.ChangeRequestRecord, p store.ApprovalPolicy) bool {
+	if sess == nil || cr.Status != store.ChangeRequestPending || !uiRoleAtLeast(sess.Role, "editor") {
+		return false
+	}
+	return sess.Principal() == cr.Requester || approverRoleAllowed(sess.Role, p.ApproverRoles)
 }
 
 // previousValue is the value a request replaces: the item's current value
