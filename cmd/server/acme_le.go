@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/worlddrknss/citadel/internal/cryptoutil"
 	"golang.org/x/crypto/acme"
 )
 
@@ -159,7 +160,7 @@ func (s *server) loadOrCreateACMEClient(ctx context.Context, directoryURL, conta
 			return nil, fmt.Errorf("marshal account key: %w", mErr)
 		}
 		account = acmeLEAccount{
-			ID:            randomHex(12),
+			ID:            cryptoutil.RandomHex(12),
 			DirectoryURL:  directoryURL,
 			ContactEmail:  contactEmail,
 			AccountKeyDER: der,
@@ -323,7 +324,7 @@ func (s *server) finalizeAndStoreLECert(ctx context.Context, client *acme.Client
 	}
 
 	cert := acmeLECertificate{
-		CertID:       randomHex(12),
+		CertID:       cryptoutil.RandomHex(12),
 		DirectoryURL: directoryURL,
 		Domains:      strings.Join(domains, ","),
 		Serial:       leaf.SerialNumber.String(),
@@ -407,7 +408,7 @@ func (s *server) beginLEDNSOrder(ctx context.Context, domains []string) (string,
 	}
 
 	orderRec := acmeLEOrder{
-		OrderID:      randomHex(12),
+		OrderID:      cryptoutil.RandomHex(12),
 		OrderURL:     order.URI,
 		DirectoryURL: directoryURL,
 		Domains:      strings.Join(domains, ","),

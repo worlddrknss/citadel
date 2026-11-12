@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/cryptoutil"
 )
 
 // acmeLEAccount is a persisted ACME (Let's Encrypt) account, scoped to a single
@@ -58,7 +60,7 @@ type acmeLEOrder struct {
 // CreateACMELEOrder persists a pending manual DNS-01 order scoped to the caller.
 func (s *dbStore) CreateACMELEOrder(ctx context.Context, order acmeLEOrder) error {
 	if order.OrderID == "" {
-		order.OrderID = randomHex(12)
+		order.OrderID = cryptoutil.RandomHex(12)
 	}
 	if order.Status == "" {
 		order.Status = "pending"
@@ -142,7 +144,7 @@ WHERE directory_url = $1
 // UpsertACMELEAccount inserts or updates the ACME account for its directory URL.
 func (s *dbStore) UpsertACMELEAccount(ctx context.Context, account acmeLEAccount) error {
 	if account.ID == "" {
-		account.ID = randomHex(12)
+		account.ID = cryptoutil.RandomHex(12)
 	}
 	wrappedB64, nonceB64, err := s.wrapKeyMaterial(account.ID, account.AccountKeyDER)
 	if err != nil {
@@ -174,7 +176,7 @@ ON CONFLICT (directory_url) DO UPDATE SET
 // private key.
 func (s *dbStore) CreateACMELECertificate(ctx context.Context, cert acmeLECertificate) error {
 	if cert.CertID == "" {
-		cert.CertID = randomHex(12)
+		cert.CertID = cryptoutil.RandomHex(12)
 	}
 	wrappedB64, nonceB64, err := s.wrapKeyMaterial(cert.CertID, cert.KeyDER)
 	if err != nil {

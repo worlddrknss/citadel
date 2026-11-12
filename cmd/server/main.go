@@ -2,12 +2,8 @@ package main
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
@@ -27,12 +23,12 @@ import (
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/arn"
+	"github.com/worlddrknss/citadel/internal/cryptoutil"
 
 	_ "github.com/lib/pq"
 )
 
 const (
-	cipherBlobVersionV1 byte = 1
 
 	// appName is the user-facing product name used in logs and UI.
 	appName = "Citadel"
@@ -974,10 +970,10 @@ func loadConfig() (config, error) {
 		cfg.wrappingKey = wrappingKey
 	}
 	if len(cfg.wrappingKey) == 0 && len(cfg.legacyMasterKey) == 32 {
-		cfg.wrappingKey = deriveWrappingKeyHKDF(cfg.legacyMasterKey)
+		cfg.wrappingKey = cryptoutil.DeriveWrappingKeyHKDF(cfg.legacyMasterKey)
 		// Retain the previous (v1) derivation so key material wrapped before the
 		// HKDF upgrade can still be unwrapped.
-		cfg.legacyWrappingKey = deriveWrappingKey(cfg.legacyMasterKey)
+		cfg.legacyWrappingKey = cryptoutil.DeriveWrappingKey(cfg.legacyMasterKey)
 	}
 
 	if cfg.dbConnString == "" && len(cfg.legacyMasterKey) == 0 {
@@ -1003,7 +999,7 @@ func buildStore(cfg config) (keyStore, func(), error) {
 		}
 		legacyKeyID := strings.TrimSpace(cfg.legacyKeyID)
 		if legacyKeyID == "" {
-			legacyKeyID = deriveDeterministicLegacyKeyID(cfg.legacyMasterKey)
+			legacyKeyID = cryptoutil.DeriveDeterministicLegacyKeyID(cfg.legacyMasterKey)
 		}
 		region := arn.EffectiveRegion(cfg.awsRegion)
 		accountID := cfg.awsAccountID
@@ -1617,9 +1613,9 @@ func maybeBootstrapFromLegacy(ctx context.Context, cfg config, store keyStore) e
 		if existing, err := store.ResolveDefault(ctx); err == nil && strings.TrimSpace(existing.ID) != "" {
 			legacyKeyID = existing.ID
 		} else if cfg.dbConnString == "" {
-			legacyKeyID = deriveDeterministicLegacyKeyID(cfg.legacyMasterKey)
+			legacyKeyID = cryptoutil.DeriveDeterministicLegacyKeyID(cfg.legacyMasterKey)
 		} else {
-			legacyKeyID = randomHex(12)
+			legacyKeyID = cryptoutil.RandomHex(12)
 		}
 	}
 	k := kmsKey{
@@ -1941,7 +1937,7 @@ func (s *server) handleEncrypt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cipherBlob, err := encryptBlob(key.MasterKeyRaw, key.ID, plaintext, canonicalContext(req.EncryptionContext))
+	cipherBlob, err := cryptoutil.EncryptBlob(key.MasterKeyRaw, key.ID, plaintext, cryptoutil.CanonicalContext(req.EncryptionContext))
 	if err != nil {
 		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "encrypt failed")
@@ -1978,7 +1974,7 @@ func (s *server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keyID, rawBlob, err := decodeCipherBlob(cipherBlob)
+	keyID, rawBlob, err := cryptoutil.DecodeCipherBlob(cipherBlob)
 	if err != nil {
 		s.recordAudit(r.Context(), auditEvent{Action: action, Result: "error", ErrorType: "InvalidCiphertextException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidCiphertextException", "decrypt failed")
@@ -2007,7 +2003,7 @@ func (s *server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plaintext, err := decryptBlob(key.MasterKeyRaw, rawBlob, canonicalContext(req.EncryptionContext))
+	plaintext, err := cryptoutil.DecryptBlob(key.MasterKeyRaw, rawBlob, cryptoutil.CanonicalContext(req.EncryptionContext))
 	if err != nil {
 		s.recordAudit(r.Context(), auditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidCiphertextException", Actor: r.RemoteAddr})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidCiphertextException", "decrypt failed")
@@ -2656,7 +2652,7 @@ func (s *dbStore) CreateKey(ctx context.Context, description, keyUsage, keySpec 
 	if err != nil {
 		return kmsKey{}, err
 	}
-	id := randomHex(12)
+	id := cryptoutil.RandomHex(12)
 	k := kmsKey{
 		ID:           id,
 		ARN:          s.keyARNForCtx(ctx, id),
@@ -2690,7 +2686,7 @@ func (s *dbStore) ImportSigningKey(ctx context.Context, description string, priv
 	if err != nil {
 		return kmsKey{}, err
 	}
-	id := randomHex(12)
+	id := cryptoutil.RandomHex(12)
 	k := kmsKey{
 		ID:           id,
 		ARN:          s.keyARNForCtx(ctx, id),
@@ -3000,8 +2996,8 @@ func (s *dbStore) ForceDeleteKey(ctx context.Context, keyID string) error {
 
 func (s *dbStore) CreateGrant(ctx context.Context, req createGrantRequest) (kmsGrant, error) {
 	grant := kmsGrant{
-		GrantID:           "grant-" + randomHex(12),
-		GrantToken:        randomHex(16),
+		GrantID:           "grant-" + cryptoutil.RandomHex(12),
+		GrantToken:        cryptoutil.RandomHex(16),
 		KeyID:             req.KeyID,
 		GranteePrincipal:  strings.TrimSpace(req.GranteePrincipal),
 		RetiringPrincipal: strings.TrimSpace(req.RetiringPrincipal),
@@ -3249,8 +3245,8 @@ func (s *inMemoryStore) CreateGrant(_ context.Context, req createGrantRequest) (
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	grant := kmsGrant{
-		GrantID:           "grant-" + randomHex(12),
-		GrantToken:        randomHex(16),
+		GrantID:           "grant-" + cryptoutil.RandomHex(12),
+		GrantToken:        cryptoutil.RandomHex(16),
 		KeyID:             req.KeyID,
 		GranteePrincipal:  strings.TrimSpace(req.GranteePrincipal),
 		RetiringPrincipal: strings.TrimSpace(req.RetiringPrincipal),
@@ -3361,12 +3357,12 @@ func (s *dbStore) wrapKeyMaterial(keyID string, raw []byte) (string, string, err
 	}
 	// Bind the key ID as additional authenticated data so a wrapped blob cannot
 	// be transplanted onto a different key row.
-	sealed, err := gcmSeal(s.wrappingKey, raw, []byte(keyID))
+	sealed, err := cryptoutil.GCMSeal(s.wrappingKey, raw, []byte(keyID))
 	if err != nil {
 		return "", "", err
 	}
 	// Stored as separate ciphertext and nonce columns, as before.
-	nonce, wrapped := sealed[:gcmNonceSize], sealed[gcmNonceSize:]
+	nonce, wrapped := sealed[:cryptoutil.GCMNonceSize], sealed[cryptoutil.GCMNonceSize:]
 	return base64.StdEncoding.EncodeToString(wrapped), base64.StdEncoding.EncodeToString(nonce), nil
 }
 
@@ -3406,7 +3402,7 @@ func (s *dbStore) unwrapKeyMaterial(keyID, wrappedB64, nonceB64 string) ([]byte,
 	blob := append(append(make([]byte, 0, len(nonce)+len(wrapped)), nonce...), wrapped...)
 	var lastErr error
 	for _, c := range candidates {
-		if out, err := gcmOpen(c.key, blob, c.aad); err == nil {
+		if out, err := cryptoutil.GCMOpen(c.key, blob, c.aad); err == nil {
 			return out, nil
 		} else {
 			lastErr = err
@@ -3481,107 +3477,6 @@ func withRequestLogging(next http.Handler) http.Handler {
 		log.Printf("%s %s target=%s", r.Method, r.URL.Path, r.Header.Get("X-Amz-Target"))
 		next.ServeHTTP(w, r)
 	})
-}
-
-func canonicalContext(ctx map[string]string) []byte {
-	if len(ctx) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(ctx))
-	for k := range ctx {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var b strings.Builder
-	for _, k := range keys {
-		b.WriteString(k)
-		b.WriteByte('=')
-		b.WriteString(ctx[k])
-		b.WriteByte('\n')
-	}
-	sum := sha256.Sum256([]byte(b.String()))
-	return sum[:]
-}
-
-// AES-GCM with the nonce generated inside Go's FIPS 140-3 module
-// (cipher.NewGCMWithRandomNonce): FIPS 140-only mode refuses GCM with
-// caller-supplied IVs. Its output is nonce || ciphertext || tag, the same
-// layout citadel has always stored, so existing data decrypts unchanged.
-const gcmNonceSize = 12
-
-func gcmSeal(key, plaintext, aad []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	aead, err := cipher.NewGCMWithRandomNonce(block)
-	if err != nil {
-		return nil, err
-	}
-	return aead.Seal(nil, nil, plaintext, aad), nil
-}
-
-func gcmOpen(key, blob, aad []byte) ([]byte, error) {
-	if len(blob) <= gcmNonceSize {
-		return nil, errors.New("ciphertext too short")
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	aead, err := cipher.NewGCMWithRandomNonce(block)
-	if err != nil {
-		return nil, err
-	}
-	return aead.Open(nil, nil, blob, aad)
-}
-
-func encryptBlob(masterKey []byte, keyID string, plaintext, aad []byte) ([]byte, error) {
-	raw, err := gcmSeal(masterKey, plaintext, aad)
-	if err != nil {
-		return nil, err
-	}
-	return encodeCipherBlob(keyID, raw), nil
-}
-
-func encryptLegacyBlob(masterKey, plaintext, aad []byte) ([]byte, error) {
-	return gcmSeal(masterKey, plaintext, aad)
-}
-
-func decryptBlob(masterKey, blob, aad []byte) ([]byte, error) {
-	return gcmOpen(masterKey, blob, aad)
-}
-
-func decodeCipherBlob(blob []byte) (string, []byte, error) {
-	if len(blob) < 2 || blob[0] != cipherBlobVersionV1 {
-		return "", blob, nil
-	}
-	keyLen := int(blob[1])
-	if len(blob) < 2+keyLen {
-		return "", blob, nil
-	}
-	keyID := string(blob[2 : 2+keyLen])
-	raw := blob[2+keyLen:]
-	if len(raw) < 12+16 {
-		return "", blob, nil
-	}
-	return keyID, raw, nil
-}
-
-func encodeCipherBlob(keyID string, raw []byte) []byte {
-	if keyID == "" {
-		return raw
-	}
-	keyBytes := []byte(keyID)
-	if len(keyBytes) > 255 {
-		return raw
-	}
-	out := make([]byte, 0, 2+len(keyBytes)+len(raw))
-	out = append(out, cipherBlobVersionV1)
-	out = append(out, byte(len(keyBytes)))
-	out = append(out, keyBytes...)
-	out = append(out, raw...)
-	return out
 }
 
 func decodeJSONBody(r *http.Request, target any) error {
@@ -3673,14 +3568,6 @@ func envDurationOrDefault(key string, fallback time.Duration) time.Duration {
 	return d
 }
 
-func randomHex(n int) string {
-	b := make([]byte, n)
-	if _, err := io.ReadFull(rand.Reader, b); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(b)
-}
-
 // hashAuditRecord computes the chain hash for an audit record. When key is
 // non-empty it produces an HMAC-SHA256 (authenticity: an attacker with DB write
 // access cannot forge a valid chain without the key); otherwise it falls back to
@@ -3694,26 +3581,6 @@ func hashAuditRecord(key []byte, prevHash string, event auditEvent, ts string) s
 	}
 	h := sha256.Sum256(payload)
 	return hex.EncodeToString(h[:])
-}
-
-func deriveDeterministicLegacyKeyID(masterKey []byte) string {
-	sum := sha256.Sum256(masterKey)
-	return hex.EncodeToString(sum[:8])
-}
-
-func deriveWrappingKey(legacyMasterKey []byte) []byte {
-	seed := append([]byte("go-kms-wrap-v1|"), legacyMasterKey...)
-	sum := sha256.Sum256(seed)
-	out := make([]byte, 32)
-	copy(out, sum[:])
-	return out
-}
-
-func compareSecret(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 func (s *server) authorizeKeyAction(ctx context.Context, r *http.Request, key kmsKey, action string) error {

@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/cryptoutil"
 )
 
 // Native Citadel admin/action API (/v1)
@@ -68,7 +70,7 @@ func (s *server) handleV1Login(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		stored = user.storedCredential()
 	}
-	if !verifyPassword(stored, req.Password) || !ok {
+	if !cryptoutil.VerifyPassword(stored, req.Password) || !ok {
 		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid credentials")
 		return
 	}
@@ -98,7 +100,7 @@ func (s *server) handleV1Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionID := randomHex(24)
+	sessionID := cryptoutil.RandomHex(24)
 	now := time.Now().UTC()
 	session := uiSession{
 		SessionID:   sessionID,
@@ -415,11 +417,11 @@ func (s *server) handleV1ChangePassword(w http.ResponseWriter, r *http.Request) 
 		writeNativeError(w, http.StatusNotFound, "not_found", "user not found")
 		return
 	}
-	if !verifyPassword(current.storedCredential(), req.CurrentPassword) {
+	if !cryptoutil.VerifyPassword(current.storedCredential(), req.CurrentPassword) {
 		writeNativeError(w, http.StatusForbidden, "forbidden", "current password is incorrect")
 		return
 	}
-	hashed, err := hashPassword(req.NewPassword)
+	hashed, err := cryptoutil.HashPassword(req.NewPassword)
 	if err != nil {
 		writeNativeError(w, http.StatusInternalServerError, "update_failed", "failed to hash password")
 		return
@@ -513,7 +515,7 @@ func (s *server) handleV1UpsertUser(w http.ResponseWriter, r *http.Request) {
 			writeNativeError(w, http.StatusBadRequest, "invalid_request", "password must be at least 8 characters")
 			return
 		}
-		hashed, err := hashPassword(req.Password)
+		hashed, err := cryptoutil.HashPassword(req.Password)
 		if err != nil {
 			writeNativeError(w, http.StatusInternalServerError, "create_failed", "failed to hash password")
 			return
@@ -998,10 +1000,10 @@ func (s *server) handleV1CompleteLEDNSOrder(w http.ResponseWriter, r *http.Reque
 // an outdated PBKDF2 hash) with a current PBKDF2 hash, in the database and in
 // memory. Failures are logged, never fatal: the login already succeeded.
 func (s *server) rehashOnLogin(ctx context.Context, runtime *uiRuntime, user uiUserConfig, password string) {
-	if !needsRehash(user.storedCredential()) {
+	if !cryptoutil.NeedsRehash(user.storedCredential()) {
 		return
 	}
-	hashed, err := hashPassword(password)
+	hashed, err := cryptoutil.HashPassword(password)
 	if err != nil {
 		log.Printf("password rehash for %q: %v", user.Username, err)
 		return

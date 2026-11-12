@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/cryptoutil"
 )
 
 func TestEncryptDecryptRoundTrip(t *testing.T) {
@@ -95,7 +97,7 @@ func TestDecryptLegacyBlobCompatibility(t *testing.T) {
 	mux.HandleFunc("/", s.handleKMS)
 
 	plaintext := []byte("legacy-ciphertext")
-	rawBlob, err := encryptLegacyBlob(k.MasterKeyRaw, plaintext, canonicalContext(map[string]string{"a": "b"}))
+	rawBlob, err := cryptoutil.EncryptLegacyBlob(k.MasterKeyRaw, plaintext, cryptoutil.CanonicalContext(map[string]string{"a": "b"}))
 	if err != nil {
 		t.Fatalf("encrypt legacy blob: %v", err)
 	}
@@ -253,7 +255,7 @@ func TestDeriveDeterministicLegacyKeyID(t *testing.T) {
 	master := bytes.Repeat([]byte{7}, 32)
 	sum := sha256.Sum256(master)
 	want := hex.EncodeToString(sum[:8])
-	got := deriveDeterministicLegacyKeyID(master)
+	got := cryptoutil.DeriveDeterministicLegacyKeyID(master)
 	if got != want {
 		t.Fatalf("unexpected key id: got %s want %s", got, want)
 	}
@@ -263,8 +265,8 @@ func TestDeriveDeterministicLegacyKeyID(t *testing.T) {
 }
 
 func TestDecodeCipherBlobLegacyFallbackOnMalformedHeader(t *testing.T) {
-	legacy := []byte{cipherBlobVersionV1, 250, 1, 2, 3, 4}
-	keyID, raw, err := decodeCipherBlob(legacy)
+	legacy := []byte{cryptoutil.CipherBlobVersionV1, 250, 1, 2, 3, 4}
+	keyID, raw, err := cryptoutil.DecodeCipherBlob(legacy)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

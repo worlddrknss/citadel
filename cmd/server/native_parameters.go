@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/cryptoutil"
 )
 
 // Native (/v1/parameters) Parameter Store API consumed by the Citadel SPA. It
@@ -41,11 +43,11 @@ func (s *server) decryptParameterValue(ctx context.Context, keyID, cipherB64 str
 	if err != nil {
 		return "", err
 	}
-	_, rawBlob, err := decodeCipherBlob(encoded)
+	_, rawBlob, err := cryptoutil.DecodeCipherBlob(encoded)
 	if err != nil {
 		return "", err
 	}
-	raw, err := decryptBlob(key.MasterKeyRaw, rawBlob, nil)
+	raw, err := cryptoutil.DecryptBlob(key.MasterKeyRaw, rawBlob, nil)
 	if err != nil {
 		return "", err
 	}

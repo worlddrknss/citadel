@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/arn"
+	"github.com/worlddrknss/citadel/internal/cryptoutil"
 )
 
 // managedDefaultAlias is the per-account alias that always resolves to that
@@ -110,7 +111,7 @@ func (s *dbStore) EnsureAccountDefaultKey(ctx context.Context, accountID string)
 		if gerr != nil {
 			return kmsKey{}, gerr
 		}
-		keyID = randomHex(12)
+		keyID = cryptoutil.RandomHex(12)
 		wrappedB64, nonceB64, werr := s.wrapKeyMaterial(keyID, raw)
 		if werr != nil {
 			return kmsKey{}, werr

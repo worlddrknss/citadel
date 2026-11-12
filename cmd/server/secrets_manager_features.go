@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/cryptoutil"
 )
 
 const pendingVersionStage = "AWSPENDING"
@@ -477,7 +479,7 @@ func (s *dbStore) RotateSecret(ctx context.Context, secretID, rotationLambdaARN 
 	if rotateImmediately {
 		pendingVersionID := clientRequestToken
 		if pendingVersionID == "" {
-			pendingVersionID = randomHex(16)
+			pendingVersionID = cryptoutil.RandomHex(16)
 		}
 		currentVersion, err := s.loadSecretVersion(ctx, meta.Name, meta.CurrentVersionID)
 		if err != nil {
@@ -737,7 +739,7 @@ func (s *inMemoryStore) RotateSecret(ctx context.Context, secretID, rotationLamb
 		}
 		versionID = clientRequestToken
 		if versionID == "" {
-			versionID = randomHex(16)
+			versionID = cryptoutil.RandomHex(16)
 		}
 		var putReq putSecretValueRequest
 		if currentValue.SecretString != nil {

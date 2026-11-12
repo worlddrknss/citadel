@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/cryptoutil"
 )
 
 func (s *server) handleCreateCertificateAuthority(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +53,7 @@ func (s *server) handleCreateCertificateAuthority(w http.ResponseWriter, r *http
 	}
 
 	// For now, record the CA as CREATING and will need root cert to transition to ACTIVE
-	caID := randomHex(12)
+	caID := cryptoutil.RandomHex(12)
 	caARN := s.serverARN("acm-pca", "certificate-authority/"+caID)
 
 	// TODO: Build and self-sign root cert or accept cert for subordinate
@@ -234,7 +236,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Store the certificate in the database
-	certID := randomHex(12)
+	certID := cryptoutil.RandomHex(12)
 	certARN := s.serverARN("acm-pca", "certificate/"+certID)
 
 	// Parse certificate to get serial number and validity

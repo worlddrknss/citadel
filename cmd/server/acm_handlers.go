@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/cryptoutil"
 )
 
 // ACM handlers provide a simple certificate request/management interface backed by Private CA
@@ -94,7 +96,7 @@ func (s *server) handleACMRequestCertificate(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Store certificate
-	certID := randomHex(12)
+	certID := cryptoutil.RandomHex(12)
 	certARN := s.serverARN("acm", "certificate/"+certID)
 
 	parsedCert, err := x509.ParseCertificate(certDER)

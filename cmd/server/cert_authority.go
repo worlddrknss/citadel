@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/cryptoutil"
 )
 
 // Certificate-authority business logic shared by the native Citadel /v1
@@ -64,7 +66,7 @@ func (s *server) adminCreateCA(r *http.Request) (string, error) {
 		return "", err
 	}
 
-	caID := randomHex(12)
+	caID := cryptoutil.RandomHex(12)
 	caARN := s.serverARN("acm-pca", "certificate-authority/"+caID)
 	ca := pcaCertificateAuthority{
 		CAID:      caID,
@@ -185,7 +187,7 @@ func (s *server) adminIssueCert(r *http.Request) error {
 		return err
 	}
 	cert := pcaCertificate{
-		CertID:    randomHex(12),
+		CertID:    cryptoutil.RandomHex(12),
 		CAID:      ca.CAID,
 		Serial:    parsedCert.SerialNumber.String(),
 		CSRB64:    base64.StdEncoding.EncodeToString([]byte(csrPEM)),
@@ -285,7 +287,7 @@ func (s *server) adminImportCA(r *http.Request) (string, error) {
 	if certIsSelfSigned(caCert) {
 		caType = "ROOT"
 	}
-	caID := randomHex(12)
+	caID := cryptoutil.RandomHex(12)
 	ca := pcaCertificateAuthority{
 		CAID:        caID,
 		ARN:         s.serverARN("acm-pca", "certificate-authority/"+caID),
@@ -370,7 +372,7 @@ func (s *server) adminRenewCert(r *http.Request) error {
 		return err
 	}
 	cert := pcaCertificate{
-		CertID:    randomHex(12),
+		CertID:    cryptoutil.RandomHex(12),
 		CAID:      ca.CAID,
 		Serial:    parsedCert.SerialNumber.String(),
 		CSRB64:    prev.CSRB64,

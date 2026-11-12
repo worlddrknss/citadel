@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/cryptoutil"
 )
 
 // awsTimestamp marshals a time.Time as an AWS JSON 1.1 protocol epoch-seconds
@@ -700,7 +702,7 @@ func (s *dbStore) CreateSecret(ctx context.Context, req createSecretRequest) (se
 	name := strings.TrimSpace(req.Name)
 	versionID := req.ClientRequestToken
 	if versionID == "" {
-		versionID = randomHex(16)
+		versionID = cryptoutil.RandomHex(16)
 	}
 	kmsKeyID, encryptedPayloadB64, isBinary, err := buildSecretCiphertext(ctx, s.ResolveByID, s.ResolveDefault, req.KMSKeyID, req.SecretString, req.SecretBinary)
 	if err != nil {
@@ -786,7 +788,7 @@ func (s *dbStore) PutSecretValue(ctx context.Context, req putSecretValueRequest)
 	}
 	versionID := req.ClientRequestToken
 	if versionID == "" {
-		versionID = randomHex(16)
+		versionID = cryptoutil.RandomHex(16)
 	}
 	if existing, err := s.loadSecretVersionByToken(ctx, meta.Name, versionID); err == nil {
 		return buildSecretValueRecord(ctx, s.ResolveByID, meta, existing)
@@ -861,7 +863,7 @@ func (s *dbStore) UpdateSecret(ctx context.Context, req updateSecretRequest) (se
 	if req.SecretString != "" || req.SecretBinary != "" {
 		versionID := req.ClientRequestToken
 		if versionID == "" {
-			versionID = randomHex(16)
+			versionID = cryptoutil.RandomHex(16)
 		}
 		if existing, err := s.loadSecretVersionByToken(ctx, meta.Name, versionID); err == nil {
 			built, buildErr := buildSecretValueRecord(ctx, s.ResolveByID, meta, existing)
@@ -1090,7 +1092,7 @@ func (s *inMemoryStore) CreateSecret(ctx context.Context, req createSecretReques
 	}
 	versionID := req.ClientRequestToken
 	if versionID == "" {
-		versionID = randomHex(16)
+		versionID = cryptoutil.RandomHex(16)
 	}
 	kmsKeyID, encryptedPayloadB64, isBinary, err := buildSecretCiphertext(ctx, s.ResolveByID, s.ResolveDefault, req.KMSKeyID, req.SecretString, req.SecretBinary)
 	if err != nil {
@@ -1177,7 +1179,7 @@ func (s *inMemoryStore) putSecretValueLocked(ctx context.Context, req putSecretV
 	}
 	versionID := req.ClientRequestToken
 	if versionID == "" {
-		versionID = randomHex(16)
+		versionID = cryptoutil.RandomHex(16)
 	}
 	if existingVersionID, ok := secret.byToken[versionID]; ok {
 		version := secret.versions[existingVersionID]
@@ -1355,7 +1357,7 @@ func buildSecretCiphertext(ctx context.Context, resolveByID func(context.Context
 	} else {
 		raw = []byte(secretString)
 	}
-	cipherBlob, err := encryptBlob(key.MasterKeyRaw, key.ID, raw, nil)
+	cipherBlob, err := cryptoutil.EncryptBlob(key.MasterKeyRaw, key.ID, raw, nil)
 	if err != nil {
 		return "", "", false, err
 	}
@@ -1371,11 +1373,11 @@ func buildSecretValueRecord(ctx context.Context, resolveByID func(context.Contex
 	if err != nil {
 		return secretValueRecord{}, err
 	}
-	_, rawBlob, err := decodeCipherBlob(encoded)
+	_, rawBlob, err := cryptoutil.DecodeCipherBlob(encoded)
 	if err != nil {
 		return secretValueRecord{}, err
 	}
-	raw, err := decryptBlob(key.MasterKeyRaw, rawBlob, nil)
+	raw, err := cryptoutil.DecryptBlob(key.MasterKeyRaw, rawBlob, nil)
 	if err != nil {
 		return secretValueRecord{}, err
 	}

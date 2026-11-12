@@ -7,6 +7,8 @@ import (
 	"errors"
 	"sort"
 	"strings"
+
+	"github.com/worlddrknss/citadel/internal/cryptoutil"
 )
 
 // errUIUserNotFound is returned when a UI user lookup or delete targets an
@@ -180,7 +182,7 @@ func mergeDBUIUsers(ctx context.Context, store keyStore, base map[string]uiUserC
 				if strings.TrimSpace(user.Password) == "" {
 					continue
 				}
-				h, err := hashPassword(user.Password)
+				h, err := cryptoutil.HashPassword(user.Password)
 				if err != nil {
 					return merged, err
 				}
