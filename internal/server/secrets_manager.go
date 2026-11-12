@@ -53,6 +53,7 @@ type describeSecretResponse struct {
 	RotationLambdaARN  string              `json:"RotationLambdaARN,omitempty"`
 	NextRotationDate   *store.AWSTimestamp `json:"NextRotationDate,omitempty"`
 	VersionIDsToStages map[string][]string `json:"VersionIdsToStages"`
+	Tags               []tagEntry          `json:"Tags,omitempty"`
 }
 
 type getSecretValueRequest struct {
@@ -145,12 +146,60 @@ type secretListEntry struct {
 	LastChangedDate store.AWSTimestamp  `json:"LastChangedDate"`
 	DeletedDate     *store.AWSTimestamp `json:"DeletedDate,omitempty"`
 	PrimaryRegion   string              `json:"PrimaryRegion,omitempty"`
+	RotationEnabled bool                `json:"RotationEnabled,omitempty"`
+	Tags            []tagEntry          `json:"Tags,omitempty"`
+}
+
+// createSecretRequest is the CreateSecret input: the stored fields plus the
+// ones handled around the store call.
+type createSecretRequest struct {
+	store.CreateSecretRequest
+	Tags              []tagEntry      `json:"Tags"`
+	AddReplicaRegions json.RawMessage `json:"AddReplicaRegions"`
+}
+
+// validateSecretTags applies the AWS tag limits.
+func validateSecretTags(tags []tagEntry) error {
+	if len(tags) > 50 {
+		return errors.New("a secret can have at most 50 tags")
+	}
+	for _, t := range tags {
+		if k := strings.TrimSpace(t.Key); k == "" || len(k) > 128 {
+			return errors.New("tag keys must be 1 to 128 characters")
+		}
+		if len(t.Value) > 256 {
+			return errors.New("tag values must be at most 256 characters")
+		}
+	}
+	return nil
+}
+
+func tagEntriesFrom(tags []store.SecretTag) []tagEntry {
+	if len(tags) == 0 {
+		return nil
+	}
+	out := make([]tagEntry, 0, len(tags))
+	for _, t := range tags {
+		out = append(out, tagEntry{Key: t.Key, Value: t.Value})
+	}
+	return out
 }
 
 func (s *Server) handleCreateSecret(w http.ResponseWriter, r *http.Request) {
 	const action = "secretsmanager.CreateSecret"
-	var req store.CreateSecretRequest
-	if err := decodeJSONBody(r, &req); err != nil {
+	var wire createSecretRequest
+	if err := decodeJSONBody(r, &wire); err != nil {
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
+		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
+		return
+	}
+	req := wire.CreateSecretRequest
+	if len(wire.AddReplicaRegions) > 0 && string(wire.AddReplicaRegions) != "null" && string(wire.AddReplicaRegions) != "[]" {
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidRequestException", AuditOrigin: s.auditOrigin(r)})
+		writeAWSJSONError(w, http.StatusBadRequest, "InvalidRequestException", "replica regions are not supported")
+		return
+	}
+	if err := validateSecretTags(wire.Tags); err != nil {
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
 		return
@@ -188,6 +237,13 @@ func (s *Server) handleCreateSecret(w http.ResponseWriter, r *http.Request) {
 		secretError(w, err)
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
+	}
+	if len(wire.Tags) > 0 {
+		if err := s.store.TagSecret(r.Context(), meta.Name, toSecretTags(wire.Tags)); err != nil {
+			secretError(w, err)
+			s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
+			return
+		}
 	}
 	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, createSecretResponse{ARN: meta.ARN, Name: meta.Name, VersionID: value.VersionID})
@@ -230,6 +286,7 @@ func (s *Server) handleDescribeSecret(w http.ResponseWriter, r *http.Request) {
 		RotationLambdaARN:  meta.RotationLambdaARN,
 		NextRotationDate:   awsTimePtr(meta.NextRotationDate),
 		VersionIDsToStages: secretVersionStagesMap(meta),
+		Tags:               tagEntriesFrom(meta.Tags),
 	})
 }
 
@@ -544,12 +601,12 @@ func secretFieldMatches(item store.SecretMetadataRecord, key, value string) bool
 		return filterValueMatches(item.Description, value)
 	case filterKeyAll:
 		// "all" searches name, description, and tags together.
-		return filterValueMatches(item.Name, value) || filterValueMatches(item.Description, value)
-	case filterKeyTagKey, filterKeyTagValue:
-		// Tags aren't stored on secrets here, so nothing can match. Reported
-		// rather than pretended: a tag filter that always matches would hand back
-		// the whole store.
-		return false
+		return filterValueMatches(item.Name, value) || filterValueMatches(item.Description, value) ||
+			secretTagMatches(item, value, true) || secretTagMatches(item, value, false)
+	case filterKeyTagKey:
+		return secretTagMatches(item, value, true)
+	case filterKeyTagValue:
+		return secretTagMatches(item, value, false)
 	}
 	return false
 }
@@ -582,17 +639,22 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
 		return
 	}
-	items, err := s.store.ListSecrets(r.Context())
+	after, err := decodeListMarker("s", req.NextToken)
+	if err != nil {
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidNextTokenException", AuditOrigin: s.auditOrigin(r)})
+		writeAWSJSONError(w, http.StatusBadRequest, "InvalidNextTokenException", "NextToken is invalid")
+		return
+	}
+	items, next, err := s.scanSecrets(r.Context(), after, limit, req.IncludePlannedDeletion, func(m store.SecretMetadataRecord) bool {
+		return listableSecret(m, req)
+	})
 	if err != nil {
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InternalServiceError", AuditOrigin: s.auditOrigin(r)})
-		writeAWSJSONError(w, http.StatusInternalServerError, "InternalServiceError", "list secrets failed")
+		writeAWSJSONError(w, http.StatusInternalServerError, "InternalServiceError", "list secrets failed: "+err.Error())
 		return
 	}
 	entries := make([]secretListEntry, 0, len(items))
 	for _, item := range items {
-		if !listableSecret(item, req) {
-			continue
-		}
 		entries = append(entries, secretListEntry{
 			ARN:             item.ARN,
 			Name:            item.Name,
@@ -601,16 +663,27 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 			CreatedDate:     store.AWSTimestamp(item.CreatedAt),
 			LastChangedDate: store.AWSTimestamp(item.LastChangedDate),
 			DeletedDate:     awsTimePtr(item.DeletedDate),
+			RotationEnabled: item.RotationEnabled,
+			Tags:            tagEntriesFrom(item.Tags),
 		})
 	}
-	entries, nextToken, _, err := paginateList(entries, req.NextToken, limit, func(item secretListEntry) string { return item.Name })
-	if err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
-		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		return
-	}
 	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
-	writeJSON(w, http.StatusOK, listSecretsResponse{SecretList: entries, NextToken: nextToken})
+	writeJSON(w, http.StatusOK, listSecretsResponse{SecretList: entries, NextToken: encodeListMarker("s", next)})
+}
+
+// secretTagMatches matches value as a case-insensitive prefix of any tag key
+// (byKey) or tag value.
+func secretTagMatches(item store.SecretMetadataRecord, value string, byKey bool) bool {
+	for _, t := range item.Tags {
+		field := t.Value
+		if byKey {
+			field = t.Key
+		}
+		if filterValueMatches(field, value) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateSecretPayloadFields(secretString, secretBinary string) error {
@@ -678,10 +751,34 @@ func classifySecretError(err error) string {
 	}
 }
 
-func secretError(w http.ResponseWriter, err error) {
+// secretErrorTypeAndMessage maps an error to its AWS code and a message safe
+// to return: fixed text for lookups and access, the validation text for
+// request errors, and the raw error only for internal failures (which
+// writeAWSJSONError logs and replaces).
+func secretErrorTypeAndMessage(err error) (string, string) {
 	typ := classifySecretError(err)
+	switch typ {
+	case "ResourceNotFoundException":
+		return typ, "Secrets Manager can't find the specified secret."
+	case "AccessDeniedException":
+		return typ, "access denied by the secret's resource policy"
+	case "ResourceExistsException":
+		return typ, "The operation failed because the secret already exists."
+	case "InvalidRequestException":
+		if errors.Is(err, store.ErrInvalidSecretVersion) {
+			return "ResourceNotFoundException", "Secrets Manager can't find the specified secret value for the version or staging label."
+		}
+		if errors.Is(err, store.ErrSecretPendingDeletion) || strings.Contains(err.Error(), "scheduled for deletion") {
+			return typ, "You can't perform this operation on the secret because it was marked for deletion."
+		}
+		return typ, err.Error()
+	}
+	return typ, err.Error()
+}
+
+func secretError(w http.ResponseWriter, err error) {
+	typ, msg := secretErrorTypeAndMessage(err)
 	status := http.StatusInternalServerError
-	msg := err.Error()
 	switch typ {
 	case "AccessDeniedException", "ResourceExistsException", "ResourceNotFoundException", "InvalidRequestException", "InvalidParameterException":
 		status = http.StatusBadRequest
@@ -689,12 +786,6 @@ func secretError(w http.ResponseWriter, err error) {
 		// Never hand storage or crypto internals to the client.
 		log.Printf("secrets manager: %v", err)
 		msg = "an internal error occurred"
-	}
-	switch typ {
-	case "ResourceNotFoundException":
-		msg = "Secrets Manager can't find the specified secret."
-	case "ResourceExistsException":
-		msg = "a secret with this name already exists"
 	}
 	writeAWSJSONError(w, status, typ, msg)
 }

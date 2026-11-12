@@ -320,8 +320,9 @@ func TestListKeysPagination(t *testing.T) {
 	if truncated, _ := firstPage["Truncated"].(bool); !truncated {
 		t.Fatalf("expected first page to be truncated: %#v", firstPage)
 	}
+	// Markers are opaque; they must round-trip, not equal a key ID.
 	nextMarker, ok := firstPage["NextMarker"].(string)
-	if !ok || nextMarker != "key-2" {
+	if !ok || nextMarker == "" {
 		t.Fatalf("unexpected next marker: %#v", firstPage["NextMarker"])
 	}
 
@@ -390,7 +391,7 @@ func TestListAliasesPagination(t *testing.T) {
 		t.Fatalf("expected 1 alias on first page, got %d", len(aliasesOut))
 	}
 	nextMarker, ok := firstPage["NextMarker"].(string)
-	if !ok || nextMarker != "alias/app-1" {
+	if !ok || nextMarker == "" {
 		t.Fatalf("unexpected next marker: %#v", firstPage["NextMarker"])
 	}
 	if truncated, _ := firstPage["Truncated"].(bool); !truncated {
@@ -528,12 +529,12 @@ func TestPhaseACompatibilitySuite(t *testing.T) {
 		}
 	})
 
-	t.Run("create key in memory mode returns UnsupportedOperationException", func(t *testing.T) {
+	t.Run("create key with an unsupported origin returns UnsupportedOperationException", func(t *testing.T) {
 		s := &Server{cfg: config.Config{InsecureDev: true}, store: &memory.Store{DefaultKey: sampleKey(1)}}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", s.handleKMS)
 
-		rec := post(t, mux, "TrentService.CreateKey", map[string]any{"Description": "demo"})
+		rec := post(t, mux, "TrentService.CreateKey", map[string]any{"Description": "demo", "Origin": "EXTERNAL"})
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("status got %d want %d", rec.Code, http.StatusBadRequest)
 		}

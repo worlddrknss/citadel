@@ -323,12 +323,14 @@ func (s *Store) UpdateAlias(ctx context.Context, aliasName, keyID string) error 
 	if aliasName == store.ManagedDefaultAlias {
 		return store.ErrImmutableManagedKey
 	}
+	// Alias names are unique per account, so the update must be scoped to the
+	// caller's account or it would re-point other tenants' aliases too.
 	const q = `
 UPDATE kms_aliases
 SET target_key_id = $2, updated_at = NOW()
-WHERE alias_name = $1
+WHERE alias_name = $1 AND account_id = $3
 `
-	res, err := s.db.ExecContext(ctx, q, aliasName, keyID)
+	res, err := s.db.ExecContext(ctx, q, aliasName, keyID, s.accountForContext(ctx))
 	if err != nil {
 		return err
 	}
