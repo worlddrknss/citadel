@@ -140,6 +140,13 @@ func (s *Server) kmsKeyForCrypto(w http.ResponseWriter, r *http.Request, action,
 		s.recordAudit(ctx, store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidKeyUsageException", AuditOrigin: s.auditOrigin(r)})
 		return store.KMSKey{}, false
 	}
+	// RSA ENCRYPT_DECRYPT keys serve Encrypt (RSAES-OAEP) only; data keys and
+	// re-encryption need a symmetric key.
+	if !key.IsSymmetric() && action != "TrentService.Encrypt" {
+		writeAWSJSONError(w, http.StatusBadRequest, "InvalidKeyUsageException", fmt.Sprintf("%s is an asymmetric key, which is not valid for this operation.", kmsKeyARN(key)))
+		s.recordAudit(ctx, store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidKeyUsageException", AuditOrigin: s.auditOrigin(r)})
+		return store.KMSKey{}, false
+	}
 	if typ, msg := kmsKeyStateError(key); typ != "" {
 		writeAWSJSONError(w, http.StatusBadRequest, typ, msg)
 		s.recordAudit(ctx, store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: typ, AuditOrigin: s.auditOrigin(r)})
@@ -242,7 +249,7 @@ func (s *Server) handleGenerateDataKey(w http.ResponseWriter, r *http.Request, w
 		writeAWSJSONError(w, http.StatusInternalServerError, "KMSInternalException", "random: "+err.Error())
 		return
 	}
-	blob, err := cryptoutil.EncryptBlob(key.MasterKeyRaw, key.ID, plaintext, cryptoutil.CanonicalContext(req.EncryptionContext))
+	blob, err := key.EncryptBlob(plaintext, cryptoutil.CanonicalContext(req.EncryptionContext))
 	if err != nil {
 		writeAWSJSONError(w, http.StatusInternalServerError, "KMSInternalException", "encrypt: "+err.Error())
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "KMSInternalException", AuditOrigin: s.auditOrigin(r)})
@@ -323,7 +330,7 @@ func (s *Server) handleGenerateDataKeyPair(w http.ResponseWriter, r *http.Reques
 		writeAWSJSONError(w, http.StatusInternalServerError, "KMSInternalException", "generate key pair: "+err.Error())
 		return
 	}
-	blob, err := cryptoutil.EncryptBlob(key.MasterKeyRaw, key.ID, privDER, cryptoutil.CanonicalContext(req.EncryptionContext))
+	blob, err := key.EncryptBlob(privDER, cryptoutil.CanonicalContext(req.EncryptionContext))
 	if err != nil {
 		writeAWSJSONError(w, http.StatusInternalServerError, "KMSInternalException", "encrypt: "+err.Error())
 		return
@@ -385,7 +392,7 @@ func (s *Server) handleReEncrypt(w http.ResponseWriter, r *http.Request) {
 		s.kmsValidationError(w, r, action, "", "CiphertextBlob must be base64")
 		return
 	}
-	embeddedID, rawBlob, err := cryptoutil.DecodeCipherBlob(raw)
+	embeddedID, _, err := cryptoutil.DecodeCipherBlob(raw)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidCiphertextException", "The ciphertext is invalid.")
 		return
@@ -432,7 +439,7 @@ func (s *Server) handleReEncrypt(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	plaintext, err := cryptoutil.DecryptBlob(src.MasterKeyRaw, rawBlob, cryptoutil.CanonicalContext(req.SourceEncryptionContext))
+	plaintext, err := src.DecryptBlob(raw, cryptoutil.CanonicalContext(req.SourceEncryptionContext))
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidCiphertextException", "The ciphertext is invalid or the encryption context does not match.")
 		s.recordAudit(ctx, store.AuditEvent{Action: action, KeyID: src.ID, Result: "error", ErrorType: "InvalidCiphertextException", AuditOrigin: s.auditOrigin(r)})
@@ -443,7 +450,7 @@ func (s *Server) handleReEncrypt(w http.ResponseWriter, r *http.Request) {
 		s.kmsDryRun(w, r, action, dst.ID)
 		return
 	}
-	blob, err := cryptoutil.EncryptBlob(dst.MasterKeyRaw, dst.ID, plaintext, cryptoutil.CanonicalContext(req.DestinationEncryptionContext))
+	blob, err := dst.EncryptBlob(plaintext, cryptoutil.CanonicalContext(req.DestinationEncryptionContext))
 	if err != nil {
 		writeAWSJSONError(w, http.StatusInternalServerError, "KMSInternalException", "encrypt: "+err.Error())
 		return

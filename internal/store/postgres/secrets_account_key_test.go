@@ -19,8 +19,10 @@ func TestSecretAccountKeyMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, m := range ms {
-		if m.version >= 300 {
-			break
+		// The KMS store code this test drives needs the (idempotent) KMS
+		// migrations 0400-0499; Open re-applies them harmlessly.
+		if m.version >= 300 && (m.version < 400 || m.version >= 500) {
+			continue
 		}
 		if _, err := db.ExecContext(ctx, m.sql); err != nil {
 			t.Fatalf("apply %04d: %v", m.version, err)

@@ -31,13 +31,20 @@ type Config struct {
 	DefaultDenyPolicy bool
 	WrappingKey       []byte
 	LegacyWrappingKey []byte
-	AuditHMACKey      []byte
-	UIUsers           map[string]store.UIUser
-	UISecureCookies   bool
-	SessionIdleTTL    time.Duration
-	SessionAbsTTL     time.Duration
-	TLSCertFile       string
-	TLSKeyFile        string
+	// PreviousWrappingKeys (KMS_PREVIOUS_WRAPPING_KEYS_B64) unwrap material
+	// wrapped before a wrapping-key rotation. See README "Rotating the
+	// wrapping key".
+	PreviousWrappingKeys [][]byte
+	// KMSJobInterval (KMS_JOB_INTERVAL) is how often the KMS background job
+	// rotates due keys and destroys keys past their deletion date.
+	KMSJobInterval  time.Duration
+	AuditHMACKey    []byte
+	UIUsers         map[string]store.UIUser
+	UISecureCookies bool
+	SessionIdleTTL  time.Duration
+	SessionAbsTTL   time.Duration
+	TLSCertFile     string
+	TLSKeyFile      string
 
 	AWSRegion    string
 	AWSAccountID string
@@ -251,6 +258,15 @@ func Load() (Config, error) {
 			return Config{}, errors.New("KMS_WRAPPING_KEY_B64 must decode to exactly 32 bytes")
 		}
 		cfg.WrappingKey = wrappingKey
+	}
+	previous, err := parsePreviousWrappingKeys(os.Getenv("KMS_PREVIOUS_WRAPPING_KEYS_B64"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.PreviousWrappingKeys = previous
+	cfg.KMSJobInterval = envDurationOrDefault("KMS_JOB_INTERVAL", time.Hour)
+	if cfg.KMSJobInterval < time.Minute {
+		cfg.KMSJobInterval = time.Minute
 	}
 	if len(cfg.WrappingKey) == 0 && len(cfg.LegacyMasterKey) == 32 {
 		cfg.WrappingKey = cryptoutil.DeriveWrappingKeyHKDF(cfg.LegacyMasterKey)

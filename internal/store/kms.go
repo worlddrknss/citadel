@@ -63,10 +63,12 @@ func NormalizeKeySpec(keyUsage, keySpec string) (string, error) {
 	}
 	switch keyUsage {
 	case KeyUsageEncryptDecrypt:
-		if keySpec != KeySpecSymmetricDefault {
+		switch keySpec {
+		case KeySpecSymmetricDefault, KeySpecRSA2048, KeySpecRSA3072, KeySpecRSA4096:
+			return keySpec, nil
+		default:
 			return "", fmt.Errorf("invalid key spec %q for %s", keySpec, keyUsage)
 		}
-		return KeySpecSymmetricDefault, nil
 	case KeyUsageSignVerify:
 		switch keySpec {
 		case KeySpecRSA2048, KeySpecRSA3072, KeySpecRSA4096, KeySpecECCP256, KeySpecECCP384:
@@ -87,28 +89,37 @@ func GenerateKeyMaterial(keyUsage, keySpec string) ([]byte, []byte, string, stri
 	}
 	switch keyUsage {
 	case KeyUsageEncryptDecrypt:
+		if normalizedSpec != KeySpecSymmetricDefault {
+			// RSA encryption key (RSAES-OAEP-SHA-256): same material layout
+			// as an RSA signing key.
+			return generateAsymmetricMaterial(KeyUsageEncryptDecrypt, normalizedSpec)
+		}
 		raw := make([]byte, 32)
 		if _, err := rand.Read(raw); err != nil {
 			return nil, nil, "", "", err
 		}
 		return raw, nil, KeyUsageEncryptDecrypt, KeySpecSymmetricDefault, nil
 	case KeyUsageSignVerify:
-		priv, pub, err := generateSigningKey(normalizedSpec)
-		if err != nil {
-			return nil, nil, "", "", err
-		}
-		privDER, err := x509.MarshalPKCS8PrivateKey(priv)
-		if err != nil {
-			return nil, nil, "", "", err
-		}
-		pubDER, err := x509.MarshalPKIXPublicKey(pub)
-		if err != nil {
-			return nil, nil, "", "", err
-		}
-		return privDER, pubDER, KeyUsageSignVerify, normalizedSpec, nil
+		return generateAsymmetricMaterial(KeyUsageSignVerify, normalizedSpec)
 	default:
 		return nil, nil, "", "", fmt.Errorf("unsupported key usage %q", keyUsage)
 	}
+}
+
+func generateAsymmetricMaterial(keyUsage, keySpec string) ([]byte, []byte, string, string, error) {
+	priv, pub, err := generateSigningKey(keySpec)
+	if err != nil {
+		return nil, nil, "", "", err
+	}
+	privDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, nil, "", "", err
+	}
+	pubDER, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return nil, nil, "", "", err
+	}
+	return privDER, pubDER, keyUsage, keySpec, nil
 }
 
 func generateSigningKey(keySpec string) (crypto.PrivateKey, crypto.PublicKey, error) {
@@ -163,6 +174,20 @@ type KMSKey struct {
 	// key reached via alias/default). Managed keys cannot be disabled, deleted,
 	// or re-aliased.
 	Managed bool
+
+	// MasterKeyRaw above is the key's original material. Symmetric keys that
+	// have rotated also carry every later material version here, and
+	// CurrentMaterialID names the one new ciphertext is sealed with ("" means
+	// the original). Use EncryptBlob/DecryptBlob rather than MasterKeyRaw so
+	// rotation is honoured.
+	CurrentMaterialID string
+	Materials         []KeyMaterial
+	// Origin is AWS_KMS for generated material and EXTERNAL for imported.
+	Origin string
+	// Rotation schedule (symmetric keys only).
+	RotationEnabled    bool
+	RotationPeriodDays int
+	NextRotationAt     *time.Time
 }
 
 type KMSAlias struct {

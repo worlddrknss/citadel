@@ -11,30 +11,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lib/pq"
 	"github.com/worlddrknss/citadel/internal/arn"
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
 	"github.com/worlddrknss/citadel/internal/store"
 )
 
-func (s *Store) ResolveByID(ctx context.Context, keyID string) (store.KMSKey, error) {
-	if strings.HasPrefix(keyID, "alias/") {
-		var target string
-		if err := s.db.QueryRowContext(ctx, `SELECT target_key_id FROM kms_aliases WHERE alias_name = $1 AND account_id = $2`, keyID, s.accountForContext(ctx)).Scan(&target); err != nil {
-			return store.KMSKey{}, err
-		}
-		keyID = target
-	}
-	const q = `
-	SELECT id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at, managed
-FROM kms_keys
-WHERE id = $1
-`
-	query := q
-	args := []any{keyID}
-	if cond, extra := store.AccountFilter(ctx, "account_id", 2); cond != "" {
-		query += " AND " + cond
-		args = append(args, extra...)
-	}
+// kmsKeyColumns is the column list scanKey reads, in order.
+const kmsKeyColumns = `id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at, managed, current_material_id, rotation_enabled, rotation_period_days, next_rotation_at, origin`
+
+// scanKey reads one kms_keys row (kmsKeyColumns) and unwraps its original
+// material. Rotated material versions are attached separately by
+// attachMaterials.
+func (s *Store) scanKey(ctx context.Context, row rowScanner) (store.KMSKey, error) {
 	var (
 		k            store.KMSKey
 		masterB64    string
@@ -44,33 +33,123 @@ WHERE id = $1
 		keyUsage     string
 		keySpec      string
 		deletionDate sql.NullTime
+		nextRotation sql.NullTime
 	)
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &publicB64, &keyUsage, &keySpec, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt, &k.Managed)
-	if err != nil {
+	if err := row.Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &publicB64, &keyUsage, &keySpec, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt, &k.Managed,
+		&k.CurrentMaterialID, &k.RotationEnabled, &k.RotationPeriodDays, &nextRotation, &k.Origin); err != nil {
 		return store.KMSKey{}, err
 	}
 	if deletionDate.Valid {
-		k.DeletionDate = &deletionDate.Time
+		t := deletionDate.Time
+		k.DeletionDate = &t
+	}
+	if nextRotation.Valid {
+		t := nextRotation.Time
+		k.NextRotationAt = &t
 	}
 	k.KeyUsage = store.NormalizeKeyUsage(keyUsage)
-	if k.KeyUsage == "" {
-		k.KeyUsage = store.KeyUsageEncryptDecrypt
-	}
 	k.KeySpec = strings.ToUpper(strings.TrimSpace(keySpec))
 	if k.KeySpec == "" {
 		k.KeySpec = store.DefaultKeySpecForUsage(k.KeyUsage)
 	}
+	if k.Origin == "" {
+		k.Origin = store.OriginAWSKMS
+	}
 	if publicB64 != "" {
+		var err error
 		k.PublicKeyRaw, err = base64.StdEncoding.DecodeString(publicB64)
 		if err != nil {
 			return store.KMSKey{}, err
 		}
 	}
-	k.MasterKeyRaw, err = s.resolveKeyMaterial(ctx, k.ID, masterB64, wrappedB64, nonceB64)
+	raw, err := s.resolveKeyMaterial(ctx, k.ID, masterB64, wrappedB64, nonceB64)
 	if err != nil {
 		return store.KMSKey{}, fmt.Errorf("load key material for %s: %w", k.ID, err)
 	}
+	k.MasterKeyRaw = raw
 	return k, nil
+}
+
+// attachMaterials loads and unwraps the rotated material versions of the
+// given keys (only symmetric keys ever have any).
+func (s *Store) attachMaterials(ctx context.Context, keys []store.KMSKey) error {
+	ids := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if k.IsSymmetric() {
+			ids = append(ids, k.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT key_id, material_id, wrapped_b64, nonce_b64, kind, created_at
+FROM kms_key_materials
+WHERE key_id = ANY($1)
+ORDER BY created_at ASC, material_id ASC`, pq.Array(ids))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byKey := map[string][]store.KeyMaterial{}
+	for rows.Next() {
+		var (
+			keyID, wrapped, nonce string
+			m                     store.KeyMaterial
+		)
+		if err := rows.Scan(&keyID, &m.ID, &wrapped, &nonce, &m.Kind, &m.CreatedAt); err != nil {
+			return err
+		}
+		m.Raw, err = s.unwrapKeyMaterial(materialAAD(keyID, m.ID), wrapped, nonce)
+		if err != nil {
+			return fmt.Errorf("unwrap material %s of key %s: %w", m.ID, keyID, err)
+		}
+		byKey[keyID] = append(byKey[keyID], m)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range keys {
+		keys[i].Materials = byKey[keys[i].ID]
+	}
+	return nil
+}
+
+// materialAAD is the wrap AAD binding a material version to its key, so a
+// wrapped version cannot be transplanted onto another key or version.
+func materialAAD(keyID, materialID string) string {
+	return keyID + "#" + materialID
+}
+
+func (s *Store) ResolveByID(ctx context.Context, keyID string) (store.KMSKey, error) {
+	if strings.HasPrefix(keyID, "alias/") {
+		var target string
+		if err := s.db.QueryRowContext(ctx, `SELECT target_key_id FROM kms_aliases WHERE alias_name = $1 AND account_id = $2`, keyID, s.accountForContext(ctx)).Scan(&target); err != nil {
+			return store.KMSKey{}, err
+		}
+		keyID = target
+	} else if strings.HasPrefix(keyID, "arn:") {
+		// Accept a key ARN wherever a key ID is accepted, as AWS does. The
+		// account filter below still confines it to the caller's keys.
+		if i := strings.LastIndex(keyID, ":key/"); i >= 0 {
+			keyID = keyID[i+len(":key/"):]
+		}
+	}
+	query := `SELECT ` + kmsKeyColumns + ` FROM kms_keys WHERE id = $1 AND deleted_at IS NULL`
+	args := []any{keyID}
+	if cond, extra := store.AccountFilter(ctx, "account_id", 2); cond != "" {
+		query += " AND " + cond
+		args = append(args, extra...)
+	}
+	k, err := s.scanKey(ctx, s.db.QueryRowContext(ctx, query, args...))
+	if err != nil {
+		return store.KMSKey{}, err
+	}
+	keys := []store.KMSKey{k}
+	if err := s.attachMaterials(ctx, keys); err != nil {
+		return store.KMSKey{}, err
+	}
+	return keys[0], nil
 }
 
 func (s *Store) ResolveDefault(ctx context.Context) (store.KMSKey, error) {
@@ -160,6 +239,7 @@ func (s *Store) CreateKey(ctx context.Context, description, keyUsage, keySpec st
 		CreatedAt:    time.Now().UTC(),
 		KeyUsage:     normalizedUsage,
 		KeySpec:      normalizedSpec,
+		Origin:       store.OriginAWSKMS,
 	}
 	wrappedB64, nonceB64, err := s.wrapKeyMaterial(k.ID, k.MasterKeyRaw)
 	if err != nil {
@@ -200,22 +280,21 @@ func (s *Store) ImportSigningKey(ctx context.Context, description string, privPK
 		return store.KMSKey{}, err
 	}
 	const q = `
-INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at, account_id)
-VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11)
+INSERT INTO kms_keys (id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at, account_id, origin)
+VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12)
 `
-	if _, err := s.db.ExecContext(ctx, q, k.ID, k.ARN, wrappedB64, nonceB64, base64.StdEncoding.EncodeToString(pubPKIXDER), k.KeyUsage, k.KeySpec, k.Description, k.Enabled, k.CreatedAt, s.accountForContext(ctx)); err != nil {
+	k.Origin = store.OriginExternal
+	if _, err := s.db.ExecContext(ctx, q, k.ID, k.ARN, wrappedB64, nonceB64, base64.StdEncoding.EncodeToString(pubPKIXDER), k.KeyUsage, k.KeySpec, k.Description, k.Enabled, k.CreatedAt, s.accountForContext(ctx), k.Origin); err != nil {
 		return store.KMSKey{}, err
 	}
 	return k, nil
 }
 
 func (s *Store) ListKeys(ctx context.Context) ([]store.KMSKey, error) {
-	q := `
-	SELECT id, arn, master_key_b64, wrapped_key_b64, key_nonce_b64, public_key_b64, key_usage, key_spec, description, enabled, deletion_date, created_at, managed
-FROM kms_keys`
+	q := `SELECT ` + kmsKeyColumns + ` FROM kms_keys WHERE deleted_at IS NULL`
 	cond, args := store.AccountFilter(ctx, "account_id", 1)
 	if cond != "" {
-		q += "\nWHERE " + cond
+		q += " AND " + cond
 	}
 	q += "\nORDER BY created_at ASC"
 	rows, err := s.db.QueryContext(ctx, q, args...)
@@ -226,37 +305,7 @@ FROM kms_keys`
 
 	out := make([]store.KMSKey, 0)
 	for rows.Next() {
-		var (
-			k            store.KMSKey
-			masterB64    string
-			wrappedB64   string
-			nonceB64     string
-			publicB64    string
-			keyUsage     string
-			keySpec      string
-			deletionDate sql.NullTime
-		)
-		if err := rows.Scan(&k.ID, &k.ARN, &masterB64, &wrappedB64, &nonceB64, &publicB64, &keyUsage, &keySpec, &k.Description, &k.Enabled, &deletionDate, &k.CreatedAt, &k.Managed); err != nil {
-			return nil, err
-		}
-		if deletionDate.Valid {
-			k.DeletionDate = &deletionDate.Time
-		}
-		k.KeyUsage = store.NormalizeKeyUsage(keyUsage)
-		if k.KeyUsage == "" {
-			k.KeyUsage = store.KeyUsageEncryptDecrypt
-		}
-		k.KeySpec = strings.ToUpper(strings.TrimSpace(keySpec))
-		if k.KeySpec == "" {
-			k.KeySpec = store.DefaultKeySpecForUsage(k.KeyUsage)
-		}
-		if publicB64 != "" {
-			k.PublicKeyRaw, err = base64.StdEncoding.DecodeString(publicB64)
-			if err != nil {
-				return nil, err
-			}
-		}
-		k.MasterKeyRaw, err = s.resolveKeyMaterial(ctx, k.ID, masterB64, wrappedB64, nonceB64)
+		k, err := s.scanKey(ctx, rows)
 		if err != nil {
 			return nil, err
 		}
@@ -265,7 +314,33 @@ FROM kms_keys`
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	rows.Close()
+	if err := s.attachMaterials(ctx, out); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// execScoped runs an UPDATE/DELETE whose WHERE clause is followed by the
+// caller-account filter on column (appended as the next positional
+// argument), and maps "no rows affected" to sql.ErrNoRows.
+func (s *Store) execScoped(ctx context.Context, q, column string, args ...any) error {
+	if cond, extra := store.AccountFilter(ctx, column, len(args)+1); cond != "" {
+		q += " AND " + cond
+		args = append(args, extra...)
+	}
+	res, err := s.db.ExecContext(ctx, q, args...)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) GetKeyPolicy(ctx context.Context, keyID, policyName string) (string, error) {
@@ -276,13 +351,14 @@ func (s *Store) GetKeyPolicy(ctx context.Context, keyID, policyName string) (str
 	if err != nil {
 		return "", err
 	}
-	const q = `
-SELECT policy_document
-FROM kms_key_policies
-WHERE key_id = $1 AND policy_name = $2
-`
+	q := `SELECT policy_document FROM kms_key_policies WHERE key_id = $1 AND policy_name = $2`
+	args := []any{key.ID, policyName}
+	if cond, extra := store.AccountFilter(ctx, "account_id", 3); cond != "" {
+		q += " AND " + cond
+		args = append(args, extra...)
+	}
 	var doc string
-	err = s.db.QueryRowContext(ctx, q, key.ID, policyName).Scan(&doc)
+	err = s.db.QueryRowContext(ctx, q, args...).Scan(&doc)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.DefaultKeyPolicy(key), nil
 	}
@@ -300,13 +376,15 @@ func (s *Store) PutKeyPolicy(ctx context.Context, keyID, policyName, policyDocum
 	if err != nil {
 		return err
 	}
+	// The key resolved within the caller's account, so the policy row is
+	// stamped with that account.
 	const q = `
-INSERT INTO kms_key_policies (key_id, policy_name, policy_document)
-VALUES ($1, $2, $3)
+INSERT INTO kms_key_policies (key_id, policy_name, policy_document, account_id)
+VALUES ($1, $2, $3, $4)
 ON CONFLICT (key_id, policy_name)
-DO UPDATE SET policy_document = EXCLUDED.policy_document, updated_at = NOW()
+DO UPDATE SET policy_document = EXCLUDED.policy_document, account_id = EXCLUDED.account_id, updated_at = NOW()
 `
-	_, err = s.db.ExecContext(ctx, q, key.ID, policyName, policyDocument)
+	_, err = s.db.ExecContext(ctx, q, key.ID, policyName, policyDocument, s.accountForContext(ctx))
 	return err
 }
 
@@ -323,48 +401,17 @@ func (s *Store) UpdateAlias(ctx context.Context, aliasName, keyID string) error 
 	if aliasName == store.ManagedDefaultAlias {
 		return store.ErrImmutableManagedKey
 	}
-	// Alias names are unique per account, so the update must be scoped to the
-	// caller's account or it would re-point other tenants' aliases too.
-	const q = `
-UPDATE kms_aliases
-SET target_key_id = $2, updated_at = NOW()
-WHERE alias_name = $1 AND account_id = $3
-`
-	res, err := s.db.ExecContext(ctx, q, aliasName, keyID, s.accountForContext(ctx))
-	if err != nil {
-		return err
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	// Aliases are unique per account, so the update must be confined to the
+	// caller's account or it would retarget every account's alias of the
+	// same name.
+	return s.execScoped(ctx, `UPDATE kms_aliases SET target_key_id = $2, updated_at = NOW() WHERE alias_name = $1`, "account_id", aliasName, keyID)
 }
 
 func (s *Store) DeleteAlias(ctx context.Context, aliasName string) error {
 	if aliasName == store.ManagedDefaultAlias {
 		return store.ErrImmutableManagedKey
 	}
-	cond, args := store.AccountFilter(ctx, "account_id", 2)
-	q := `DELETE FROM kms_aliases WHERE alias_name = $1`
-	if cond != "" {
-		q += " AND " + cond
-	}
-	res, err := s.db.ExecContext(ctx, q, append([]any{aliasName}, args...)...)
-	if err != nil {
-		return err
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return s.execScoped(ctx, `DELETE FROM kms_aliases WHERE alias_name = $1`, "account_id", aliasName)
 }
 
 func (s *Store) ListAliases(ctx context.Context) ([]store.KMSAlias, error) {
@@ -400,19 +447,7 @@ func (s *Store) SetKeyEnabled(ctx context.Context, keyID string, enabled bool) e
 			return store.ErrImmutableManagedKey
 		}
 	}
-	const q = `UPDATE kms_keys SET enabled = $2, updated_at = NOW() WHERE id = $1`
-	res, err := s.db.ExecContext(ctx, q, keyID, enabled)
-	if err != nil {
-		return err
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return s.execScoped(ctx, `UPDATE kms_keys SET enabled = $2, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`, "account_id", keyID, enabled)
 }
 
 func (s *Store) ScheduleKeyDeletion(ctx context.Context, keyID string, windowDays int) (time.Time, error) {
@@ -422,75 +457,20 @@ func (s *Store) ScheduleKeyDeletion(ctx context.Context, keyID string, windowDay
 		return time.Time{}, store.ErrImmutableManagedKey
 	}
 	deletionDate := time.Now().UTC().Add(time.Duration(windowDays) * 24 * time.Hour)
-	const q = `UPDATE kms_keys SET deletion_date = $2, updated_at = NOW() WHERE id = $1`
-	res, err := s.db.ExecContext(ctx, q, keyID, deletionDate)
-	if err != nil {
+	if err := s.execScoped(ctx, `UPDATE kms_keys SET deletion_date = $2, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL AND managed = FALSE`, "account_id", keyID, deletionDate); err != nil {
 		return time.Time{}, err
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return time.Time{}, err
-	}
-	if rows == 0 {
-		return time.Time{}, sql.ErrNoRows
 	}
 	return deletionDate, nil
 }
 
 func (s *Store) CancelKeyDeletion(ctx context.Context, keyID string) error {
-	const q = `UPDATE kms_keys SET deletion_date = NULL, updated_at = NOW() WHERE id = $1`
-	res, err := s.db.ExecContext(ctx, q, keyID)
-	if err != nil {
-		return err
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	// AWS leaves a key whose deletion was cancelled disabled.
+	return s.execScoped(ctx, `UPDATE kms_keys SET deletion_date = NULL, enabled = CASE WHEN deletion_date IS NULL THEN enabled ELSE FALSE END, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`, "account_id", keyID)
 }
 
+// ForceDeleteKey destroys a key immediately (see DestroyKey).
 func (s *Store) ForceDeleteKey(ctx context.Context, keyID string) error {
-	if managed, err := s.keyManaged(ctx, keyID); err != nil {
-		return err
-	} else if managed {
-		return store.ErrImmutableManagedKey
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM kms_aliases WHERE target_key_id = $1`, keyID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM kms_key_policies WHERE key_id = $1`, keyID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM kms_grants WHERE key_id = $1`, keyID); err != nil {
-		return err
-	}
-
-	res, err := tx.ExecContext(ctx, `DELETE FROM kms_keys WHERE id = $1`, keyID)
-	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "foreign key") {
-			return fmt.Errorf("key is in use and cannot be force deleted")
-		}
-		return err
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return sql.ErrNoRows
-	}
-
-	return tx.Commit()
+	return s.DestroyKey(ctx, keyID)
 }
 
 func (s *Store) CreateGrant(ctx context.Context, req store.CreateGrantRequest) (store.KMSGrant, error) {
@@ -508,36 +488,60 @@ func (s *Store) CreateGrant(ctx context.Context, req store.CreateGrantRequest) (
 	if err != nil {
 		return store.KMSGrant{}, err
 	}
-	const q = `
-INSERT INTO kms_grants (grant_id, grant_token, key_id, grantee_principal, retiring_principal, operations_json, grant_name, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-`
-	if _, err := s.db.ExecContext(ctx, q, grant.GrantID, grant.GrantToken, grant.KeyID, grant.GranteePrincipal, grant.RetiringPrincipal, string(operationsJSON), grant.Name, grant.CreatedAt); err != nil {
+	// Insert only when the key is live in the caller's account.
+	q := `
+INSERT INTO kms_grants (grant_id, grant_token, key_id, grantee_principal, retiring_principal, operations_json, grant_name, created_at, account_id)
+SELECT $1, $2, k.id, $4, $5, $6, $7, $8, k.account_id
+FROM kms_keys k
+WHERE k.id = $3 AND k.deleted_at IS NULL`
+	args := []any{grant.GrantID, grant.GrantToken, grant.KeyID, grant.GranteePrincipal, grant.RetiringPrincipal, string(operationsJSON), grant.Name, grant.CreatedAt}
+	if cond, extra := store.AccountFilter(ctx, "k.account_id", 9); cond != "" {
+		q += " AND " + cond
+		args = append(args, extra...)
+	}
+	res, err := s.db.ExecContext(ctx, q, args...)
+	if err != nil {
+		return store.KMSGrant{}, err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return store.KMSGrant{}, err
+	} else if n == 0 {
+		return store.KMSGrant{}, sql.ErrNoRows
+	}
+	return grant, nil
+}
+
+const grantColumns = `grant_id, grant_token, key_id, grantee_principal, retiring_principal, operations_json, grant_name, created_at`
+
+func scanGrant(row rowScanner) (store.KMSGrant, error) {
+	var grant store.KMSGrant
+	var operationsJSON string
+	if err := row.Scan(&grant.GrantID, &grant.GrantToken, &grant.KeyID, &grant.GranteePrincipal, &grant.RetiringPrincipal, &operationsJSON, &grant.Name, &grant.CreatedAt); err != nil {
+		return store.KMSGrant{}, err
+	}
+	if err := json.Unmarshal([]byte(operationsJSON), &grant.Operations); err != nil {
 		return store.KMSGrant{}, err
 	}
 	return grant, nil
 }
 
 func (s *Store) ListGrants(ctx context.Context, keyID string) ([]store.KMSGrant, error) {
-	const q = `
-SELECT grant_id, grant_token, key_id, grantee_principal, retiring_principal, operations_json, grant_name, created_at
-FROM kms_grants
-WHERE key_id = $1
-ORDER BY created_at ASC
-`
-	rows, err := s.db.QueryContext(ctx, q, keyID)
+	q := `SELECT ` + grantColumns + ` FROM kms_grants WHERE key_id = $1`
+	args := []any{keyID}
+	if cond, extra := store.AccountFilter(ctx, "account_id", 2); cond != "" {
+		q += " AND " + cond
+		args = append(args, extra...)
+	}
+	q += " ORDER BY created_at ASC"
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := make([]store.KMSGrant, 0)
 	for rows.Next() {
-		var grant store.KMSGrant
-		var operationsJSON string
-		if err := rows.Scan(&grant.GrantID, &grant.GrantToken, &grant.KeyID, &grant.GranteePrincipal, &grant.RetiringPrincipal, &operationsJSON, &grant.Name, &grant.CreatedAt); err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal([]byte(operationsJSON), &grant.Operations); err != nil {
+		grant, err := scanGrant(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, grant)
@@ -545,34 +549,28 @@ ORDER BY created_at ASC
 	return out, rows.Err()
 }
 
+func (s *Store) FindGrant(ctx context.Context, grantID, grantToken string) (store.KMSGrant, error) {
+	if grantID == "" && grantToken == "" {
+		return store.KMSGrant{}, sql.ErrNoRows
+	}
+	q := `SELECT ` + grantColumns + ` FROM kms_grants WHERE ((grant_id = $1 AND $1 <> '') OR (grant_token = $2 AND $2 <> ''))`
+	args := []any{grantID, grantToken}
+	if cond, extra := store.AccountFilter(ctx, "account_id", 3); cond != "" {
+		q += " AND " + cond
+		args = append(args, extra...)
+	}
+	return scanGrant(s.db.QueryRowContext(ctx, q+" LIMIT 1", args...))
+}
+
 func (s *Store) RevokeGrant(ctx context.Context, keyID, grantID string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM kms_grants WHERE key_id = $1 AND grant_id = $2`, keyID, grantID)
-	if err != nil {
-		return err
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return s.execScoped(ctx, `DELETE FROM kms_grants WHERE key_id = $1 AND grant_id = $2`, "account_id", keyID, grantID)
 }
 
 func (s *Store) RetireGrant(ctx context.Context, grantID, grantToken string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM kms_grants WHERE grant_id = $1 OR grant_token = $2`, grantID, grantToken)
-	if err != nil {
-		return err
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
+	if grantID == "" && grantToken == "" {
 		return sql.ErrNoRows
 	}
-	return nil
+	return s.execScoped(ctx, `DELETE FROM kms_grants WHERE ((grant_id = $1 AND $1 <> '') OR (grant_token = $2 AND $2 <> ''))`, "account_id", grantID, grantToken)
 }
 
 func (s *Store) resolveKeyMaterial(ctx context.Context, keyID, masterB64, wrappedB64, nonceB64 string) ([]byte, error) {
@@ -609,54 +607,6 @@ func (s *Store) wrapKeyMaterial(keyID string, raw []byte) (string, string, error
 	// Stored as separate ciphertext and nonce columns, as before.
 	nonce, wrapped := sealed[:cryptoutil.GCMNonceSize], sealed[cryptoutil.GCMNonceSize:]
 	return base64.StdEncoding.EncodeToString(wrapped), base64.StdEncoding.EncodeToString(nonce), nil
-}
-
-func (s *Store) unwrapKeyMaterial(keyID, wrappedB64, nonceB64 string) ([]byte, error) {
-	if len(s.wrappingKey) != 32 {
-		return nil, errors.New("wrapping key is not configured")
-	}
-	wrapped, err := base64.StdEncoding.DecodeString(wrappedB64)
-	if err != nil {
-		return nil, err
-	}
-	nonce, err := base64.StdEncoding.DecodeString(nonceB64)
-	if err != nil {
-		return nil, err
-	}
-	// Try the current key with AAD, then legacy combinations so material wrapped
-	// before AAD binding / the HKDF derivation upgrade still decrypts.
-	candidates := []struct {
-		key []byte
-		aad []byte
-	}{
-		{s.wrappingKey, []byte(keyID)},
-		{s.wrappingKey, nil},
-	}
-	if len(s.legacyWrappingKey) == 32 {
-		candidates = append(candidates,
-			struct {
-				key []byte
-				aad []byte
-			}{s.legacyWrappingKey, []byte(keyID)},
-			struct {
-				key []byte
-				aad []byte
-			}{s.legacyWrappingKey, nil},
-		)
-	}
-	blob := append(append(make([]byte, 0, len(nonce)+len(wrapped)), nonce...), wrapped...)
-	var lastErr error
-	for _, c := range candidates {
-		if out, err := cryptoutil.GCMOpen(c.key, blob, c.aad); err == nil {
-			return out, nil
-		} else {
-			lastErr = err
-		}
-	}
-	if lastErr == nil {
-		lastErr = errors.New("unwrap failed")
-	}
-	return nil, lastErr
 }
 
 func (s *Store) persistWrappedKeyMaterial(ctx context.Context, keyID, wrappedB64, nonceB64 string) error {

@@ -202,6 +202,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/kms/aliases", s.handleV1CreateKMSAlias)
 	mux.HandleFunc("POST /v1/kms/aliases/update", s.handleV1UpdateKMSAlias)
 	mux.HandleFunc("DELETE /v1/kms/aliases", s.handleV1DeleteKMSAlias)
+	s.registerKMSRoutes(mux)
 	mux.HandleFunc("GET /v1/certificates", s.handleV1ListCertificates)
 	mux.HandleFunc("POST /v1/certificates/authorities", s.handleV1CreateCA)
 	mux.HandleFunc("POST /v1/certificates/authorities/import", s.handleV1ImportCA)

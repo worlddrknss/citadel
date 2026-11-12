@@ -109,11 +109,12 @@ func buildStore(cfg config.Config) (store.Store, func(), error) {
 		return nil, nil, fmt.Errorf("ping postgres: %w", err)
 	}
 	store, err := postgres.Open(context.Background(), db, postgres.Options{
-		WrappingKey:       cfg.WrappingKey,
-		LegacyWrappingKey: cfg.LegacyWrappingKey,
-		AuditHMACKey:      cfg.AuditHMACKey,
-		Region:            cfg.AWSRegion,
-		AccountID:         cfg.AWSAccountID,
+		WrappingKey:          cfg.WrappingKey,
+		LegacyWrappingKey:    cfg.LegacyWrappingKey,
+		PreviousWrappingKeys: cfg.PreviousWrappingKeys,
+		AuditHMACKey:         cfg.AuditHMACKey,
+		Region:               cfg.AWSRegion,
+		AccountID:            cfg.AWSAccountID,
 	})
 	if err != nil {
 		cleanup()
