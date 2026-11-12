@@ -211,6 +211,9 @@ func signableDigest(message, messageType string, signingAlgorithm string, keySpe
 		return nil, 0, err
 	}
 	if strings.EqualFold(strings.TrimSpace(messageType), "DIGEST") {
+		if len(data) != hashFunc.Size() {
+			return nil, 0, fmt.Errorf("a DIGEST message must be %d bytes for this signing algorithm", hashFunc.Size())
+		}
 		return data, hashFunc, nil
 	}
 	if !hashFunc.Available() {

@@ -15,14 +15,24 @@ func (s *Server) authorizeKeyAction(ctx context.Context, r *http.Request, key st
 	if err != nil {
 		return err
 	}
-	allowed, err := policyAllows(policy, requestPrincipal(r), action, key.ARN, s.cfg.DefaultDenyPolicy)
+	principal := requestPrincipal(r)
+	decision, err := policyDecision(policy, principal, action, key.ARN, s.cfg.DefaultDenyPolicy)
 	if err != nil {
 		return err
 	}
-	if !allowed {
+	switch decision {
+	case policyAllow:
+		return nil
+	case policyExplicitDeny:
+		// An explicit Deny in the key policy overrides any grant, as in AWS.
 		return errAccessDenied
 	}
-	return nil
+	// Implicitly denied by the key policy: a grant to this principal for this
+	// operation authorizes it.
+	if s.grantAllows(ctx, key.ID, principal, action) {
+		return nil
+	}
+	return errAccessDenied
 }
 
 func requestPrincipal(r *http.Request) string {
@@ -47,9 +57,24 @@ func requestPrincipal(r *http.Request) string {
 // defaultDeny: false preserves the permissive legacy behavior, true enforces
 // AWS-like deny-by-default.
 func policyAllows(rawPolicy, principal, action, resource string, defaultDeny bool) (bool, error) {
+	d, err := policyDecision(rawPolicy, principal, action, resource, defaultDeny)
+	return d == policyAllow, err
+}
+
+type policyResult int
+
+const (
+	policyImplicitDeny policyResult = iota
+	policyAllow
+	policyExplicitDeny
+)
+
+// policyDecision evaluates a policy like policyAllows but distinguishes an
+// explicit Deny from an implicit one, which grants can still override.
+func policyDecision(rawPolicy, principal, action, resource string, defaultDeny bool) (policyResult, error) {
 	var doc map[string]any
 	if err := json.Unmarshal([]byte(rawPolicy), &doc); err != nil {
-		return false, err
+		return policyImplicitDeny, err
 	}
 	statements := asPolicyStatements(doc["Statement"])
 	hasRelevantStatement := false
@@ -63,16 +88,48 @@ func policyAllows(rawPolicy, principal, action, resource string, defaultDeny boo
 		}
 		effect := strings.ToLower(strings.TrimSpace(stringValue(stmt["Effect"])))
 		if effect == "deny" {
-			return false, nil
+			return policyExplicitDeny, nil
 		}
 		if effect == "allow" {
 			allowed = true
 		}
 	}
-	if hasRelevantStatement {
-		return allowed, nil
+	if allowed || (!hasRelevantStatement && !defaultDeny) {
+		return policyAllow, nil
 	}
-	return !defaultDeny, nil
+	return policyImplicitDeny, nil
+}
+
+// grantOperations are the operations a KMS grant may allow (AWS's list).
+var grantOperations = map[string]bool{
+	"Decrypt": true, "Encrypt": true, "GenerateDataKey": true, "GenerateDataKeyWithoutPlaintext": true,
+	"ReEncryptFrom": true, "ReEncryptTo": true, "Sign": true, "Verify": true, "GetPublicKey": true,
+	"CreateGrant": true, "RetireGrant": true, "DescribeKey": true, "GenerateDataKeyPair": true,
+	"GenerateDataKeyPairWithoutPlaintext": true, "GenerateMac": true, "VerifyMac": true, "DeriveSharedSecret": true,
+}
+
+// grantAllows reports whether a grant on the key lets principal perform the
+// kms:<Operation> action. Grants are read within the caller's account.
+func (s *Server) grantAllows(ctx context.Context, keyID, principal, action string) bool {
+	op, ok := strings.CutPrefix(action, "kms:")
+	if !ok || !grantOperations[op] {
+		return false
+	}
+	grants, err := s.store.ListGrants(ctx, keyID)
+	if err != nil {
+		return false
+	}
+	for _, g := range grants {
+		if g.GranteePrincipal != principal {
+			continue
+		}
+		for _, o := range g.Operations {
+			if o == op {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func asPolicyStatements(value any) []map[string]any {

@@ -22,7 +22,7 @@ func (s *Server) kmsSigningKey(w http.ResponseWriter, r *http.Request, action, k
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: keyID, Result: "error", ErrorType: typ, AuditOrigin: s.auditOrigin(r)})
 		return store.KMSKey{}, false
 	}
-	if keyUsage, _ := keyUsageAndSpecForMetadata(key); keyUsage != store.KeyUsageSignVerify {
+	if keyUsage, _ := keyUsageAndSpecForMetadata(key); keyUsage != store.KeyUsageSignVerify && !(action == "TrentService.GetPublicKey" && len(key.PublicKeyRaw) > 0) {
 		s.kmsFail(w, r, action, key.ID, "InvalidKeyUsageException", kmsKeyARN(key)+" key usage is "+keyUsage+" which is not valid for this operation.")
 		return store.KMSKey{}, false
 	}
@@ -106,6 +106,11 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		s.kmsFail(w, r, action, key.ID, "InvalidKeyUsageException", "SigningAlgorithm "+req.SigningAlgorithm+" is not valid for "+kmsKeyARN(key))
 		return
 	}
+	if err := checkSigningAlgorithm(key, req.SigningAlgorithm); err != nil {
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
 	digest, _, err := signableDigest(req.Message, req.MessageType, req.SigningAlgorithm, key.KeySpec)
 	if err != nil {
 		s.kmsValidationError(w, r, action, key.ID, err.Error())
@@ -156,11 +161,12 @@ func (s *Server) handleGetPublicKey(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, getPublicKeyResponse{
-		KeyID:             kmsKeyARN(key),
-		PublicKey:         publicB64,
-		SigningAlgorithms: keySigningAlgorithms(key),
-		KeySpec:           key.KeySpec,
-		KeyUsage:          store.KeyUsageSignVerify,
+		KeyID:                kmsKeyARN(key),
+		PublicKey:            publicB64,
+		SigningAlgorithms:    keySigningAlgorithms(key),
+		KeySpec:              key.KeySpec,
+		KeyUsage:             key.KeyUsage,
+		EncryptionAlgorithms: keyEncryptionAlgorithms(key),
 	})
 }
 
