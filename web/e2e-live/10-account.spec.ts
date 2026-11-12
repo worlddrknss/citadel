@@ -7,7 +7,7 @@ test('profile, access key shown once, sessions list and revoke', async ({ page, 
   // A second session for the same user, in its own browser context.
   const other = await browser.newContext({ baseURL, userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Firefox/140.0' });
   const otherPage = await other.newPage();
-  await signIn(otherPage, ORG.editor);
+  await signIn(otherPage, ORG.editor, undefined, true);
 
   await signIn(page, ORG.editor);
   await open(page, '/account');

@@ -63,8 +63,10 @@ test('platform admin saves organization settings; account admin sees them read-o
   await ctx.close();
 });
 
-test('SSO provider: create, test, sign in, edit to org-wide, delete', async ({ page, browser, baseURL }) => {
+test('SSO provider: create, test, sign in, edit to org-wide, delete', async ({ page, browser, baseURL, expectStatus }) => {
   const { accountId } = loadState();
+  // The SSO users start signed out: the console's /v1/me probe says 401.
+  expectStatus(401, /\/v1\/me$/);
   await signIn(page, ORG.admin);
   await open(page, '/admin?tab=settings');
   await page.getByRole('button', { name: 'Add provider' }).first().click();

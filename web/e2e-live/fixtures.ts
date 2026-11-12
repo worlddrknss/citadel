@@ -4,7 +4,7 @@
 // API and run axe.
 
 import AxeBuilder from '@axe-core/playwright';
-import { test as base, expect, type APIRequestContext, type Page } from '@playwright/test';
+import { test as base, expect, type APIRequestContext, type Browser, type Page } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,17 +40,38 @@ export interface Fixtures {
   allowConsole: (re: RegExp) => void;
 }
 
+/**
+ * Runs `fn` on the test's page and on every page of any context the test
+ * opens with browser.newContext() (other users signed in side by side), so
+ * their errors count too. Returns a function that stops watching.
+ */
+function onEveryPage(page: Page, browser: Browser, fn: (p: Page) => void): () => void {
+  fn(page);
+  const original = browser.newContext.bind(browser);
+  browser.newContext = async (...args: Parameters<Browser['newContext']>) => {
+    const ctx = await original(...args);
+    ctx.on('page', fn);
+    return ctx;
+  };
+  return () => {
+    browser.newContext = original;
+  };
+}
+
 export const test = base.extend<Fixtures>({
   expectStatus: [
-    async ({ page }, use) => {
+    async ({ page, browser }, use) => {
       const expected: Expected[] = [];
       const seen: { status: number; method: string; url: string }[] = [];
-      page.on('response', (r) => {
-        const url = r.url();
-        if (!url.includes('/v1/') || r.status() < 400) return;
-        seen.push({ status: r.status(), method: r.request().method(), url: url.replace(/^https?:\/\/[^/]+/, '') });
-      });
+      const stop = onEveryPage(page, browser, (p) =>
+        p.on('response', (r) => {
+          const url = r.url();
+          if (!url.includes('/v1/') || r.status() < 400) return;
+          seen.push({ status: r.status(), method: r.request().method(), url: url.replace(/^https?:\/\/[^/]+/, '') });
+        })
+      );
       await use((status, url) => expected.push({ status, url }));
+      stop();
       const bad = seen
         .filter((r) => !expected.some((e) => e.status === r.status && e.url.test(r.url)))
         .map((r) => `${r.status} ${r.method} ${r.url}`);
@@ -59,22 +80,25 @@ export const test = base.extend<Fixtures>({
     { auto: true }
   ],
   allowConsole: [
-    async ({ page }, use) => {
+    async ({ page, browser }, use) => {
       const allowed: RegExp[] = [
         // Chrome logs every failed fetch; the response check above already
         // decides whether that status was expected.
         /Failed to load resource: the server responded with a status of/
       ];
       const errors: string[] = [];
-      page.on('console', (m) => {
-        if (m.type() !== 'error') return;
-        const text = `${m.text()} ${m.location().url ?? ''}`;
-        if (!allowed.some((re) => re.test(text))) errors.push(`console.error: ${text}`);
-      });
-      page.on('pageerror', (e) => {
-        if (!allowed.some((re) => re.test(e.message))) errors.push(`pageerror: ${e.message}`);
+      const stop = onEveryPage(page, browser, (p) => {
+        p.on('console', (m) => {
+          if (m.type() !== 'error') return;
+          const text = `${m.text()} ${m.location().url ?? ''}`;
+          if (!allowed.some((re) => re.test(text))) errors.push(`console.error: ${text}`);
+        });
+        p.on('pageerror', (e) => {
+          if (!allowed.some((re) => re.test(e.message))) errors.push(`pageerror: ${e.message}`);
+        });
       });
       await use((re) => allowed.push(re));
+      stop();
       expect(errors, 'console errors / page errors').toEqual([]);
     },
     { auto: true }
@@ -83,14 +107,35 @@ export const test = base.extend<Fixtures>({
 
 export { expect };
 
-/** Signs in through the API; the page's context shares the cookie. */
-export async function signIn(page: Page, user: { username: string; password: string }, acct?: string) {
+// Session cookies by user+account, reused across tests: the server limits
+// password sign-ins per IP (a burst of 20, then one per 3 s), which a full
+// run would exceed. A cached session that has since been revoked (sign-out,
+// session revocation, password change) is detected and replaced.
+type Cookie = Awaited<ReturnType<ReturnType<Page['context']>['cookies']>>[number];
+const sessions = new Map<string, Cookie[]>();
+
+/**
+ * Signs in through the API; the page's context shares the cookie. Pass
+ * `fresh` for a new session (e.g. one a test is about to revoke).
+ */
+export async function signIn(page: Page, user: { username: string; password: string }, acct?: string, fresh = false) {
   const id = acct ?? lookupAccount();
+  const key = `${id}/${user.username}`;
+  const cached = fresh ? undefined : sessions.get(key);
+  if (cached) {
+    await page.context().clearCookies();
+    await page.context().addCookies(cached);
+    const me = await page.request.get('/v1/me');
+    if (me.ok() && (await me.json()).username === user.username) return;
+    sessions.delete(key);
+    await page.context().clearCookies();
+  }
   const res = await page.request.post('/v1/login', {
     data: { accountId: id, username: user.username, password: user.password },
     headers: { 'X-Citadel-Request': '1' }
   });
   expect(res.status(), `sign in as ${user.username}: ${await res.text()}`).toBe(200);
+  if (!fresh) sessions.set(key, await page.context().cookies());
 }
 
 // The bootstrap spec writes the account id here for later spec files.
