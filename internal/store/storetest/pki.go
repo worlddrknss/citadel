@@ -13,10 +13,7 @@ import (
 	"github.com/worlddrknss/citadel/internal/store"
 )
 
-const (
-	acctA = "111111111111"
-	acctB = "222222222222"
-)
+// acctA and acctB are shared with the secrets suite (secrets_ext.go).
 
 // PKIEnv is what the PKI suite needs from a backend.
 type PKIEnv struct {
