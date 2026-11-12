@@ -1,269 +1,463 @@
 <script lang="ts">
   import '$lib/styles.css';
   import { base } from '$app/paths';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
+  import { afterNavigate } from '$app/navigation';
   import { onMount } from 'svelte';
-  import { api, ApiError, type Me } from '$lib/api';
-
-  let me: Me | null = $state(null);
-  let authError = $state(false);
-  let ready = $state(false);
-
-  // Login form
-  let loginAccount = $state('');
-  let loginUsername = $state('');
-  let loginPassword = $state('');
-  let loginError = $state('');
-  let loggingIn = $state(false);
-
-  async function refreshMe() {
-    try {
-      me = await api.me();
-      authError = false;
-    } catch {
-      me = null;
-      authError = true;
-    } finally {
-      ready = true;
-    }
-  }
-
-  async function doLogin(e: Event) {
-    e.preventDefault();
-    loginError = '';
-    loggingIn = true;
-    try {
-      await api.login(loginAccount.trim(), loginUsername.trim(), loginPassword);
-      loginPassword = '';
-      await refreshMe();
-    } catch (err) {
-      loginError = err instanceof ApiError ? err.message : 'Sign in failed';
-    } finally {
-      loggingIn = false;
-    }
-  }
-
-  async function doLogout(e: Event) {
-    e.preventDefault();
-    try {
-      await api.logout();
-    } catch {
-      /* ignore */
-    }
-    await refreshMe();
-  }
-
-  onMount(refreshMe);
+  import { session, type Role } from '$lib/stores/session.svelte';
+  import Icon, { type IconName } from '$lib/components/Icon.svelte';
+  import Logo from '$lib/components/Logo.svelte';
+  import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+  import Toaster from '$lib/components/Toaster.svelte';
+  import ConfirmHost from '$lib/components/ConfirmHost.svelte';
+  import LoginScreen from '$lib/components/LoginScreen.svelte';
 
   let { children } = $props();
 
-  // Theme switcher. The actual attribute is applied pre-paint by an inline
-  // script in app.html; here we keep reactive state in sync and persist it.
-  let theme = $state<'dark' | 'light'>('dark');
-  onMount(() => {
-    const stored = localStorage.getItem('citadel-theme');
-    theme = stored === 'light' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', theme);
-  });
-  function toggleTheme() {
-    theme = theme === 'dark' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', theme);
-    try {
-      localStorage.setItem('citadel-theme', theme);
-    } catch {
-      /* ignore */
-    }
+  interface NavItem {
+    href: string;
+    label: string;
+    icon: IconName;
+    minRole?: Role;
   }
 
-  const nav = [
-    { href: '/', label: 'Dashboard', icon: 'dashboard', section: 'Services' },
-    { href: '/secrets', label: 'Secrets', icon: 'secrets', section: 'Services' },
-    { href: '/parameters', label: 'Parameter Store', icon: 'parameters', section: 'Services' },
-    { href: '/kms', label: 'KMS', icon: 'kms', section: 'Services' },
-    { href: '/certificates', label: 'Certificate Authority', icon: 'certificate', section: 'Services' },
-    { href: '/iam', label: 'Identity & Access', icon: 'iam', section: 'Services' },
-    { href: '/audit', label: 'Audit', icon: 'audit', section: 'Services' },
-    { href: '/account', label: 'Account', icon: 'account', section: 'Account' },
-    { href: '/admin', label: 'Master Admin', icon: 'admin', section: 'Administration' }
+  const groups: { label: string; items: NavItem[] }[] = [
+    {
+      label: '',
+      items: [{ href: '/', label: 'Overview', icon: 'grid' }]
+    },
+    {
+      label: 'Secrets',
+      items: [
+        { href: '/secrets', label: 'Secrets', icon: 'lock' },
+        { href: '/parameters', label: 'Parameters', icon: 'sliders' }
+      ]
+    },
+    {
+      label: 'Cryptography',
+      items: [
+        { href: '/kms', label: 'KMS keys', icon: 'key' },
+        { href: '/certificates', label: 'Certificates', icon: 'award' }
+      ]
+    },
+    {
+      label: 'Access',
+      items: [
+        { href: '/iam', label: 'Identity federation', icon: 'users' },
+        { href: '/approvals', label: 'Approvals', icon: 'git-pull-request' },
+        { href: '/audit', label: 'Audit log', icon: 'activity' }
+      ]
+    },
+    {
+      label: 'Organization',
+      items: [
+        { href: '/account', label: 'My account', icon: 'user' },
+        { href: '/admin', label: 'Administration', icon: 'building', minRole: 'admin' }
+      ]
+    }
   ];
 
-  const sections = ['Services', 'Account', 'Administration'];
+  let navOpen = $state(false);
+  afterNavigate(() => (navOpen = false));
 
-  const currentPath = $derived($page.url.pathname.replace(base, '') || '/');
-
-  function isActive(href: string): boolean {
-    if (href === '/') return currentPath === '/';
-    if (href === '/secrets') return currentPath.startsWith('/secrets');
-    if (href === '/parameters') return currentPath.startsWith('/parameters');
-    return currentPath === href || currentPath.startsWith(href + '/');
+  const path = $derived(page.url.pathname.slice(base.length) || '/');
+  function isActive(href: string) {
+    return href === '/' ? path === '/' : path === href || path.startsWith(href + '/');
   }
 
-  const titles: Record<string, string> = {
-    '/': 'Dashboard',
-    '/secrets': 'Secrets Management',
-    '/parameters': 'Parameter Store',
-    '/kms': 'Key Management Service',
-    '/certificates': 'Certificate Authority',
-    '/iam': 'Identity & Access',
-    '/audit': 'Audit Log',
-    '/account': 'My Account',
-    '/admin': 'Master Administration'
-  };
+  onMount(() => session.refresh());
 
-  const pageTitle = $derived(
-    titles[currentPath] ??
-      (Object.entries(titles).find(([h]) => h !== '/' && currentPath.startsWith(h))?.[1] ??
-        'Citadel')
+  const initials = $derived(
+    (session.me?.displayName || session.me?.username || '?')
+      .split(/\s+/)
+      .map((p) => p[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase()
   );
 </script>
 
-{#snippet icon(name: string)}
-  <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    {#if name === 'dashboard'}
-      <rect x="3" y="3" width="7" height="9" rx="1" /><rect x="14" y="3" width="7" height="5" rx="1" /><rect x="14" y="12" width="7" height="9" rx="1" /><rect x="3" y="16" width="7" height="5" rx="1" />
-    {:else if name === 'secrets'}
-      <rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /><circle cx="12" cy="15.5" r="1.4" />
-    {:else if name === 'parameters'}
-      <path d="M4 7h16" /><path d="M4 12h16" /><path d="M4 17h16" /><circle cx="8" cy="7" r="1.6" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none" /><circle cx="10" cy="17" r="1.6" fill="currentColor" stroke="none" />
-    {:else if name === 'kms'}
-      <circle cx="8" cy="12" r="4" /><path d="M11.5 12H21" /><path d="M17 12v3" /><path d="M20 12v2.5" />
-    {:else if name === 'certificate'}
-      <rect x="4" y="4" width="16" height="13" rx="2" /><path d="M8 9h8" /><path d="M8 12h5" /><circle cx="9" cy="18.5" r="2" /><path d="M9 20.5 7.5 23l1.5-1 1.5 1L9 20.5" />
-    {:else if name === 'audit'}
-      <path d="M9 4h6l4 4v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" /><path d="M14 4v4h4" /><path d="M8 13h6" /><path d="M8 16h4" />
-    {:else if name === 'account'}
-      <circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" />
-    {:else if name === 'iam'}
-      <circle cx="9" cy="8" r="3.2" /><path d="M3.5 20a5.5 5.5 0 0 1 11 0" /><path d="M16 11l2 2 4-4" />
-    {:else if name === 'admin'}
-      <circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1" />
-    {/if}
-  </svg>
-{/snippet}
+<svelte:head>
+  <title>Citadel</title>
+</svelte:head>
 
-{#if !ready}
-  <div class="shell" style="grid-template-columns: 1fr;">
-    <div class="empty">Loading…</div>
+{#if session.status === 'loading'}
+  <div class="boot" aria-busy="true" aria-label="Loading Citadel">
+    <Logo compact />
   </div>
-{:else if authError}
-  <div class="login-wrap">
-    <form class="card login-card" onsubmit={doLogin}>
-      <div class="brand" style="font-size:1.5rem;margin-bottom:0.5rem">🏰 Citadel</div>
-      <p class="muted" style="margin-top:0">Sign in to the control plane.</p>
-      {#if loginError}
-        <div class="flash err">{loginError}</div>
-      {/if}
-      <div class="field" style="margin-bottom:0.75rem">
-        <label for="li-acct">Account ID</label>
-        <input id="li-acct" class="mono" bind:value={loginAccount} autocomplete="organization" />
-      </div>
-      <div class="field" style="margin-bottom:0.75rem">
-        <label for="li-user">Username</label>
-        <input id="li-user" bind:value={loginUsername} autocomplete="username" />
-      </div>
-      <div class="field" style="margin-bottom:1rem">
-        <label for="li-pass">Password</label>
-        <input id="li-pass" type="password" bind:value={loginPassword} autocomplete="current-password" />
-      </div>
-      <button class="btn btn-p" type="submit" disabled={loggingIn} style="width:100%">
-        {loggingIn ? 'Signing in…' : 'Sign in'}
+{:else if session.status === 'unreachable'}
+  <main class="boot">
+    <div class="boot-msg">
+      <Icon name="alert-triangle" size={22} />
+      <h1>Can't reach Citadel</h1>
+      <p class="muted">The server didn't respond. It may be restarting.</p>
+      <button class="btn btn-secondary" onclick={() => session.refresh()}>
+        <Icon name="refresh" /> Try again
       </button>
-    </form>
-  </div>
+    </div>
+  </main>
+{:else if session.status === 'signed-out'}
+  <LoginScreen />
 {:else}
-  <div class="shell">
-    <aside class="sidebar">
-      <div class="brand">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M4 21V9l2-1V5l2 1 2-3 2 3 2-1v3l2 1v12" /><path d="M4 21h16" /><path d="M10 21v-4a2 2 0 0 1 4 0v4" />
-        </svg>
-        <span>Citadel</span>
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="shell" class:nav-open={navOpen}>
+    <aside class="sidebar" aria-label="Primary">
+      <div class="sidebar-head">
+        <a href="{base}/" class="brand-link" aria-label="Citadel overview"><Logo /></a>
+        <button class="btn-icon nav-close" aria-label="Close menu" onclick={() => (navOpen = false)}>
+          <Icon name="x" />
+        </button>
       </div>
-      {#each sections as section}
-        <div class="sb-section">
-          <div class="sb-label">{section}</div>
-          {#each nav.filter((n) => n.section === section) as n}
-            <a class="sb-link" class:active={isActive(n.href)} href="{base}{n.href === '/' ? '/' : n.href}">
-              {@render icon(n.icon)}
-              <span>{n.label}</span>
-            </a>
-          {/each}
+      <nav class="nav">
+        {#each groups as g (g.label)}
+          {@const items = g.items.filter((i) => !i.minRole || session.can(i.minRole))}
+          {#if items.length}
+            <div class="nav-group">
+              {#if g.label}<div class="nav-label">{g.label}</div>{/if}
+              <ul>
+                {#each items as item (item.href)}
+                  <li>
+                    <a
+                      class="nav-link"
+                      href="{base}{item.href}"
+                      aria-current={isActive(item.href) ? 'page' : undefined}
+                    >
+                      <Icon name={item.icon} />
+                      <span>{item.label}</span>
+                    </a>
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
+        {/each}
+      </nav>
+      <div class="sidebar-foot">
+        <div class="org">
+          <Icon name="building" size={14} />
+          <div class="org-text">
+            <span class="subtle small">Account</span>
+            <span class="mono small">{session.me?.accountId || '—'}</span>
+          </div>
         </div>
-      {/each}
+      </div>
     </aside>
+    <button class="scrim" aria-label="Close menu" tabindex="-1" onclick={() => (navOpen = false)}></button>
+
     <div class="main">
       <header class="topbar">
-        <strong>{pageTitle}</strong>
-        <span class="user">
-          {#if me}
-            {me.displayName} · <span class="badge">{me.role}</span>
-            {#if me.accountId}<span class="mono"> · {me.accountId}</span>{/if}
-          {/if}
-          · <a href="{base}/" onclick={doLogout}>Sign out</a>
-          <button
-            class="theme-toggle"
-            onclick={toggleTheme}
-            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            aria-label="Toggle color theme"
-          >
-            {#if theme === 'dark'}
-              <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4" />
-              </svg>
-            {:else}
-              <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
-              </svg>
-            {/if}
-          </button>
-        </span>
+        <button class="btn-icon nav-toggle" aria-label="Open menu" aria-expanded={navOpen} onclick={() => (navOpen = true)}>
+          <Icon name="menu" />
+        </button>
+        <div class="topbar-spacer"></div>
+        <ThemeToggle />
+        <details class="usermenu">
+          <summary aria-label="Account menu">
+            <span class="avatar" aria-hidden="true">{initials}</span>
+            <span class="user-text">
+              <span class="user-name">{session.me?.displayName || session.me?.username}</span>
+              <span class="user-role subtle">{session.me?.role}</span>
+            </span>
+            <Icon name="chevron-down" size={14} />
+          </summary>
+          <div class="menu" role="menu">
+            <a role="menuitem" href="{base}/account"><Icon name="user" /> My account</a>
+            <button role="menuitem" type="button" onclick={() => session.signOut()}>
+              <Icon name="log-out" /> Sign out
+            </button>
+          </div>
+        </details>
       </header>
-      <main class="content">
+      <main id="main" class="content" tabindex="-1">
         {@render children()}
       </main>
     </div>
   </div>
 {/if}
 
+<Toaster />
+<ConfirmHost />
+
 <style>
-  .login-wrap {
-    min-height: 100vh;
+  .boot {
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    padding: var(--space-4);
+  }
+  .boot-msg {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    text-align: center;
+    color: var(--warning);
+  }
+  .boot-msg h1 {
+    margin: var(--space-2) 0 0;
+    font-size: var(--text-xl);
+    color: var(--text);
+  }
+  .boot-msg p {
+    margin: 0 0 var(--space-3);
+  }
+
+  .skip {
+    position: absolute;
+    left: -9999px;
+    top: var(--space-2);
+    z-index: 200;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--accent);
+    color: var(--accent-contrast);
+  }
+  .skip:focus {
+    left: var(--space-2);
+  }
+
+  .shell {
+    display: grid;
+    grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+    min-height: 100dvh;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    background: var(--sidebar);
+  }
+  .sidebar-head {
     display: flex;
     align-items: center;
-    justify-content: center;
-    padding: 1rem;
+    justify-content: space-between;
+    height: var(--topbar-h);
+    padding: 0 var(--space-4);
   }
-  .login-card {
-    width: 100%;
-    max-width: 360px;
+  .brand-link:hover {
+    text-decoration: none;
   }
-  .ico {
-    width: 18px;
-    height: 18px;
-    flex: none;
+  .nav-close {
+    display: none;
   }
-  .user {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
+  .nav {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-2) var(--space-3);
   }
-  .theme-toggle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    margin-left: 0.35rem;
+  .nav-group + .nav-group {
+    margin-top: var(--space-4);
+  }
+  .nav-label {
+    padding: 0 var(--space-2) var(--space-1);
+    color: var(--text-subtle);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .nav ul {
+    margin: 0;
     padding: 0;
-    border: 1px solid var(--c-border);
-    border-radius: 6px;
-    background: var(--c-input-bg);
-    color: var(--c-muted);
+    list-style: none;
+  }
+  .nav-link {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    height: 34px;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    font-weight: 500;
+  }
+  .nav-link:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+    text-decoration: none;
+  }
+  .nav-link[aria-current='page'] {
+    background: var(--accent-soft);
+    color: var(--accent-text);
+  }
+  .sidebar-foot {
+    padding: var(--space-3);
+    border-top: 1px solid var(--border);
+  }
+  .org {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2);
+    color: var(--text-subtle);
+  }
+  .org-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.3;
+    color: var(--text);
+  }
+
+  .scrim {
+    display: none;
+  }
+
+  .main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: var(--topbar-h);
+    padding: 0 var(--space-6);
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg) 85%, transparent);
+    backdrop-filter: blur(8px);
+  }
+  .nav-toggle {
+    display: none;
+  }
+  .topbar-spacer {
+    flex: 1;
+  }
+
+  .usermenu {
+    position: relative;
+  }
+  .usermenu summary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 4px var(--space-2) 4px 4px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    list-style: none;
+    color: var(--text-muted);
+  }
+  .usermenu summary::-webkit-details-marker {
+    display: none;
+  }
+  .usermenu summary:hover {
+    background: var(--surface-hover);
+  }
+  .avatar {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent-text);
+    font-size: var(--text-xs);
+    font-weight: 600;
+  }
+  .user-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+  }
+  .user-name {
+    color: var(--text);
+    font-size: var(--text-sm);
+    font-weight: 500;
+  }
+  .user-role {
+    font-size: var(--text-xs);
+    text-transform: capitalize;
+  }
+  .menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    min-width: 200px;
+    padding: var(--space-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-lg);
+  }
+  .menu a,
+  .menu button {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: var(--text-sm);
+    text-align: start;
     cursor: pointer;
   }
-  .theme-toggle:hover {
-    background: var(--c-btn-hover);
-    color: var(--c-text);
+  .menu a:hover,
+  .menu button:hover {
+    background: var(--surface-hover);
+    text-decoration: none;
+  }
+
+  .content {
+    width: 100%;
+    max-width: var(--content-max);
+    margin: 0 auto;
+    padding: var(--space-8) var(--space-6) var(--space-10);
+    outline: none;
+  }
+
+  @media (max-width: 960px) {
+    .shell {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .sidebar {
+      position: fixed;
+      inset: 0 auto 0 0;
+      z-index: 60;
+      width: min(85vw, 300px);
+      transform: translateX(-100%);
+      transition: transform 180ms ease-out;
+      box-shadow: var(--shadow-lg);
+    }
+    .nav-open .sidebar {
+      transform: none;
+    }
+    .nav-open .scrim {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      border: none;
+      background: var(--overlay);
+    }
+    .nav-close,
+    .nav-toggle {
+      display: inline-grid;
+    }
+    .topbar {
+      padding: 0 var(--space-4);
+    }
+    .content {
+      padding: var(--space-6) var(--space-4) var(--space-8);
+    }
+    .user-text {
+      display: none;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar {
+      transition: none;
+    }
   }
 </style>
-
