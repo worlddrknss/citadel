@@ -12,6 +12,8 @@ All notable changes to Citadel are documented here. The format follows
 
 - Larger type throughout the console: body text is 14px (was 13px), and the
   rest of the scale moved up one step.
+- Secret KMS pickers no longer list the account's managed default key next to
+  "Account default (alias/default)"; they were the same key.
 
 ### Fixed
 
