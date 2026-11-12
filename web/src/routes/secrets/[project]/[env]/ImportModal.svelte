@@ -113,6 +113,7 @@
         <span><strong class="num">{valid.length}</strong> key{valid.length === 1 ? '' : 's'} found</span>
         {#if updates}<span class="badge badge-warning">{updates} already exist</span>{/if}
         {#if invalid.length}<span class="badge badge-danger" title={invalid.map((e) => e.key).join(', ')}>{invalid.length} invalid key name{invalid.length === 1 ? '' : 's'} skipped</span>{/if}
+        {#if parsed.duplicates.length}<span class="badge badge-warning" title={parsed.duplicates.join(', ')}>{parsed.duplicates.length} repeated key{parsed.duplicates.length === 1 ? '' : 's'}: last value wins</span>{/if}
         {#if parsed.errors.length}<span class="badge badge-danger">Lines {parsed.errors.slice(0, 5).join(', ')} unreadable</span>{/if}
       </div>
       {#if valid.length}

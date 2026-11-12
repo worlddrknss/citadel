@@ -9,9 +9,11 @@ export interface EnvEntry {
 /**
  * Parses KEY=VALUE lines. Supports `export ` prefixes, # comments, single
  * quotes (literal), double quotes (with \n, \t, \", \\ escapes, may span
- * lines) and unquoted values with trailing " # comments".
+ * lines) and unquoted values with trailing " # comments". A key that appears
+ * more than once keeps its last value (as when a shell sources the file) and
+ * is listed in `duplicates`.
  */
-export function parseDotenv(text: string): { entries: EnvEntry[]; errors: number[] } {
+export function parseDotenv(text: string): { entries: EnvEntry[]; errors: number[]; duplicates: string[] } {
   const entries: EnvEntry[] = [];
   const errors: number[] = [];
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
@@ -26,7 +28,8 @@ export function parseDotenv(text: string): { entries: EnvEntry[]; errors: number
       continue;
     }
     const key = line.slice(0, eq).trim();
-    let rest = line.slice(eq + 1).trimStart();
+    const raw = line.slice(eq + 1);
+    const rest = raw.trimStart();
     let value: string;
     if (rest.startsWith('"')) {
       let body = rest.slice(1);
@@ -49,13 +52,15 @@ export function parseDotenv(text: string): { entries: EnvEntry[]; errors: number
       }
       value = rest.slice(1, end);
     } else {
-      const hash = rest.search(/\s#/);
-      if (hash >= 0) rest = rest.slice(0, hash);
-      value = rest.trim();
+      // Search before trimming so "KEY= # note" is empty, not "# note".
+      const hash = raw.search(/\s#/);
+      value = (hash >= 0 ? raw.slice(0, hash) : raw).trim();
     }
     entries.push({ key, value, line: lineNo });
   }
-  return { entries, errors };
+  const last = new Map(entries.map((e, i) => [e.key, i]));
+  const duplicates = [...new Set(entries.filter((e, i) => last.get(e.key) !== i).map((e) => e.key))];
+  return { entries: entries.filter((e, i) => last.get(e.key) === i), errors, duplicates };
 }
 
 /** Serializes entries, quoting values that need it. */
