@@ -99,6 +99,22 @@ jobs:
             web/test-results/
           retention-days: 14
 
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      # helm lint, helm template with every deploy/helm/citadel/ci values
+      # file, kubeconform on the output, and the refused-values checks.
+      - name: Lint and validate the Helm chart
+        env:
+          KUBECONFORM: docker run --rm -i ghcr.io/yannh/kubeconform:v0.6.7-alpine
+        run: deploy/helm/validate.sh
+      - name: Validate the Compose file
+        run: docker compose -f deploy/compose/docker-compose.yaml --env-file deploy/compose/.env.example config --quiet
+
   image:
     runs-on: ubuntu-latest
     needs: [go, web]
