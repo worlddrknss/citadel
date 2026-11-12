@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -167,6 +168,10 @@ func (s *Server) buildParameterRecord(ctx context.Context, name, ptype, value, k
 		Type:        typ,
 		Tier:        normalizeParameterTier(tier),
 		Description: strings.TrimSpace(description),
+	}
+	// Same limit as /v1/parameters/update (and SSM): 4 KB Standard, 8 KB Advanced.
+	if limit := parameterValueLimit(rec.Tier); len(value) > limit {
+		return store.ParameterRecord{}, fmt.Errorf("value is larger than %d bytes for the %s tier", limit, rec.Tier)
 	}
 	if typ == parameterTypeSecureString {
 		cipherB64, keyID, err := s.encryptParameterValue(ctx, kmsKeyID, value)
@@ -339,6 +344,18 @@ func (s *Server) handleV1LabelParameterVersion(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
+	}
+	// The SSM label rules; without them a label containing a comma could
+	// never be removed (DELETE /v1/parameters/label splits on commas).
+	if len(req.Labels) == 0 || len(req.Labels) > 10 {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "labels must contain between 1 and 10 labels")
+		return
+	}
+	for _, l := range req.Labels {
+		if !validSSMLabel(l) {
+			writeNativeError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("label %q must be letters, digits, period, dash or underscore, at most 100 characters, and not start with a digit, aws or ssm", l))
+			return
+		}
 	}
 	labels, err := ps.LabelParameterVersion(ctx, name, req.Version, req.Labels)
 	if err != nil {

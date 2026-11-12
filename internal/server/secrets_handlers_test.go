@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -522,6 +523,21 @@ func TestParameterEditEndpoints(t *testing.T) {
 	}
 	c, b = e.do("mallory", "DELETE", "/v1/parameters/label"+q("name", "/app/url", "version", "1", "labels", "stable"), nil)
 	e.want(c, 404, b, "cross-account unlabel")
+
+	// Labels follow the SSM rules (a comma could never be removed again).
+	for _, bad := range [][]string{{"a,b"}, {"aws-x"}, {"1st"}, {}, {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"}} {
+		c, b = e.do("alice", "POST", "/v1/parameters/label", map[string]any{"name": "/app/url", "version": 1, "labels": bad})
+		e.want(c, 400, b, fmt.Sprintf("label %v", bad))
+	}
+
+	// Create enforces the tier's size limit like update does.
+	c, b = e.do("alice", "POST", "/v1/parameters", map[string]any{"name": "/app/big", "type": "String", "value": strings.Repeat("x", 4097)})
+	e.want(c, 400, b, "oversized Standard value")
+	c, b = e.do("alice", "POST", "/v1/parameters", map[string]any{"name": "/app/big", "type": "String", "tier": "Advanced", "value": strings.Repeat("x", 4097)})
+	e.want(c, 200, b, "Advanced value over 4 KB")
+	// Advanced can't move back to Standard.
+	c, b = e.do("alice", "POST", "/v1/parameters/update", map[string]any{"name": "/app/big", "expectedVersion": 1, "tier": "Standard", "value": "small"})
+	e.want(c, 400, b, "tier downgrade")
 }
 
 func TestAWSWritesRespectApprovalPolicy(t *testing.T) {
