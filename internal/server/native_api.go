@@ -133,7 +133,7 @@ func (s *Server) nativeTokenSession(w http.ResponseWriter, r *http.Request, minR
 		return nil, nil, false, true
 	}
 	_ = s.store.TouchAccessKeyLastUsed(r.Context(), keyID)
-	sess = &uiSession{Username: keyID, Role: tokenRole, AccountID: accountID, DisplayName: "Machine Identity", ViaToken: true, Accounts: []string{accountID}}
+	sess = &uiSession{Username: keyID, Role: tokenRole, AccountID: accountID, DisplayName: "Machine Identity", ViaToken: true, Owner: ownerUser.Username, Accounts: []string{accountID}}
 	ctx = store.WithCallerAccount(r.Context(), strings.TrimSpace(accountID))
 	return sess, ctx, true, true
 }

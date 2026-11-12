@@ -73,13 +73,17 @@ func approvalBlocker(sess *uiSession, cr store.ChangeRequestRecord, p store.Appr
 		return "This request has already been " + cr.Status + "."
 	case sess == nil:
 		return "Sign in to approve."
-	case sess.Username == cr.Requester:
+	case sess.ViaToken:
+		// Approvals are a human control. Access keys may propose changes
+		// (CI does), but approving takes a person signed in to the console.
+		return "Approvals must be made by a person signed in to the console, not with an access key."
+	case sess.Principal() == cr.Requester:
 		return "You can't approve your own change request."
 	case !approverRoleAllowed(sess.Role, p.ApproverRoles):
 		return "Approving requires the " + strings.Join(p.ApproverRoles, " or ") + " role."
 	}
 	for _, a := range cr.Approvals {
-		if a.Username == sess.Username {
+		if a.Username == sess.Principal() {
 			return "You have already approved this request."
 		}
 	}
@@ -187,7 +191,7 @@ func (s *Server) newChangeRequest(ctx context.Context, sess *uiSession, coord it
 		Env:                coord.Env,
 		Path:               store.FolderPath(coord.Folder),
 		Key:                coord.Key,
-		Requester:          sess.Username,
+		Requester:          sess.Principal(),
 		RequesterRole:      store.NormalizeUIRole(sess.Role),
 		Title:              title,
 		Comment:            comment,
@@ -418,7 +422,7 @@ func (s *Server) handleV1ApproveChangeRequest(w http.ResponseWriter, r *http.Req
 		writeNativeError(w, status, code, reason)
 		return
 	}
-	cr, err = s.store.AddChangeRequestApproval(ctx, cr.ID, store.ChangeRequestApproval{Username: sess.Username, Comment: comment})
+	cr, err = s.store.AddChangeRequestApproval(ctx, cr.ID, store.ChangeRequestApproval{Username: sess.Principal(), Comment: comment})
 	if err != nil {
 		writeDecisionError(w, err)
 		return
@@ -431,7 +435,7 @@ func (s *Server) handleV1ApproveChangeRequest(w http.ResponseWriter, r *http.Req
 		return
 	}
 	// Enough approvals: claim the request (only one approver can), then apply.
-	decided, err := s.store.TransitionChangeRequest(ctx, cr.ID, store.ChangeRequestPending, store.ChangeRequestApproved, sess.Username, comment)
+	decided, err := s.store.TransitionChangeRequest(ctx, cr.ID, store.ChangeRequestPending, store.ChangeRequestApproved, sess.Principal(), comment)
 	if err != nil {
 		writeDecisionError(w, err)
 		return
@@ -492,12 +496,12 @@ func (s *Server) handleV1RejectChangeRequest(w http.ResponseWriter, r *http.Requ
 		writeNativeError(w, http.StatusInternalServerError, "internal_error", "could not read the approval policy")
 		return
 	}
-	if sess.Username != cr.Requester && !approverRoleAllowed(sess.Role, policy.ApproverRoles) {
+	if sess.Principal() != cr.Requester && !approverRoleAllowed(sess.Role, policy.ApproverRoles) {
 		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RejectChangeRequest", KeyID: cr.ID, Result: "denied", ErrorType: "forbidden", AuditOrigin: s.auditOrigin(r)})
 		writeNativeError(w, http.StatusForbidden, "forbidden", "Rejecting requires the "+strings.Join(policy.ApproverRoles, " or ")+" role.")
 		return
 	}
-	if _, err := s.store.TransitionChangeRequest(ctx, cr.ID, store.ChangeRequestPending, store.ChangeRequestRejected, sess.Username, comment); err != nil {
+	if _, err := s.store.TransitionChangeRequest(ctx, cr.ID, store.ChangeRequestPending, store.ChangeRequestRejected, sess.Principal(), comment); err != nil {
 		writeDecisionError(w, err)
 		return
 	}
@@ -609,7 +613,7 @@ func (s *Server) handleV1PutApprovalPolicy(w http.ResponseWriter, r *http.Reques
 	if len(roles) == 0 {
 		roles = []string{"admin"}
 	}
-	if err := s.store.PutApprovalPolicy(ctx, store.ApprovalPolicy{Project: project, Env: env, ApprovalsRequired: req.ApprovalsRequired, ApproverRoles: roles, UpdatedBy: sess.Username}); err != nil {
+	if err := s.store.PutApprovalPolicy(ctx, store.ApprovalPolicy{Project: project, Env: env, ApprovalsRequired: req.ApprovalsRequired, ApproverRoles: roles, UpdatedBy: sess.Principal()}); err != nil {
 		log.Printf("approval policies: put: %v", err)
 		writeNativeError(w, http.StatusInternalServerError, "save_failed", "could not save the approval policy")
 		return

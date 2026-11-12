@@ -48,9 +48,23 @@ type uiSession struct {
 	Accounts      []string // all accounts the user belongs to
 	PlatformAdmin bool
 	ViaToken      bool // authenticated by an access-key bearer token
-	Method        string
-	CreatedAt     time.Time
-	LastSeenAt    time.Time
+	// Owner is the console user who owns the access key, for token sessions,
+	// whose Username is the key ID.
+	Owner      string
+	Method     string
+	CreatedAt  time.Time
+	LastSeenAt time.Time
+}
+
+// Principal is the person behind the session: the key's owner for bearer
+// tokens, otherwise the signed-in user. Anything that reasons about "who"
+// (approvals above all) must use this, never Username, or one person could
+// act as two by switching between their session and their own access key.
+func (s *uiSession) Principal() string {
+	if s.ViaToken && s.Owner != "" {
+		return s.Owner
+	}
+	return s.Username
 }
 
 // dummyPasswordHash is a fixed, valid PBKDF2 hash (current parameters) used to
