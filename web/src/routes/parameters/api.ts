@@ -30,6 +30,9 @@ export const params = {
   revealVersion: (name: string, version: number) =>
     req<{ parameter: Parameter; value: string }>(`/v1/parameters/value?${qs({ name, version: String(version) })}`),
 
+  /** Account setting: may viewers decrypt SecureString values? (editors always can) */
+  revealSettings: () => req<{ viewersCanReveal: boolean }>('/v1/secrets/settings'),
+
   unlabel: (name: string, version: number, labels: string[]) =>
     req<{ name: string; removed: string[] }>(
       `/v1/parameters/label?${qs({ name, version: String(version), labels: labels.join(',') })}`,
