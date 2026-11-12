@@ -2,8 +2,11 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -92,6 +95,15 @@ func (s *Server) handleV1CreateOIDCProvider(w http.ResponseWriter, r *http.Reque
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "at least one client ID (audience) is required")
 		return
 	}
+	// The store upserts; creating over an existing provider would silently
+	// replace its client IDs, so that is an explicit update instead.
+	if _, found, err := s.findOIDCProvider(ctx, sess.AccountID, providerARN); err != nil {
+		writeNativeError(w, http.StatusInternalServerError, "create_failed", err.Error())
+		return
+	} else if found {
+		writeNativeError(w, http.StatusConflict, "already_exists", "an OIDC provider for that issuer is already registered")
+		return
+	}
 	provider := store.OIDCProvider{
 		ProviderARN: providerARN,
 		AccountID:   sess.AccountID,
@@ -106,6 +118,65 @@ func (s *Server) handleV1CreateOIDCProvider(w http.ResponseWriter, r *http.Reque
 	writeNativeJSON(w, http.StatusOK, map[string]any{"providerArn": providerARN})
 }
 
+type updateOIDCProviderRequest struct {
+	ProviderArn string   `json:"providerArn"`
+	ClientIds   []string `json:"clientIds"`
+}
+
+// handleV1UpdateOIDCProvider replaces a provider's client IDs (audiences).
+// The issuer URL is the provider's identity and can't change.
+func (s *Server) handleV1UpdateOIDCProvider(w http.ResponseWriter, r *http.Request) {
+	sess, ctx, ok := s.nativeSession(w, r, "admin")
+	if !ok {
+		return
+	}
+	var req updateOIDCProviderRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	providerARN := strings.TrimSpace(req.ProviderArn)
+	if providerARN == "" {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "providerArn is required")
+		return
+	}
+	clientIDs := trimList(req.ClientIds)
+	if len(clientIDs) == 0 {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "at least one client ID (audience) is required")
+		return
+	}
+	existing, found, err := s.findOIDCProvider(ctx, sess.AccountID, providerARN)
+	if err != nil {
+		writeNativeError(w, http.StatusInternalServerError, "update_failed", err.Error())
+		return
+	}
+	if !found {
+		writeNativeError(w, http.StatusNotFound, "not_found", "OIDC provider not found")
+		return
+	}
+	existing.ClientIDs = clientIDs
+	if err := s.store.CreateOIDCProvider(ctx, existing); err != nil {
+		writeNativeError(w, http.StatusInternalServerError, "update_failed", err.Error())
+		return
+	}
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpdateOIDCProvider", KeyID: providerARN, Result: "ok", AuditOrigin: s.auditOrigin(r)})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"providerArn": providerARN, "updated": true})
+}
+
+// findOIDCProvider looks a provider up by ARN within the account.
+func (s *Server) findOIDCProvider(ctx context.Context, accountID, providerARN string) (store.OIDCProvider, bool, error) {
+	providers, err := s.store.ListOIDCProviders(ctx, accountID)
+	if err != nil {
+		return store.OIDCProvider{}, false, err
+	}
+	for _, p := range providers {
+		if p.ProviderARN == providerARN {
+			return p, true, nil
+		}
+	}
+	return store.OIDCProvider{}, false, nil
+}
+
 func (s *Server) handleV1DeleteOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	sess, ctx, ok := s.nativeSession(w, r, "admin")
 	if !ok {
@@ -117,6 +188,10 @@ func (s *Server) handleV1DeleteOIDCProvider(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := s.store.DeleteOIDCProvider(ctx, sess.AccountID, providerARN); err != nil {
+		if errors.Is(err, store.ErrOIDCProviderNotFound) {
+			writeNativeError(w, http.StatusNotFound, "not_found", "OIDC provider not found")
+			return
+		}
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
 		return
 	}
@@ -151,6 +226,16 @@ type createRoleRequest struct {
 }
 
 func (s *Server) handleV1CreateRole(w http.ResponseWriter, r *http.Request) {
+	s.saveRole(w, r, false)
+}
+
+// handleV1UpdateRole changes an existing role's description, trust policy
+// and maximum session length; the name (and so the ARN) is fixed.
+func (s *Server) handleV1UpdateRole(w http.ResponseWriter, r *http.Request) {
+	s.saveRole(w, r, true)
+}
+
+func (s *Server) saveRole(w http.ResponseWriter, r *http.Request, update bool) {
 	sess, ctx, ok := s.nativeSession(w, r, "admin")
 	if !ok {
 		return
@@ -161,8 +246,22 @@ func (s *Server) handleV1CreateRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	roleName := strings.TrimSpace(req.RoleName)
-	if !nativeSegmentRe.MatchString(roleName) {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", "roleName may contain only letters, numbers, '.', '_' and '-'")
+	if len(roleName) > maxRoleNameLen || !nativeSegmentRe.MatchString(roleName) {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "roleName must be 1-64 letters, numbers, '.', '_' and '-'")
+		return
+	}
+	// The store upserts, so existence decides create (409 when taken) vs
+	// update (404 when missing) here.
+	_, err := s.store.GetIAMRole(ctx, sess.AccountID, roleName)
+	switch {
+	case err != nil && !errors.Is(err, store.ErrIAMRoleNotFound):
+		writeNativeError(w, http.StatusInternalServerError, "lookup_failed", err.Error())
+		return
+	case err == nil && !update:
+		writeNativeError(w, http.StatusConflict, "already_exists", "a role with that name already exists")
+		return
+	case err != nil && update:
+		writeNativeError(w, http.StatusNotFound, "not_found", "role not found")
 		return
 	}
 	trust, err := validateTrustPolicy(ctx, s, sess.AccountID, req.Trust)
@@ -189,10 +288,15 @@ func (s *Server) handleV1CreateRole(w http.ResponseWriter, r *http.Request) {
 		MaxSessionSecs: maxSecs,
 	}
 	if err := s.store.CreateIAMRole(ctx, role); err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "create_failed", err.Error())
+		writeNativeError(w, http.StatusInternalServerError, "save_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateRole", Result: "ok", AuditOrigin: s.auditOrigin(r)})
+	if update {
+		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpdateRole", KeyID: role.RoleARN, Result: "ok", AuditOrigin: s.auditOrigin(r)})
+		writeNativeJSON(w, http.StatusOK, map[string]any{"roleArn": role.RoleARN, "updated": true})
+		return
+	}
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateRole", KeyID: role.RoleARN, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"roleArn": role.RoleARN})
 }
 
@@ -207,6 +311,10 @@ func (s *Server) handleV1DeleteRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.DeleteIAMRole(ctx, sess.AccountID, roleName); err != nil {
+		if errors.Is(err, store.ErrIAMRoleNotFound) {
+			writeNativeError(w, http.StatusNotFound, "not_found", "role not found")
+			return
+		}
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
 		return
 	}
@@ -249,18 +357,42 @@ func validateTrustPolicy(ctx context.Context, s *Server, accountID string, in na
 		if out.ProviderURL == "" {
 			return store.TrustPolicy{}, errTrust("providerUrl is required for an OIDC trust policy")
 		}
-		if _, err := s.store.GetOIDCProviderByURL(ctx, accountID, out.ProviderURL); err != nil {
+		provider, err := s.store.GetOIDCProviderByURL(ctx, accountID, out.ProviderURL)
+		if err != nil {
 			return store.TrustPolicy{}, errTrust("no OIDC provider is registered for that issuer URL")
 		}
 		if len(out.Audiences) == 0 {
 			return store.TrustPolicy{}, errTrust("at least one audience is required for an OIDC trust policy")
 		}
+		for _, a := range out.Audiences {
+			if !slices.Contains(provider.ClientIDs, a) {
+				return store.TrustPolicy{}, errTrust(fmt.Sprintf("audience %q is not a client ID of that provider", a))
+			}
+		}
 		if len(out.Subjects) == 0 {
 			return store.TrustPolicy{}, errTrust("at least one subject is required for an OIDC trust policy")
+		}
+		for _, sub := range out.Subjects {
+			// A bare "*" would trust every token the issuer mints; a "*"
+			// anywhere but the end is not a pattern SubjectAllowed matches.
+			if sub == "*" {
+				return store.TrustPolicy{}, errTrust("a bare * subject trusts every token from the issuer; narrow it to a prefix")
+			}
+			if i := strings.Index(sub, "*"); i >= 0 && i != len(sub)-1 {
+				return store.TrustPolicy{}, errTrust(fmt.Sprintf("subject %q: * is only allowed at the end", sub))
+			}
+		}
+		if len(out.Principals) > 0 {
+			return store.TrustPolicy{}, errTrust("principals only apply to account trust")
 		}
 	case trustTypeAccount:
 		if len(out.Principals) == 0 {
 			return store.TrustPolicy{}, errTrust("at least one principal account ID is required")
+		}
+		for _, p := range out.Principals {
+			if !arn.IsValidAccountID(p) {
+				return store.TrustPolicy{}, errTrust(fmt.Sprintf("principal %q is not a 12-digit account ID", p))
+			}
 		}
 	default:
 		return store.TrustPolicy{}, errTrust("trust type must be 'oidc' or 'account'")
@@ -268,17 +400,24 @@ func validateTrustPolicy(ctx context.Context, s *Server, accountID string, in na
 	return out, nil
 }
 
+// maxRoleNameLen matches AWS IAM's role name limit.
+const maxRoleNameLen = 64
+
 type trustError string
 
 func (e trustError) Error() string { return string(e) }
 func errTrust(msg string) error    { return trustError(msg) }
 
 // issuerHost extracts the host[/path] portion of an issuer URL for the provider
-// ARN (mirrors AWS, which strips the https:// scheme).
+// ARN (mirrors AWS, which strips the https:// scheme). Issuers must be https
+// URLs with a host and no credentials, query or fragment.
 func issuerHost(issuer string) (string, error) {
 	u, err := url.Parse(issuer)
-	if err != nil || u.Host == "" {
+	if err != nil {
 		return "", err
+	}
+	if u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", errTrust("issuer must be an https URL")
 	}
 	host := u.Host
 	if u.Path != "" && u.Path != "/" {

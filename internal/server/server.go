@@ -244,9 +244,11 @@ func (s *Server) Handler() http.Handler {
 	// IAM identity federation: OIDC providers and roles consumed by STS.
 	mux.HandleFunc("GET /v1/iam/oidc-providers", s.handleV1ListOIDCProviders)
 	mux.HandleFunc("POST /v1/iam/oidc-providers", s.handleV1CreateOIDCProvider)
+	mux.HandleFunc("POST /v1/iam/oidc-providers/update", s.handleV1UpdateOIDCProvider)
 	mux.HandleFunc("DELETE /v1/iam/oidc-providers", s.handleV1DeleteOIDCProvider)
 	mux.HandleFunc("GET /v1/iam/roles", s.handleV1ListRoles)
 	mux.HandleFunc("POST /v1/iam/roles", s.handleV1CreateRole)
+	mux.HandleFunc("POST /v1/iam/roles/update", s.handleV1UpdateRole)
 	mux.HandleFunc("DELETE /v1/iam/roles", s.handleV1DeleteRole)
 
 	s.registerAuthRoutes(mux)
