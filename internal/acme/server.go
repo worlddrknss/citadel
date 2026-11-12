@@ -54,6 +54,30 @@ type EABResolver interface {
 	Lookup(ctx context.Context, kid string) (hmacKey []byte, accountRef string, err error)
 }
 
+// EABBinder may be implemented by an EABResolver to enforce single-use
+// binding keys. Bind is called after the binding's MAC has been verified and
+// before the ACME account is stored; it must atomically mark the key as used
+// by accountID and fail if it was already used or is no longer valid. A
+// failed Bind rejects the newAccount request.
+type EABBinder interface {
+	Bind(ctx context.Context, kid, accountID string) error
+}
+
+type accountRefCtxKey struct{}
+
+func withAccountRef(ctx context.Context, ref string) context.Context {
+	return context.WithValue(ctx, accountRefCtxKey{}, ref)
+}
+
+// AccountRefFromContext returns the host account reference of the ACME
+// account whose challenge is being validated. Validators receive it in their
+// context so host policy (for example which addresses may be fetched) can
+// depend on the tenant. It returns "" for unbound accounts.
+func AccountRefFromContext(ctx context.Context) string {
+	ref, _ := ctx.Value(accountRefCtxKey{}).(string)
+	return ref
+}
+
 // Config configures a Server. BaseURL, Store, Issuer and Policy are
 // required.
 type Config struct {

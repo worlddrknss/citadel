@@ -112,6 +112,13 @@ func (s *Server) handleNewAccount(w http.ResponseWriter, r *http.Request, rel st
 			return
 		}
 		acct.EABKeyID, acct.AccountRef = kid, ref
+		if b, ok := s.cfg.EABKeys.(EABBinder); ok {
+			if err := b.Bind(ctx, kid, acct.ID); err != nil {
+				s.log.Info("acme: external account binding rejected", "kid", kid, "err", err)
+				s.problem(w, unauthorized("externalAccountBinding key is unknown or not usable"))
+				return
+			}
+		}
 	}
 	if acct.KeyJWK, err = canonicalJWK(req.key); err != nil {
 		s.problem(w, s.internal("encoding key", err))
