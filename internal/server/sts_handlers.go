@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/xml"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -178,19 +179,22 @@ func (s *Server) handleSTSAssumeRoleWithWebIdentity(w http.ResponseWriter, r *ht
 		return
 	}
 
-	// The issuer must be a provider registered for the role's account.
-	claims, err := verifyWebIdentityToken(ctx, s.oidcHTTPClient(), token)
-	if err != nil {
-		log.Printf("sts web identity token rejected: %v", err)
-		writeSTSError(w, http.StatusBadRequest, "InvalidIdentityToken", "the web identity token could not be validated")
+	// The issuer must be a provider registered for the role's account. Check
+	// that before verifying the token: verification fetches the issuer's keys,
+	// and the token is still untrusted at this point.
+	providerURL := store.NormalizeIssuerURL(role.Trust.ProviderURL)
+	if _, perr := s.store.GetOIDCProviderByURL(ctx, role.AccountID, providerURL); perr != nil {
+		writeSTSError(w, http.StatusForbidden, "AccessDenied", "no identity provider is registered for this issuer")
 		return
 	}
-	if store.NormalizeIssuerURL(role.Trust.ProviderURL) != claims.Issuer {
+	claims, err := verifyWebIdentityToken(ctx, s.oidcHTTPClient(), token, providerURL)
+	if errors.Is(err, errIssuerNotTrusted) {
 		writeSTSError(w, http.StatusForbidden, "AccessDenied", "token issuer does not match the role's identity provider")
 		return
 	}
-	if _, perr := s.store.GetOIDCProviderByURL(ctx, role.AccountID, claims.Issuer); perr != nil {
-		writeSTSError(w, http.StatusForbidden, "AccessDenied", "no identity provider is registered for this issuer")
+	if err != nil {
+		log.Printf("sts web identity token rejected: %v", err)
+		writeSTSError(w, http.StatusBadRequest, "InvalidIdentityToken", "the web identity token could not be validated")
 		return
 	}
 	if !role.Trust.AudienceAllowed(claims.Audiences) {

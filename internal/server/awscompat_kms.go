@@ -195,6 +195,9 @@ type generateDataKeyResponse struct {
 }
 
 // dataKeyLength validates the KeySpec/NumberOfBytes pair as AWS does.
+// maxDataKeyBytes is AWS's upper bound for NumberOfBytes.
+const maxDataKeyBytes = 1024
+
 func dataKeyLength(keySpec string, numberOfBytes int) (int, error) {
 	switch {
 	case keySpec != "" && numberOfBytes != 0:
@@ -242,6 +245,10 @@ func (s *Server) handleGenerateDataKey(w http.ResponseWriter, r *http.Request, w
 	}
 	if req.DryRun {
 		s.kmsDryRun(w, r, action, key.ID)
+		return
+	}
+	if n < 1 || n > maxDataKeyBytes { // dataKeyLength enforces this; keep the allocation visibly bounded
+		s.kmsValidationError(w, r, action, req.KeyID, "NumberOfBytes must be between 1 and 1024")
 		return
 	}
 	plaintext := make([]byte, n)
