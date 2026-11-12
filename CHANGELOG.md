@@ -6,6 +6,19 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.1]
+
+### Fixed
+
+- Upgrading with a 1.x replica still serving (a rolling update) left audit
+  events without an account or chain position, and the 2.0 server then failed
+  to start ("null value in column chain_seq of relation audit_chain_heads")
+  while holding a lock that stalled the old replica's audit writes. Startup
+  now numbers and attributes such rows and advances the chain heads, so it
+  succeeds and stays idempotent.
+
+## [2.0.0]
+
 ### Breaking changes
 
 - **Authentication is always on.** Every AWS-protocol request (KMS, Secrets

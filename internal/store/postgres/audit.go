@@ -30,24 +30,59 @@ var errNoAuditKey = errors.New("audit chain key is not configured")
 // deployment account when migration 0200 could not (the identity was not
 // recorded yet), and gives that account a chain head.
 func (s *Store) migrateAuditAccounts(ctx context.Context) error {
+	// Runs on every start and is idempotent. Besides events that predate
+	// account tracking, it repairs events written by a 1.x replica that kept
+	// serving during a rolling upgrade: those rows have no account and no
+	// chain position (1.x doesn't know the columns).
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE kms_audit_events SET account_id = $1 WHERE account_id = ''`, s.accountID)
-	if err != nil {
+
+	// 1. Number unnumbered rows after their account's current maximum.
+	if _, err := tx.ExecContext(ctx, `
+UPDATE kms_audit_events e SET chain_seq = b.m + n.rn
+FROM (SELECT id, account_id, ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY id) AS rn
+      FROM kms_audit_events WHERE chain_seq IS NULL) n
+JOIN (SELECT account_id, COALESCE(MAX(chain_seq), 0) AS m FROM kms_audit_events GROUP BY account_id) b
+  ON b.account_id = n.account_id
+WHERE e.id = n.id`); err != nil {
+		return fmt.Errorf("number audit events: %w", err)
+	}
+
+	// 2. Move unattributed rows into the deployment account, numbered after
+	// its existing rows so (account_id, chain_seq) stays unique.
+	if _, err := tx.ExecContext(ctx, `
+UPDATE kms_audit_events e
+SET account_id = $1,
+    chain_seq = (SELECT COALESCE(MAX(chain_seq), 0) FROM kms_audit_events WHERE account_id = $1) + m.rn
+FROM (SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn FROM kms_audit_events WHERE account_id = '') m
+WHERE e.id = m.id`, s.accountID); err != nil {
+		return fmt.Errorf("attribute audit events: %w", err)
+	}
+
+	// Legacy rows (hash_version 1) use the 2.0 result and actor vocabulary.
+	if _, err := tx.ExecContext(ctx, `UPDATE kms_audit_events SET result = 'success' WHERE hash_version = 1 AND result = 'ok'`); err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return nil
+	if _, err := tx.ExecContext(ctx, `UPDATE kms_audit_events SET actor_type = 'legacy' WHERE hash_version = 1 AND actor_type = ''`); err != nil {
+		return err
 	}
+
+	// 3. Every chain head points at its account's last event. Advancing it
+	// matters: otherwise the next append would reuse a position just taken
+	// by a repaired row and fail the unique index.
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO audit_chain_heads (account_id, chain_seq, head_hash, head_event_id)
-SELECT account_id, chain_seq, COALESCE(event_hash, ''), id FROM kms_audit_events
-WHERE account_id = $1 ORDER BY chain_seq DESC LIMIT 1
-ON CONFLICT (account_id) DO NOTHING`, s.accountID); err != nil {
-		return err
+SELECT DISTINCT ON (account_id) account_id, chain_seq, COALESCE(event_hash, ''), id
+FROM kms_audit_events
+WHERE account_id <> '' AND chain_seq IS NOT NULL
+ORDER BY account_id, chain_seq DESC
+ON CONFLICT (account_id) DO UPDATE
+SET chain_seq = EXCLUDED.chain_seq, head_hash = EXCLUDED.head_hash, head_event_id = EXCLUDED.head_event_id, updated_at = NOW()
+WHERE audit_chain_heads.chain_seq < EXCLUDED.chain_seq`); err != nil {
+		return fmt.Errorf("advance audit chain heads: %w", err)
 	}
 	return tx.Commit()
 }
