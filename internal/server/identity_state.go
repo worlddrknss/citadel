@@ -65,14 +65,11 @@ func (s *Server) identity() *identityState {
 	return v.(*identityState)
 }
 
-// identitySecret is the deployment secret identity keys are derived from:
-// the wrapping key, else the legacy master key. nil disables SSO.
+// identitySecret is the deployment secret identity keys are derived from
+// (see deploymentSecret). nil disables SSO.
 func (s *Server) identitySecret() []byte {
-	if len(s.cfg.WrappingKey) >= 32 {
-		return s.cfg.WrappingKey
-	}
-	if len(s.cfg.LegacyMasterKey) >= 32 {
-		return s.cfg.LegacyMasterKey
+	if secret := s.deploymentSecret(); len(secret) >= 32 {
+		return secret
 	}
 	return nil
 }

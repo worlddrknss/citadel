@@ -91,6 +91,44 @@ Citadel handles sensitive workloads; run it with production controls enabled.
 
 For coordinated vulnerability disclosure, follow the process in `SECURITY.md` before any public disclosure.
 
+### Rotating KMS key material
+
+Symmetric KMS keys can rotate their material automatically (`EnableKeyRotation`,
+every 90-2560 days, default 365) or on demand (`RotateKeyOnDemand`, at most 10
+times per key). New ciphertext is sealed under the current material version
+and names that version in its header; every earlier version is kept, so
+ciphertext produced before a rotation (including blobs written by Citadel
+versions that predate rotation) keeps decrypting. A background job (every
+`KMS_JOB_INTERVAL`, default `1h`) performs due rotations and destroys keys whose
+scheduled deletion date has passed. As in AWS, deletion proceeds even if
+secrets or parameters still use the key; the job audits how many did. The
+per-account default key (`alias/default`) can never be deleted.
+
+### Rotating the wrapping key
+
+`KMS_WRAPPING_KEY_B64` encrypts everything Citadel stores at rest: KMS key
+material, access-key secrets, STS session secrets and ACME private keys. To
+rotate it without downtime:
+
+1. Generate a new key: `openssl rand -base64 32`.
+2. Restart every replica with `KMS_WRAPPING_KEY_B64=<new key>` and
+   `KMS_PREVIOUS_WRAPPING_KEYS_B64=<old key>` (a comma-separated list if you
+   rotate again before finishing). Everything stays readable; anything newly
+   written is wrapped with the new key.
+3. Re-wrap stored material onto the new key. Replicas started with previous
+   keys do this once at startup and then daily; a platform admin can also run
+   it on demand with `POST /v1/kms/admin/rewrap`, which returns how many key
+   material versions, access-key secrets and STS session secrets it re-wrapped
+   and is audited as `citadel.RewrapKeyMaterial`. The pass is idempotent and
+   resumable: rows already on the new key are skipped, and each update only
+   applies if the row is unchanged.
+4. When a pass reports `"failed": 0` and `"rewrapped": 0`, remove
+   `KMS_PREVIOUS_WRAPPING_KEYS_B64` and restart. Keep a backup of the old key
+   until you have confirmed the deployment starts and serves without it.
+
+A non-zero `failed` count means some rows could not be opened with any
+configured key; they are left untouched and logged by table and row ID.
+
 ## Open source readiness note
 
 This repository has been reviewed for obvious committed plaintext secrets and direct token/key literals in tracked source files.

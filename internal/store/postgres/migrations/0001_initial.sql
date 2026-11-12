@@ -3,32 +3,37 @@
 -- idempotent: on a database created before migrations existed it is re-run once
 -- (bringing older layouts up to date exactly as the startup DDL did) and then
 -- recorded in schema_migrations.
+--
+-- Its catalog lookups are scoped to current_schema(). They were unscoped
+-- originally, which only mattered when several Citadel schemas share one
+-- database (the per-schema test suites); behaviour in a normal single-schema
+-- deployment is unchanged, so editing an applied migration here is safe.
 
 -- Migrate legacy tenant objects to the account naming (idempotent).
 DO $$ BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ui_tenants')
-     AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ui_accounts') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'ui_tenants')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'ui_accounts') THEN
     ALTER TABLE ui_tenants RENAME TO ui_accounts;
   END IF;
 END $$;
 
 DO $$ BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'ui_accounts' AND column_name = 'tenant')
-     AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'ui_accounts' AND column_name = 'account') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'ui_accounts' AND column_name = 'tenant')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'ui_accounts' AND column_name = 'account') THEN
     ALTER TABLE ui_accounts RENAME COLUMN tenant TO account;
   END IF;
 END $$;
 
 DO $$ BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'ui_users' AND column_name = 'tenants_json')
-     AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'ui_users' AND column_name = 'accounts_json') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'ui_users' AND column_name = 'tenants_json')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'ui_users' AND column_name = 'accounts_json') THEN
     ALTER TABLE ui_users RENAME COLUMN tenants_json TO accounts_json;
   END IF;
 END $$;
 
 DO $$ BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'pca_certificate_authorities' AND column_name = 'tenant')
-     AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'pca_certificate_authorities' AND column_name = 'account') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'pca_certificate_authorities' AND column_name = 'tenant')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'pca_certificate_authorities' AND column_name = 'account') THEN
     ALTER TABLE pca_certificate_authorities RENAME COLUMN tenant TO account;
   END IF;
 END $$;
@@ -227,13 +232,13 @@ DECLARE
 	pk_constraint TEXT;
 BEGIN
 	-- Ensure account_id column exists; if not, we're on old schema
-	IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ui_accounts' AND column_name='account_id')
+	IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name='ui_accounts' AND column_name='account_id')
 	THEN
 		-- Drop existing primary key constraint if present.
 		BEGIN
 			SELECT constraint_name INTO pk_constraint
 			FROM information_schema.table_constraints
-			WHERE table_name='ui_accounts' AND constraint_type='PRIMARY KEY'
+			WHERE table_schema = current_schema() AND table_name='ui_accounts' AND constraint_type='PRIMARY KEY'
 			LIMIT 1;
 			IF pk_constraint IS NOT NULL THEN
 				EXECUTE 'ALTER TABLE ui_accounts DROP CONSTRAINT ' || quote_ident(pk_constraint);
@@ -530,10 +535,10 @@ DO $$
 BEGIN
 	IF EXISTS (
 		SELECT 1 FROM information_schema.table_constraints
-		WHERE table_name = 'kms_aliases' AND constraint_type = 'PRIMARY KEY' AND constraint_name = 'kms_aliases_pkey'
+		WHERE table_schema = current_schema() AND table_name = 'kms_aliases' AND constraint_type = 'PRIMARY KEY' AND constraint_name = 'kms_aliases_pkey'
 	) AND NOT EXISTS (
 		SELECT 1 FROM information_schema.key_column_usage
-		WHERE table_name = 'kms_aliases' AND constraint_name = 'kms_aliases_pkey' AND column_name = 'account_id'
+		WHERE table_schema = current_schema() AND table_name = 'kms_aliases' AND constraint_name = 'kms_aliases_pkey' AND column_name = 'account_id'
 	) THEN
 		ALTER TABLE kms_aliases DROP CONSTRAINT kms_aliases_pkey;
 		ALTER TABLE kms_aliases ALTER COLUMN account_id SET NOT NULL;

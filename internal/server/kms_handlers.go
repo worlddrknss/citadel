@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -109,11 +110,12 @@ type getPublicKeyRequest struct {
 }
 
 type getPublicKeyResponse struct {
-	KeyID             string   `json:"KeyId"`
-	PublicKey         string   `json:"PublicKey"`
-	SigningAlgorithms []string `json:"SigningAlgorithms,omitempty"`
-	KeySpec           string   `json:"KeySpec,omitempty"`
-	KeyUsage          string   `json:"KeyUsage,omitempty"`
+	KeyID                string   `json:"KeyId"`
+	PublicKey            string   `json:"PublicKey"`
+	SigningAlgorithms    []string `json:"SigningAlgorithms,omitempty"`
+	EncryptionAlgorithms []string `json:"EncryptionAlgorithms,omitempty"`
+	KeySpec              string   `json:"KeySpec,omitempty"`
+	KeyUsage             string   `json:"KeyUsage,omitempty"`
 }
 
 type listKeysResponse struct {
@@ -194,13 +196,13 @@ type listGrantsResponse struct {
 }
 
 type grantListEntry struct {
-	GrantID           string    `json:"GrantId"`
-	KeyID             string    `json:"KeyId"`
-	GranteePrincipal  string    `json:"GranteePrincipal"`
-	RetiringPrincipal string    `json:"RetiringPrincipal,omitempty"`
-	Operations        []string  `json:"Operations"`
-	Name              string    `json:"Name,omitempty"`
-	CreationDate      time.Time `json:"CreationDate"`
+	GrantID           string             `json:"GrantId"`
+	KeyID             string             `json:"KeyId"`
+	GranteePrincipal  string             `json:"GranteePrincipal"`
+	RetiringPrincipal string             `json:"RetiringPrincipal,omitempty"`
+	Operations        []string           `json:"Operations"`
+	Name              string             `json:"Name,omitempty"`
+	CreationDate      store.AWSTimestamp `json:"CreationDate"`
 }
 
 type revokeGrantRequest struct {
@@ -272,6 +274,9 @@ func (s *Server) handleKMS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.handleAWSCompatTarget(w, r, target) {
+		return
+	}
+	if s.handleKMSLifecycleTarget(w, r, target) {
 		return
 	}
 	switch target {
@@ -492,23 +497,33 @@ func (s *Server) handleEncrypt(w http.ResponseWriter, r *http.Request) {
 		s.kmsValidationError(w, r, action, req.KeyID, "Plaintext must be between 1 and 4096 bytes")
 		return
 	}
-	if !validSymmetricAlgorithm(req.EncryptionAlgorithm) {
-		s.kmsFail(w, r, action, req.KeyID, "InvalidKeyUsageException", "EncryptionAlgorithm "+req.EncryptionAlgorithm+" is not valid for this key")
-		return
-	}
 	// AWS requires KeyId; Citadel keeps its historical fallback to the
 	// account's default key when it is omitted.
 	key, ok := s.kmsKeyForCrypto(w, r, action, req.KeyID, "kms:Encrypt", true)
 	if !ok {
 		return
 	}
+	if _, err := resolveEncryptionAlgorithm(key, req.EncryptionAlgorithm); err != nil {
+		var oe *kmsOpError
+		errors.As(err, &oe)
+		s.kmsFail(w, r, action, key.ID, oe.Type, oe.Message)
+		return
+	}
 	if req.DryRun {
 		s.kmsDryRun(w, r, action, key.ID)
 		return
 	}
-	cipherBlob, err := cryptoutil.EncryptBlob(key.MasterKeyRaw, key.ID, plaintext, cryptoutil.CanonicalContext(req.EncryptionContext))
+	// Symmetric keys seal under their current material version; RSA keys
+	// use RSAES-OAEP-SHA-256.
+	cipherBlob, alg, err := kmsEncrypt(key, req.EncryptionAlgorithm, plaintext, req.EncryptionContext)
 	if err != nil {
-		writeAWSJSONError(w, http.StatusInternalServerError, "KMSInternalException", "encrypt failed: "+err.Error())
+		var oe *kmsOpError
+		if errors.As(err, &oe) {
+			s.kmsFail(w, r, action, key.ID, oe.Type, oe.Message)
+			return
+		}
+		slog.Error("kms encrypt failed", "key_id", key.ID, "err", err)
+		writeAWSJSONError(w, http.StatusInternalServerError, "KMSInternalException", "encrypt failed")
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "KMSInternalException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
@@ -516,7 +531,7 @@ func (s *Server) handleEncrypt(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, encryptResponse{
 		CiphertextBlob:      base64.StdEncoding.EncodeToString(cipherBlob),
 		KeyID:               kmsKeyARN(key),
-		EncryptionAlgorithm: kmsSymmetricAlgorithm,
+		EncryptionAlgorithm: alg,
 	})
 }
 
@@ -536,7 +551,8 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 		s.kmsValidationError(w, r, action, req.KeyID, "Recipient (Nitro Enclaves attestation) is not supported")
 		return
 	}
-	if !validSymmetricAlgorithm(req.EncryptionAlgorithm) {
+	asymmetric := strings.EqualFold(strings.TrimSpace(req.EncryptionAlgorithm), encAlgRSAOAEP256)
+	if !asymmetric && !validSymmetricAlgorithm(req.EncryptionAlgorithm) {
 		s.kmsFail(w, r, action, req.KeyID, "InvalidKeyUsageException", "EncryptionAlgorithm "+req.EncryptionAlgorithm+" is not valid for this key")
 		return
 	}
@@ -545,20 +561,38 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 		s.kmsValidationError(w, r, action, "", "CiphertextBlob must be base64")
 		return
 	}
-	keyID, rawBlob, err := cryptoutil.DecodeCipherBlob(cipherBlob)
-	if err != nil {
-		s.kmsFail(w, r, action, "", "InvalidCiphertextException", "The ciphertext is invalid.")
+	// RSA ciphertext carries no header: AWS requires KeyId to decrypt it.
+	if asymmetric && strings.TrimSpace(req.KeyID) == "" {
+		s.kmsValidationError(w, r, action, "", "KeyId is required to decrypt with an asymmetric key")
 		return
+	}
+	keyID := ""
+	if asymmetric {
+		keyID = req.KeyID
+	} else {
+		keyID, _, _ = cryptoutil.DecodeCipherBlob(cipherBlob)
 	}
 
 	var key store.KMSKey
-	if keyID == "" {
+	switch {
+	case asymmetric:
+		key, err = s.resolveKMSKey(ctx, keyID)
+	case keyID == "":
 		key, err = s.store.ResolveDefault(ctx)
-	} else {
+	default:
 		key, err = s.store.ResolveByID(ctx, keyID)
+		if isKMSNotFound(err) && strings.TrimSpace(req.KeyID) == "" {
+			// A legacy headerless blob whose random nonce happens to look
+			// like a header: it was sealed under the default key.
+			if def, derr := s.store.ResolveDefault(ctx); derr == nil {
+				if _, oerr := def.DecryptBlob(cipherBlob, cryptoutil.CanonicalContext(req.EncryptionContext)); oerr == nil {
+					key, err = def, nil
+				}
+			}
+		}
 	}
 	if err != nil {
-		if isKMSNotFound(err) {
+		if isKMSNotFound(err) && !asymmetric {
 			// The ciphertext names a key this account cannot see.
 			s.kmsFail(w, r, action, keyID, "InvalidCiphertextException", "The ciphertext is invalid.")
 			return
@@ -595,8 +629,15 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 		s.kmsDryRun(w, r, action, key.ID)
 		return
 	}
-	plaintext, err := cryptoutil.DecryptBlob(key.MasterKeyRaw, rawBlob, cryptoutil.CanonicalContext(req.EncryptionContext))
+	// The blob names its material version, so ciphertext sealed before any
+	// rotation still opens.
+	plaintext, alg, err := kmsDecrypt(key, req.EncryptionAlgorithm, cipherBlob, req.EncryptionContext)
 	if err != nil {
+		var oe *kmsOpError
+		if errors.As(err, &oe) && oe.Type != "InvalidCiphertextException" {
+			s.kmsFail(w, r, action, key.ID, oe.Type, oe.Message)
+			return
+		}
 		s.kmsFail(w, r, action, key.ID, "InvalidCiphertextException", "The ciphertext is invalid or the encryption context does not match.")
 		return
 	}
@@ -606,7 +647,7 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, decryptResponse{
 		KeyID:               kmsKeyARN(key),
 		Plaintext:           base64.StdEncoding.EncodeToString(plaintext),
-		EncryptionAlgorithm: kmsSymmetricAlgorithm,
+		EncryptionAlgorithm: alg,
 	})
 }
 
@@ -1068,6 +1109,11 @@ func (s *Server) handleCreateGrant(w http.ResponseWriter, r *http.Request) {
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
+	if err := validateGrantRequest(key, &req); err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
+		return
+	}
 	grant, err := s.store.CreateGrant(r.Context(), req)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "create grant failed")
@@ -1108,7 +1154,7 @@ func (s *Server) handleListGrants(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]grantListEntry, 0, len(grants))
 	for _, grant := range grants {
-		out = append(out, grantListEntry{GrantID: grant.GrantID, KeyID: grant.KeyID, GranteePrincipal: grant.GranteePrincipal, RetiringPrincipal: grant.RetiringPrincipal, Operations: append([]string(nil), grant.Operations...), Name: grant.Name, CreationDate: grant.CreatedAt})
+		out = append(out, grantListEntry{GrantID: grant.GrantID, KeyID: grant.KeyID, GranteePrincipal: grant.GranteePrincipal, RetiringPrincipal: grant.RetiringPrincipal, Operations: append([]string(nil), grant.Operations...), Name: grant.Name, CreationDate: store.AWSTimestamp(grant.CreatedAt)})
 	}
 	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, listGrantsResponse{Grants: out})
@@ -1156,7 +1202,20 @@ func (s *Server) handleRetireGrant(w http.ResponseWriter, r *http.Request) {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "GrantId or GrantToken is required")
 		return
 	}
-	if err := s.store.RetireGrant(r.Context(), req.GrantID, req.GrantToken); err != nil {
+	grant, err := s.store.FindGrant(r.Context(), strings.TrimSpace(req.GrantID), strings.TrimSpace(req.GrantToken))
+	if err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "grant not found")
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
+		return
+	}
+	// As in AWS: the retiring principal, a grantee holding RetireGrant, or
+	// anyone the key policy allows kms:RetireGrant may retire a grant.
+	if !s.mayRetireGrant(r, grant) {
+		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "not allowed to retire this grant")
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: grant.KeyID, Result: "error", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
+		return
+	}
+	if err := s.store.RetireGrant(r.Context(), grant.GrantID, ""); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "grant not found")
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
@@ -1187,7 +1246,7 @@ func toKeyMetadata(key store.KMSKey) keyMetadata {
 		Description:           key.Description,
 		KeyUsage:              keyUsage,
 		KeyState:              keyState(key),
-		Origin:                "AWS_KMS",
+		Origin:                keyOrigin(key),
 		KeyManager:            "CUSTOMER",
 		CustomerMasterKeySpec: keySpec,
 		KeySpec:               keySpec,
@@ -1211,12 +1270,11 @@ func accountFromARN(a string) string {
 	return "000000000000"
 }
 
-func keyEncryptionAlgorithms(key store.KMSKey) []string {
-	usage, _ := keyUsageAndSpecForMetadata(key)
-	if usage != store.KeyUsageEncryptDecrypt {
-		return nil
+func keyOrigin(key store.KMSKey) string {
+	if key.Origin == "" {
+		return store.OriginAWSKMS
 	}
-	return []string{store.KeySpecSymmetricDefault}
+	return key.Origin
 }
 
 func pendingDeletionDays(deletionDate *time.Time) int {

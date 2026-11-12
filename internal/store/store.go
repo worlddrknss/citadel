@@ -40,6 +40,7 @@ type Store interface {
 	SecretLifecycleStore
 	AWSPageStore
 	IdentityStore
+	KMSLifecycleStore
 }
 
 // KeyStore persists KMS keys, aliases, key policies and grants.
