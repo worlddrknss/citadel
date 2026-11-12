@@ -33,8 +33,10 @@ Citadel {{ include "citadel.imageTag" . }} is deployed as {{ include "citadel.fu
 {{- if or .Values.secrets.bootstrapToken.value .Values.secrets.bootstrapToken.existingSecret }}
    You supplied it as KMS_BOOTSTRAP_TOKEN.
 {{- else }}
-   The server generated one and printed it in its log. Every replica that
-   starts in bootstrap mode logs the instructions; read them with:
+   The server generated one and printed it in its log. Each replica
+   generates its OWN token, valid only on that replica: with more than one
+   replica, set secrets.bootstrapToken so setup works whichever pod answers,
+   or scale to one replica for setup. Read the logs with:
 
    kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/name={{ include "citadel.name" . }} --tail=-1 | grep -i bootstrap
 {{- end }}

@@ -138,7 +138,9 @@ its API is closed except for first-run setup, server info and login. Open
 `<KMS_PUBLIC_URL>/app/`, enter the bootstrap token, and create the
 organization, first account and platform admin. The token is the value of
 `KMS_BOOTSTRAP_TOKEN` if you set one; otherwise the server generates one and
-prints it in its log:
+prints it in its log. A generated token is valid only on the replica that
+printed it, so for a multi-replica first run set `KMS_BOOTSTRAP_TOKEN` (or run
+setup with one replica):
 
 ```bash
 kubectl -n citadel logs -l app.kubernetes.io/name=citadel --tail=-1 | grep -i bootstrap
