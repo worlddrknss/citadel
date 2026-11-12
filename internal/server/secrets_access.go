@@ -72,11 +72,17 @@ func (s *Server) requireReveal(w http.ResponseWriter, r *http.Request, ctx conte
 	return true
 }
 
-// approvalPolicyFor returns the policy for project/env, if any.
+// approvalPolicyFor returns the policy for project/env, if any. A per-project
+// policy (store.ApprovalStore) wins; otherwise the organization settings'
+// approvalEnvironments (environment slugs, any project) and
+// approvalMinApprovers act as the default, approved by admins.
 func (s *Server) approvalPolicyFor(ctx context.Context, project, env string) (store.ApprovalPolicy, bool, error) {
 	p, ok, err := s.store.GetApprovalPolicy(ctx, project, env)
-	if err != nil || !ok || p.ApprovalsRequired <= 0 {
+	if err != nil {
 		return store.ApprovalPolicy{}, false, err
+	}
+	if !ok || p.ApprovalsRequired <= 0 {
+		return s.orgDefaultPolicy(ctx, project, env)
 	}
 	if len(p.ApproverRoles) == 0 {
 		p.ApproverRoles = []string{"admin"}
@@ -176,4 +182,22 @@ func writeSecretsFailure(w http.ResponseWriter, status int, code string, err err
 	}
 	log.Printf("%s: %v", code, err)
 	writeNativeError(w, http.StatusInternalServerError, code, "the operation failed")
+}
+
+// orgDefaultPolicy is the policy implied by the organization settings for
+// project/env when no per-project policy exists. The settings' self-approval
+// flag is deliberately ignored: a requester never approves their own request.
+func (s *Server) orgDefaultPolicy(ctx context.Context, project, env string) (store.ApprovalPolicy, bool, error) {
+	org := s.orgSettings(ctx)
+	for _, e := range org.ApprovalEnvironments {
+		if strings.EqualFold(strings.TrimSpace(e), env) {
+			return store.ApprovalPolicy{
+				Project:           project,
+				Env:               env,
+				ApprovalsRequired: max(org.ApprovalMinApprovers, 1),
+				ApproverRoles:     []string{"admin"},
+			}, true, nil
+		}
+	}
+	return store.ApprovalPolicy{}, false, nil
 }

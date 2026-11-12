@@ -534,12 +534,31 @@ func (s *Server) handleV1ListApprovalPolicies(w http.ResponseWriter, r *http.Req
 		return
 	}
 	out := make([]map[string]any, 0, len(policies))
+	explicit := map[string]bool{}
 	for _, p := range policies {
 		roles := p.ApproverRoles
 		if len(roles) == 0 {
 			roles = []string{"admin"}
 		}
-		out = append(out, map[string]any{"project": p.Project, "env": p.Env, "approvalsRequired": p.ApprovalsRequired, "approverRoles": roles})
+		explicit[p.Project+"/"+p.Env] = true
+		out = append(out, map[string]any{"project": p.Project, "env": p.Env, "approvalsRequired": p.ApprovalsRequired, "approverRoles": roles, "source": "project"})
+	}
+	// Environments covered only by the organization's approvalEnvironments
+	// default, listed per existing project so the console routes them through
+	// change requests too.
+	if len(s.orgSettings(ctx).ApprovalEnvironments) > 0 {
+		if projects, err := s.secretsSvc().ListProjects(ctx); err == nil {
+			for _, pr := range projects {
+				for _, env := range pr.Environments {
+					if explicit[pr.Slug+"/"+env] {
+						continue
+					}
+					if p, ok, _ := s.orgDefaultPolicy(ctx, pr.Slug, env); ok {
+						out = append(out, map[string]any{"project": p.Project, "env": p.Env, "approvalsRequired": p.ApprovalsRequired, "approverRoles": p.ApproverRoles, "source": "organization"})
+					}
+				}
+			}
+		}
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{"policies": out})
 }
