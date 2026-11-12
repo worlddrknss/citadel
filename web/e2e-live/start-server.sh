@@ -52,8 +52,10 @@ export KMS_SECRET_ACCESS_KEY=liveE2EsecretAccessKey0123456789abcdefghij
 export KMS_LOG_FORMAT=text
 export GODEBUG=fips140=only
 
-# Not exec: the trap above must run to remove the database container.
-"$RUN_DIR/citadel" &
+# Not exec: the trap above must run to remove the database container. The
+# server log goes to .run/server.log (CI uploads it on failure).
+echo ">> Starting Citadel on $KMS_PUBLIC_URL (log: $RUN_DIR/server.log)"
+"$RUN_DIR/citadel" >"$RUN_DIR/server.log" 2>&1 &
 SERVER_PID=$!
 trap 'kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; docker rm -f "$PG_CONTAINER" >/dev/null 2>&1 || true' EXIT INT TERM
 wait "$SERVER_PID"

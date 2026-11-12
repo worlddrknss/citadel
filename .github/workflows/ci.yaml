@@ -99,6 +99,58 @@ jobs:
             web/test-results/
           retention-days: 14
 
+  # The console driven through a browser against the real server binary and
+  # a fresh Postgres: first-run bootstrap, secrets, approvals, audit, PKI,
+  # IAM, workload identity, KMS, account and admin flows. Nothing is mocked.
+  e2e-live:
+    runs-on: ubuntu-latest
+    needs: [go, web]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: citadel-live-e2e-pw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # start-server.sh skips its own Docker database when this is set.
+      CITADEL_LIVE_DB_URL: postgres://postgres:citadel-live-e2e-pw@localhost:5432/postgres?sslmode=disable
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      # Builds the console and the server (FIPS module), starts it in
+      # bootstrap mode and runs web/e2e-live in order.
+      - name: Live end-to-end tests
+        run: npm run test:e2e:live
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-live
+          path: |
+            web/playwright-report-live/
+            web/test-results-live/
+            web/e2e-live/.run/server.log
+          retention-days: 14
+
   helm:
     runs-on: ubuntu-latest
     steps:
