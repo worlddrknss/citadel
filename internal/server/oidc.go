@@ -164,8 +164,10 @@ func verifyWebIdentityToken(ctx context.Context, client *http.Client, token, exp
 		return oidcClaims{}, errors.New("JWT not yet valid")
 	}
 
-	// Resolve the signing key for this issuer/kid and verify the signature.
-	pub, err := globalJWKSCache.keyFor(ctx, client, raw.Issuer, header.Kid)
+	// Resolve the signing key and verify the signature. Keys are fetched from
+	// the trusted provider URL Citadel has stored, never from the token's own
+	// iss value, so no request URL is ever chosen by the caller.
+	pub, err := globalJWKSCache.keyFor(ctx, client, expectedIssuer, header.Kid)
 	if err != nil {
 		return oidcClaims{}, err
 	}

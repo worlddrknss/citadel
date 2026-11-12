@@ -25,7 +25,7 @@ test('admin adds and edits an OIDC provider', async ({ page, expectStatus }) => 
   await dlg.getByLabel('Audiences').fill('sts.amazonaws.com');
   await dlg.getByRole('button', { name: 'Add provider' }).click();
   await expect(dlg).toBeHidden();
-  await expect(page.getByRole('row', { name: new RegExp(ISSUER.replace(/[.]/g, '\\.')) })).toBeVisible();
+  await expect(page.getByRole('row', { name: ISSUER })).toBeVisible();
 
   // Registering the same issuer again is refused instead of overwriting it.
   expectStatus(409, /\/v1\/iam\/oidc-providers$/);
