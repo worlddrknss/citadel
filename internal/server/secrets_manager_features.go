@@ -58,6 +58,13 @@ type rotateSecretRequest struct {
 	RotationLambdaARN      string `json:"RotationLambdaARN"`
 	RotateImmediately      *bool  `json:"RotateImmediately"`
 	AutomaticallyAfterDays int    `json:"AutomaticallyAfterDays"`
+	// RotationRules is where AWS SDKs put the schedule; the top-level
+	// AutomaticallyAfterDays above is kept for older Citadel clients.
+	RotationRules *struct {
+		AutomaticallyAfterDays int    `json:"AutomaticallyAfterDays"`
+		Duration               string `json:"Duration"`
+		ScheduleExpression     string `json:"ScheduleExpression"`
+	} `json:"RotationRules"`
 }
 
 type rotateSecretResponse struct {
@@ -263,6 +270,19 @@ func (s *Server) handleRotateSecret(w http.ResponseWriter, r *http.Request) {
 	var req rotateSecretRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
+		return
+	}
+	if req.RotationRules != nil {
+		if req.RotationRules.ScheduleExpression != "" {
+			writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", "RotationRules.ScheduleExpression is not supported; use AutomaticallyAfterDays")
+			return
+		}
+		if req.RotationRules.AutomaticallyAfterDays != 0 {
+			req.AutomaticallyAfterDays = req.RotationRules.AutomaticallyAfterDays
+		}
+	}
+	if req.AutomaticallyAfterDays < 0 || req.AutomaticallyAfterDays > 1000 {
+		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", "AutomaticallyAfterDays must be between 1 and 1000")
 		return
 	}
 	rotateImmediately := true

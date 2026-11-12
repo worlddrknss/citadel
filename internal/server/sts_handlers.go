@@ -37,6 +37,7 @@ const stsMaxBody = 1 << 20
 
 // handleSTS is the entry point for STS Query-protocol requests routed from "/".
 func (s *Server) handleSTS(w http.ResponseWriter, r *http.Request) {
+	w = beginAWSResponse(w, "sts")
 	if r.Method != http.MethodPost {
 		writeSTSError(w, http.StatusMethodNotAllowed, "MethodNotAllowed", "method not allowed")
 		return
@@ -110,7 +111,7 @@ func (s *Server) handleSTSGetCallerIdentity(w http.ResponseWriter, r *http.Reque
 	resp.Result.Account = accountID
 	resp.Result.Arn = principalARN
 	resp.Result.UserID = principalUserID(principalARN)
-	resp.Metadata.RequestID = newSTSRequestID()
+	resp.Metadata.RequestID = stsRequestID(w)
 	writeSTSXML(w, http.StatusOK, resp)
 }
 
@@ -152,7 +153,7 @@ func (s *Server) handleSTSAssumeRole(w http.ResponseWriter, r *http.Request, bod
 	resp.XMLNS = stsXMLNamespace
 	resp.Result.Credentials = creds
 	resp.Result.AssumedRoleUser = stsAssumedRoleUser{Arn: assumedARN, AssumedRoleID: assumedUserID}
-	resp.Metadata.RequestID = newSTSRequestID()
+	resp.Metadata.RequestID = stsRequestID(w)
 	writeSTSXML(w, http.StatusOK, resp)
 }
 
@@ -217,7 +218,7 @@ func (s *Server) handleSTSAssumeRoleWithWebIdentity(w http.ResponseWriter, r *ht
 	resp.Result.SubjectFromWebIdentityToken = claims.Subject
 	resp.Result.Audience = strings.Join(claims.Audiences, ",")
 	resp.Result.Provider = claims.Issuer
-	resp.Metadata.RequestID = newSTSRequestID()
+	resp.Metadata.RequestID = stsRequestID(w)
 	writeSTSXML(w, http.StatusOK, resp)
 }
 
@@ -292,9 +293,13 @@ func principalUserID(arn string) string {
 	return "AIDA" + strings.ToUpper(base32.StdEncoding.EncodeToString(sum[:])[:16])
 }
 
-// newSTSRequestID returns an opaque request id for the response metadata.
-func newSTSRequestID() string {
-	return generateSessionToken()[:32]
+// stsRequestID returns the request id stamped on the response (it matches
+// the x-amzn-RequestId header), or a fresh one.
+func stsRequestID(w http.ResponseWriter) string {
+	if id := awsRequestID(w); id != "" {
+		return id
+	}
+	return newAWSRequestID()
 }
 
 // ---- XML response shapes ---------------------------------------------------
@@ -372,6 +377,6 @@ func writeSTSError(w http.ResponseWriter, status int, code, message string) {
 	resp.Error.Type = "Sender"
 	resp.Error.Code = code
 	resp.Error.Message = message
-	resp.RequestID = newSTSRequestID()
+	resp.RequestID = stsRequestID(w)
 	writeSTSXML(w, status, resp)
 }

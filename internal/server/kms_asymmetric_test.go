@@ -70,7 +70,7 @@ func TestKeySigningAlgorithms(t *testing.T) {
 	}
 	key := store.KMSKey{PublicKeyRaw: publicRaw, KeyUsage: usage, KeySpec: spec}
 	algs := keySigningAlgorithms(key)
-	if len(algs) != 1 || algs[0] != defaultSignAlgRSA {
+	if len(algs) != 6 || algs[0] != defaultSignAlgRSA {
 		t.Fatalf("unexpected signing algorithms: %#v", algs)
 	}
 }

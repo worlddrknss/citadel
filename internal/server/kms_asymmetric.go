@@ -97,7 +97,8 @@ func keySigningAlgorithms(key store.KMSKey) []string {
 	}
 	switch spec {
 	case store.KeySpecRSA2048, store.KeySpecRSA3072, store.KeySpecRSA4096:
-		return []string{defaultSignAlgRSA}
+		return []string{defaultSignAlgRSA, "RSASSA_PKCS1_V1_5_SHA_384", "RSASSA_PKCS1_V1_5_SHA_512",
+			"RSASSA_PSS_SHA_256", "RSASSA_PSS_SHA_384", "RSASSA_PSS_SHA_512"}
 	case store.KeySpecECCP256:
 		return []string{defaultSignAlgP256}
 	case store.KeySpecECCP384:
@@ -127,7 +128,15 @@ func signDigestWithKey(key store.KMSKey, signingAlgorithm string, digest []byte)
 	if err != nil {
 		return nil, err
 	}
+	if isPSSAlgorithm(signingAlgorithm) {
+		return priv.Sign(rand.Reader, digest, &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: hashFunc})
+	}
 	return priv.Sign(rand.Reader, digest, hashFunc)
+}
+
+// isPSSAlgorithm reports whether a KMS signing algorithm is RSASSA-PSS.
+func isPSSAlgorithm(signingAlgorithm string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(signingAlgorithm)), "RSASSA_PSS_")
 }
 
 func verifyDigestWithKey(key store.KMSKey, signingAlgorithm string, digest, signature []byte) (bool, error) {
@@ -145,7 +154,11 @@ func verifyDigestWithKey(key store.KMSKey, signingAlgorithm string, digest, sign
 	}
 	switch publicKey := pub.(type) {
 	case *rsa.PublicKey:
-		return true, rsa.VerifyPKCS1v15(publicKey, hashFunc, digest, signature)
+		// A verification failure is an invalid signature, not an error.
+		if isPSSAlgorithm(signingAlgorithm) {
+			return rsa.VerifyPSS(publicKey, hashFunc, digest, signature, &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: hashFunc}) == nil, nil
+		}
+		return rsa.VerifyPKCS1v15(publicKey, hashFunc, digest, signature) == nil, nil
 	case *ecdsa.PublicKey:
 		return ecdsa.VerifyASN1(publicKey, digest, signature), nil
 	default:
@@ -170,6 +183,12 @@ func hashForSigningAlgorithm(signingAlgorithm, keySpec string) (crypto.Hash, err
 	case "RSASSA_PKCS1_V1_5_SHA_384":
 		return crypto.SHA384, nil
 	case "RSASSA_PKCS1_V1_5_SHA_512":
+		return crypto.SHA512, nil
+	case "RSASSA_PSS_SHA_256":
+		return crypto.SHA256, nil
+	case "RSASSA_PSS_SHA_384":
+		return crypto.SHA384, nil
+	case "RSASSA_PSS_SHA_512":
 		return crypto.SHA512, nil
 	case defaultSignAlgP256:
 		return crypto.SHA256, nil
