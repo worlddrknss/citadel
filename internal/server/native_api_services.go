@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -156,7 +157,8 @@ func (s *Server) handleV1ListAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	records, err := s.store.ListAuditEvents(ctx, 500)
 	if err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "list_failed", err.Error())
+		log.Printf("audit list failed: %v", err)
+		writeNativeError(w, http.StatusInternalServerError, "list_failed", "failed to list audit events")
 		return
 	}
 	out := make([]nativeAuditEvent, 0, len(records))

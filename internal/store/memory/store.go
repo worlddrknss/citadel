@@ -25,6 +25,7 @@ type Store struct {
 	audit        []store.AuditRecord
 	auditSeq     int64
 	AuditHMACKey []byte
+	auditAux     *memAuditState
 	uiUsers      map[string]store.UIUser
 	uiAccounts   map[string]struct{}
 	Region       string

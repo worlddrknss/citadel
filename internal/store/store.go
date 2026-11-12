@@ -23,6 +23,7 @@ type Store interface {
 	KeyStore
 	SecretStore
 	AuditStore
+	AuditQueryStore
 	UserStore
 	AccountStore
 	AccessKeyStore

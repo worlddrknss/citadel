@@ -117,7 +117,7 @@ func (s *Server) handleSTSGetCallerIdentity(w http.ResponseWriter, r *http.Reque
 // ---- AssumeRole ------------------------------------------------------------
 
 func (s *Server) handleSTSAssumeRole(w http.ResponseWriter, r *http.Request, bodyHash string) {
-	callerAccount, _, err := s.resolveSignedSTSCaller(r, bodyHash)
+	callerAccount, callerARN, err := s.resolveSignedSTSCaller(r, bodyHash)
 	if err != nil {
 		writeSTSError(w, http.StatusForbidden, "AccessDenied", "the caller is not authorized to perform sts:AssumeRole")
 		return
@@ -146,7 +146,7 @@ func (s *Server) handleSTSAssumeRole(w http.ResponseWriter, r *http.Request, bod
 		writeSTSError(w, http.StatusInternalServerError, "InternalFailure", "failed to issue credentials")
 		return
 	}
-	s.recordAudit(store.WithCallerAccount(ctx, role.AccountID), store.AuditEvent{Action: "sts.AssumeRole", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(store.WithCallerAccount(r.Context(), role.AccountID), store.AuditEvent{Action: "sts.AssumeRole", Result: "ok", AuditOrigin: s.stsAuditOrigin(r, store.AuditActorAccessKey, callerARN, assumedARN, creds.AccessKeyID)})
 
 	resp := stsAssumeRoleResponse{}
 	resp.XMLNS = stsXMLNamespace
@@ -208,7 +208,7 @@ func (s *Server) handleSTSAssumeRoleWithWebIdentity(w http.ResponseWriter, r *ht
 		writeSTSError(w, http.StatusInternalServerError, "InternalFailure", "failed to issue credentials")
 		return
 	}
-	s.recordAudit(store.WithCallerAccount(ctx, role.AccountID), store.AuditEvent{Action: "sts.AssumeRoleWithWebIdentity", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(store.WithCallerAccount(r.Context(), role.AccountID), store.AuditEvent{Action: "sts.AssumeRoleWithWebIdentity", Result: "ok", AuditOrigin: s.stsAuditOrigin(r, store.AuditActorWebIdentity, claims.Issuer+"#"+claims.Subject, assumedARN, creds.AccessKeyID)})
 
 	resp := stsAssumeRoleWithWebIdentityResponse{}
 	resp.XMLNS = stsXMLNamespace

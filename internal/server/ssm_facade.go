@@ -130,19 +130,19 @@ func (s *Server) handleSSMPutParameter(w http.ResponseWriter, r *http.Request) {
 	var req ssmPutParameterRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	rec, err := s.buildParameterRecord(r.Context(), req.Name, req.Type, req.Value, req.KeyId, req.Tier, req.Description)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	saved, err := ps.PutParameter(r.Context(), rec, req.Overwrite)
 	if err != nil {
 		ssmParameterError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: rec.KMSKeyID, Result: "error", ErrorType: classifyParameterError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: rec.KMSKeyID, Result: "error", ErrorType: classifyParameterError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if len(req.Tags) > 0 {
@@ -152,7 +152,7 @@ func (s *Server) handleSSMPutParameter(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = ps.TagParameter(r.Context(), saved.Name, tags)
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: saved.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: saved.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, ssmPutParameterResponse{Version: saved.Version, Tier: saved.Tier})
 }
 
@@ -186,10 +186,10 @@ func (s *Server) handleSSMGetParameter(w http.ResponseWriter, r *http.Request) {
 	rec, err := ps.GetParameter(r.Context(), name)
 	if err != nil {
 		ssmParameterError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifyParameterError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifyParameterError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: rec.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: rec.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, ssmGetParameterResponse{Parameter: s.ssmParameterFrom(r.Context(), rec, req.WithDecryption)})
 }
 
@@ -230,7 +230,7 @@ func (s *Server) handleSSMGetParameters(w http.ResponseWriter, r *http.Request) 
 		}
 		resp.Parameters = append(resp.Parameters, s.ssmParameterFrom(r.Context(), rec, req.WithDecryption))
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -282,7 +282,7 @@ func (s *Server) handleSSMGetParametersByPath(w http.ResponseWriter, r *http.Req
 		}
 		out = append(out, s.ssmParameterFrom(r.Context(), rec, req.WithDecryption))
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, ssmGetParametersByPathResponse{Parameters: out})
 }
 
@@ -310,10 +310,10 @@ func (s *Server) handleSSMDeleteParameter(w http.ResponseWriter, r *http.Request
 	}
 	if err := ps.DeleteParameter(r.Context(), name); err != nil {
 		ssmParameterError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifyParameterError(err), Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifyParameterError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -350,7 +350,7 @@ func (s *Server) handleSSMDeleteParameters(w http.ResponseWriter, r *http.Reques
 		}
 		resp.DeletedParameters = append(resp.DeletedParameters, name)
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -386,7 +386,7 @@ func (s *Server) handleSSMDescribeParameters(w http.ResponseWriter, r *http.Requ
 			DataType:         "text",
 		})
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, ssmDescribeParametersResponse{Parameters: out})
 }
 
@@ -462,7 +462,7 @@ func (s *Server) handleSSMGetParameterHistory(w http.ResponseWriter, r *http.Req
 			DataType:         "text",
 		})
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, ssmGetParameterHistoryResponse{Parameters: out})
 }
 
@@ -505,7 +505,7 @@ func (s *Server) handleSSMLabelParameterVersion(w http.ResponseWriter, r *http.R
 			version = rec.Version
 		}
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, ssmLabelParameterVersionResponse{InvalidLabels: []string{}, ParameterVersion: version})
 }
 
@@ -541,7 +541,7 @@ func (s *Server) handleSSMAddTagsToResource(w http.ResponseWriter, r *http.Reque
 		ssmParameterError(w, err)
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -571,7 +571,7 @@ func (s *Server) handleSSMRemoveTagsFromResource(w http.ResponseWriter, r *http.
 		ssmParameterError(w, err)
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -610,6 +610,6 @@ func (s *Server) handleSSMListTagsForResource(w http.ResponseWriter, r *http.Req
 		out = append(out, ssmTag{Key: t.Key, Value: t.Value})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, ssmListTagsResponse{TagList: out})
 }

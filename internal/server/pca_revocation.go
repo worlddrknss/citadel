@@ -121,13 +121,13 @@ func (s *Server) handleGetCRL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
 
 	if req.CertificateAuthorityARN == "" {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "CertificateAuthorityArn is required")
 		return
 	}
@@ -135,13 +135,13 @@ func (s *Server) handleGetCRL(w http.ResponseWriter, r *http.Request) {
 	// Load CA
 	ca, err := s.store.DescribeCertificateAuthority(r.Context(), req.CertificateAuthorityARN)
 	if err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ResourceNotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ResourceNotFoundException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ResourceNotFoundException", err.Error())
 		return
 	}
 
 	if ca.CACertB64 == "" {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ResourceNotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ResourceNotFoundException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ResourceNotFoundException", "CA certificate not found")
 		return
 	}
@@ -149,7 +149,7 @@ func (s *Server) handleGetCRL(w http.ResponseWriter, r *http.Request) {
 	// Load CA key
 	caKey, err := s.store.ResolveByID(r.Context(), ca.KMSKeyID)
 	if err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "failed to load CA key")
 		return
 	}
@@ -157,7 +157,7 @@ func (s *Server) handleGetCRL(w http.ResponseWriter, r *http.Request) {
 	// Parse CA public key
 	caPubKey, err := x509.ParsePKIXPublicKey(caKey.PublicKeyRaw)
 	if err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "failed to parse CA public key")
 		return
 	}
@@ -178,7 +178,7 @@ func (s *Server) handleGetCRL(w http.ResponseWriter, r *http.Request) {
 	// Create KMS signer
 	signer, err := newKMSSigner(r.Context(), s.store, caKey, sigAlg)
 	if err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "failed to create CA signer")
 		return
 	}
@@ -187,14 +187,14 @@ func (s *Server) handleGetCRL(w http.ResponseWriter, r *http.Request) {
 	crlDER, err := s.generateCRL(r.Context(), &ca, &caKey, signer, caPubKey)
 	if err != nil {
 		log.Printf("generateCRL error: %v", err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "failed to generate CRL")
 		return
 	}
 
 	crlB64 := base64.StdEncoding.EncodeToString(crlDER)
 
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"CRL": crlB64,
 	})

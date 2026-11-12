@@ -44,6 +44,8 @@ type Server struct {
 
 	secretsOnce sync.Once
 	secretsSvcV *secretsService
+
+	audit auditRuntime
 }
 
 // secretsSvc returns the shared protocol-free secrets service, lazily binding
@@ -87,7 +89,9 @@ func New(ctx context.Context, cfg config.Config, st store.Store, webFS fs.FS) (*
 		log.Printf("WARNING: KMS_INSECURE_DEV=true — authentication is DISABLED. Never use this outside local development.")
 	}
 
-	return &Server{cfg: cfg, store: st, acmeChallenges: newACMEChallengeStore(), webFS: webFS}, nil
+	srv := &Server{cfg: cfg, store: st, acmeChallenges: newACMEChallengeStore(), webFS: webFS}
+	srv.startAuditStreamJob()
+	return srv, nil
 }
 
 // handler returns the HTTP handler serving every route, wrapped in the
@@ -165,6 +169,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/certificates/letsencrypt/dns/begin", s.handleV1BeginLEDNSOrder)
 	mux.HandleFunc("POST /v1/certificates/letsencrypt/dns/complete", s.handleV1CompleteLEDNSOrder)
 	mux.HandleFunc("GET /v1/audit", s.handleV1ListAudit)
+	s.registerAuditRoutes(mux)
 	mux.HandleFunc("GET /v1/change-requests", s.handleV1ListChangeRequests)
 	mux.HandleFunc("POST /v1/change-requests", s.handleV1CreateChangeRequest)
 	mux.HandleFunc("POST /v1/change-requests/approve", s.handleV1ApproveChangeRequest)
@@ -226,7 +231,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Middleware chain (outermost first): panic recovery, security headers,
 	// request logging.
-	return withPanicRecovery(withSecurityHeaders(withRequestLogging(mux)))
+	return withPanicRecovery(withSecurityHeaders(withRequestLogging(s.withAuditContext(mux))))
 }
 
 func maybeBootstrapFromLegacy(ctx context.Context, cfg config.Config, st store.Store) error {
@@ -277,10 +282,4 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
-}
-
-func (s *Server) recordAudit(ctx context.Context, event store.AuditEvent) {
-	if err := s.store.RecordAudit(ctx, event); err != nil {
-		log.Printf("audit write failed action=%s key=%s: %v", event.Action, event.KeyID, err)
-	}
 }

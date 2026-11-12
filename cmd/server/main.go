@@ -41,6 +41,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer s.Close()
 	if err := run(cfg, s.Handler()); err != nil {
 		log.Fatalf("server exited with error: %v", err)
 	}
