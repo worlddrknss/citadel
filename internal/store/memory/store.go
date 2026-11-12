@@ -38,6 +38,7 @@ type Store struct {
 	params       map[string]*memParameter
 	appr         memApprovals
 	awsCompatState
+	pki pkiState
 }
 
 var _ store.Store = (*Store)(nil)

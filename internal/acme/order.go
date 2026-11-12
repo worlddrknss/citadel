@@ -459,7 +459,7 @@ func (s *Server) handleChallenge(w http.ResponseWriter, r *http.Request, rel, au
 			s.problem(w, s.internal("updating challenge", err))
 			return
 		}
-		if !s.startValidation(validator, az.ID, ch.ID, az.Identifier, ch.Token, keyAuthorization(ch.Token, req.thumb)) {
+		if !s.startValidation(validator, acct.AccountRef, az.ID, ch.ID, az.Identifier, ch.Token, keyAuthorization(ch.Token, req.thumb)) {
 			s.problem(w, serverInternal("server is shutting down"))
 			return
 		}
@@ -471,23 +471,23 @@ func (s *Server) handleChallenge(w http.ResponseWriter, r *http.Request, rel, au
 	s.problem(w, serverInternal("too much contention updating challenge"))
 }
 
-func (s *Server) startValidation(v Validator, authzID, challID string, id Identifier, token, keyAuth string) bool {
+func (s *Server) startValidation(v Validator, accountRef, authzID, challID string, id Identifier, token, keyAuth string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return false
 	}
 	s.wg.Add(1)
-	go s.runValidation(v, authzID, challID, id, token, keyAuth)
+	go s.runValidation(v, accountRef, authzID, challID, id, token, keyAuth)
 	return true
 }
 
-func (s *Server) runValidation(v Validator, authzID, challID string, id Identifier, token, keyAuth string) {
+func (s *Server) runValidation(v Validator, accountRef, authzID, challID string, id Identifier, token, keyAuth string) {
 	defer s.wg.Done()
 	var verr error
 	select {
 	case s.sem <- struct{}{}:
-		ctx, cancel := context.WithTimeout(s.ctx, s.cfg.ValidationTimeout)
+		ctx, cancel := context.WithTimeout(withAccountRef(s.ctx, accountRef), s.cfg.ValidationTimeout)
 		func() {
 			defer func() {
 				if r := recover(); r != nil {

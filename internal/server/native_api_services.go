@@ -1,12 +1,9 @@
 package server
 
 import (
-	"errors"
 	"log"
 	"net/http"
 	"time"
-
-	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // Native read-only /v1 endpoints that back the Svelte parity screens for KMS,
@@ -65,78 +62,6 @@ func (s *Server) handleV1ListKMSKeys(w http.ResponseWriter, r *http.Request) {
 		out = append(out, nk)
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{"keys": out})
-}
-
-type nativeCertificate struct {
-	Source     string `json:"source"`
-	ID         string `json:"id"`
-	Subject    string `json:"subject"`
-	Status     string `json:"status"`
-	NotBefore  string `json:"notBefore,omitempty"`
-	NotAfter   string `json:"notAfter,omitempty"`
-	CAType     string `json:"caType,omitempty"`
-	IssuerCAID string `json:"issuerCaId,omitempty"`
-}
-
-// handleV1ListCertificates returns issued certificates across the private CA
-// hierarchy and any Let's Encrypt certificates.
-func (s *Server) handleV1ListCertificates(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "viewer")
-	if !ok {
-		return
-	}
-	out := make([]nativeCertificate, 0)
-	cas, err := s.store.ListCertificateAuthorities(ctx)
-	if err != nil {
-		// Stores without certificate support (e.g. the in-memory dev store)
-		// simply have no certificates to show rather than erroring the screen.
-		if errors.Is(err, store.ErrUnsupported) {
-			writeNativeJSON(w, http.StatusOK, map[string]any{"certificates": out})
-			return
-		}
-		writeNativeError(w, http.StatusInternalServerError, "list_failed", err.Error())
-		return
-	}
-	for _, ca := range cas {
-		out = append(out, nativeCertificate{
-			Source:    "pca-ca",
-			ID:        ca.CAID,
-			Subject:   ca.SubjectDN,
-			Status:    ca.State,
-			NotBefore: ca.NotBefore.UTC().Format(time.RFC3339),
-			NotAfter:  ca.NotAfter.UTC().Format(time.RFC3339),
-			CAType:    ca.Type,
-		})
-		certs, cerr := s.store.ListCertificates(ctx, ca.CAID)
-		if cerr != nil {
-			continue
-		}
-		for _, c := range certs {
-			out = append(out, nativeCertificate{
-				Source:     "pca-cert",
-				ID:         c.CertID,
-				Subject:    c.Serial,
-				Status:     c.Status,
-				NotBefore:  c.NotBefore.UTC().Format(time.RFC3339),
-				NotAfter:   c.NotAfter.UTC().Format(time.RFC3339),
-				IssuerCAID: ca.CAID,
-			})
-		}
-	}
-	leCerts, lerr := s.store.ListACMELECertificates(ctx)
-	if lerr == nil {
-		for _, c := range leCerts {
-			out = append(out, nativeCertificate{
-				Source:    "lets-encrypt",
-				ID:        c.CertID,
-				Subject:   c.Domains,
-				Status:    c.Status,
-				NotBefore: c.NotBefore.UTC().Format(time.RFC3339),
-				NotAfter:  c.NotAfter.UTC().Format(time.RFC3339),
-			})
-		}
-	}
-	writeNativeJSON(w, http.StatusOK, map[string]any{"certificates": out})
 }
 
 type nativeAuditEvent struct {

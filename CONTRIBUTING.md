@@ -103,8 +103,11 @@ PostgreSQL driver uses it as an HMAC key, and shorter keys are rejected.
 
 Citadel must stay FIPS 140-3 compliant. In code you contribute:
 
-- Use only the Go standard library's crypto packages. Don't add
-  `golang.org/x/crypto` or third-party crypto libraries.
+- Use only the Go standard library's crypto packages for cryptographic
+  operations. Don't add third-party crypto libraries. The one use of
+  `golang.org/x/crypto` is `x/crypto/acme` as the Let's Encrypt protocol
+  client; it performs no cryptography of its own (signing goes through the
+  standard library). Don't add other `x/crypto` packages.
 - Use approved algorithms only: AES-GCM, SHA-2, HMAC with keys of at least
   112 bits, HKDF, PBKDF2, RSA (2048 bits or more) and ECDSA (P-256, P-384).
 - No MD5 or SHA-1 for anything security-related, no

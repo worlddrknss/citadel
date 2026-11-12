@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -56,6 +57,12 @@ type Config struct {
 	// KMS_AUDIT_HMAC_KEY_B64, at least 16 bytes) keys the audit hash chain;
 	// when unset Load derives it from the wrapping key with HKDF.
 	TrustedProxies []netip.Prefix
+
+	// PublicURL is the externally visible base URL of this deployment
+	// (KMS_PUBLIC_URL), e.g. "https://citadel.example.com". It is required
+	// for the ACME server (whose JWS URLs must match exactly) and is used in
+	// CRL distribution points. Empty disables the ACME server.
+	PublicURL string
 }
 
 // MinAuditHMACKeyLen is the shortest KMS_AUDIT_HMAC_KEY_B64 accepted (128
@@ -156,6 +163,11 @@ func Load() (Config, error) {
 	cfg.TLSCertFile = os.Getenv("KMS_TLS_CERT_FILE")
 	cfg.TLSKeyFile = os.Getenv("KMS_TLS_KEY_FILE")
 	cfg.PprofAddr = strings.TrimSpace(os.Getenv("KMS_PPROF_ADDR"))
+	publicURL, err := ParsePublicURL(os.Getenv("KMS_PUBLIC_URL"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.PublicURL = publicURL
 
 	cfg.AWSRegion = strings.TrimSpace(envOrDefault("KMS_AWS_REGION", arn.DefaultRegion))
 	cfg.AWSAccountID = strings.TrimSpace(os.Getenv("KMS_AWS_ACCOUNT_ID"))
@@ -299,4 +311,19 @@ func splitCommaList(raw string) []string {
 		return nil
 	}
 	return strings.Split(raw, ",")
+}
+
+// ParsePublicURL validates KMS_PUBLIC_URL: an absolute http(s) URL without
+// query or fragment. It returns the URL without a trailing slash ("" for an
+// empty input).
+func ParsePublicURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return "", errors.New("KMS_PUBLIC_URL must be an absolute http(s) URL without credentials, query or fragment")
+	}
+	return strings.TrimRight(u.String(), "/"), nil
 }
