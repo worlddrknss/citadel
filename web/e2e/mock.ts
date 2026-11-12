@@ -159,14 +159,19 @@ function certDetail(id: string) {
 const auditRows = Array.from({ length: 12 }, (_, i) => ({
   id: 100 - i,
   createdAt: ago(i * 3_600_000 + 60_000),
-  actor: i % 3 ? 'alice' : 'svc/rotation',
+  actor: i % 3 ? 'alice' : 'AKIACITADELTEST0001',
+  actorType: i % 3 ? 'console' : 'access-key',
   actorDisplayName: i % 3 ? 'Alice Admin' : undefined,
+  accessKeyId: i % 3 ? undefined : 'AKIACITADELTEST0001',
   action: ['secretsmanager.GetSecretValue', 'kms.Encrypt', 'citadel.Login', 'citadel.IssueWorkloadToken'][i % 4],
   resource: i % 2 ? 'payments/prod/API_KEY' : 'alias/default',
   keyId: i % 2 ? undefined : 'alias/default',
-  result: i === 4 ? 'denied' : 'ok',
+  // The server normalizes results to success | denied | error.
+  result: i === 4 ? 'denied' : 'success',
   errorType: i === 4 ? 'AccessDeniedException' : undefined,
   sourceIp: '10.0.0.5',
+  userAgent: i % 3 ? 'Mozilla/5.0 (Macintosh) Chrome/130' : 'aws-cli/2.17',
+  chainSeq: 100 - i,
   prevHash: `h${101 - i}`,
   hash: `h${100 - i}`,
   hashValid: true
@@ -212,6 +217,26 @@ const wiClients = [
   }
 ];
 
+const ssoProviders = [
+  {
+    id: 'sso-9f8e7d6c5b4a',
+    name: 'Okta',
+    issuer: 'https://acme.okta.com',
+    clientId: '0oa1citadel',
+    clientSecretSet: true,
+    scopes: ['openid', 'email', 'profile', 'groups'],
+    groupClaim: 'groups',
+    roleMappings: [{ group: 'platform-admins', accountId: ACCOUNT, role: 'admin' }],
+    defaultRole: 'viewer',
+    enabled: true,
+    redirectUri: 'http://localhost:4173/v1/auth/oidc/sso-9f8e7d6c5b4a/callback',
+    accountId: ACCOUNT,
+    allowedEmailDomains: ['acme.test'],
+    createdAt: ago(40 * DAY),
+    updatedAt: ago(10 * DAY)
+  }
+];
+
 type Json = Record<string, unknown> | unknown[];
 type Handler = (q: URLSearchParams, body: Record<string, unknown>) => Json | undefined;
 
@@ -219,7 +244,8 @@ const ok = { ok: true };
 
 /** GET handlers by path. */
 const GET: Record<string, Handler> = {
-  '/v1/server/info': () => ({ fips: true, version: '1.0.0-test', sessionIdleMinutes: 30, sessionMaxHours: 12 }),
+  // The server deliberately leaves out its version.
+  '/v1/server/info': () => ({ fips: true, sessionIdleMinutes: 30, sessionMaxHours: 12 }),
   '/v1/auth/providers': () => ({ providers: [] }),
   '/v1/bootstrap': () => ({ required: false }),
   '/v1/me': () => me,
@@ -323,8 +349,8 @@ const GET: Record<string, Handler> = {
   }),
   '/v1/admin/users': () => ({
     users: [
-      { username: 'alice', displayName: 'Alice Admin', role: 'admin', accounts: [ACCOUNT], memberships: [{ accountId: ACCOUNT, role: 'admin' }] },
-      { username: 'bob', displayName: 'Bob', role: 'editor', accounts: [ACCOUNT], memberships: [{ accountId: ACCOUNT, role: 'editor' }] }
+      { username: 'alice', displayName: 'Alice Admin', role: 'admin', accounts: [ACCOUNT], memberships: [{ accountId: ACCOUNT, role: 'admin' }], platformAdmin: true },
+      { username: 'bob', displayName: 'Bob', role: 'editor', accounts: [ACCOUNT], memberships: [{ accountId: ACCOUNT, role: 'editor' }], platformAdmin: false }
     ]
   }),
   '/v1/admin/accounts': () => ({
@@ -337,9 +363,11 @@ const GET: Record<string, Handler> = {
     approvalEnvironments: ['prod'],
     approvalMinApprovers: 1,
     sessionIdleMinutes: 30,
-    sessionMaxHours: 12
+    sessionMaxHours: 12,
+    updatedAt: ago(5 * DAY),
+    updatedBy: 'alice'
   }),
-  '/v1/admin/sso/providers': () => ({ providers: [] }),
+  '/v1/admin/sso/providers': () => ({ providers: ssoProviders }),
   '/v1/iam/oidc-providers': () => ({
     providers: [
       {
@@ -369,7 +397,29 @@ const WRITE: Record<string, Handler> = {
   'POST /v1/login': () => me,
   'POST /v1/logout': () => ({ loggedOut: true }),
   'POST /v1/kms/keys/schedule-deletion': (_, b) => ({ keyId: b.keyId, deletionDate: ahead(Number(b.windowDays ?? 30) * DAY) }),
-  'POST /v1/audit/verify': () => GET['/v1/audit/verify'](new URLSearchParams(), {})
+  'POST /v1/audit/verify': () => GET['/v1/audit/verify'](new URLSearchParams(), {}),
+  'POST /v1/audit/stream': (_, b) => ({ enabled: !!b.enabled, url: b.url ?? '', format: b.format ?? 'json', hasToken: typeof b.token === 'string' && b.token !== '' }),
+  'POST /v1/audit/stream/test': () => ({ delivered: true, status: 204 }),
+  'POST /v1/account/keys': () => ({ accessKeyId: 'AKIACITADELTEST0002', secretKey: 'mockSecretAccessKey0123456789abcdefghijklmn' }),
+  'POST /v1/account/profile': (_, b) => ({ username: me.username, displayName: b.displayName }),
+  'POST /v1/account/sessions/revoke-others': () => ({ revoked: 1 }),
+  'DELETE /v1/account/sessions': () => ({ revoked: true }),
+  'POST /v1/admin/settings': (_, b) => ({ ...b, updatedAt: new Date().toISOString(), updatedBy: me.username }),
+  'POST /v1/admin/sso/providers': () => ({ id: 'sso-0a1b2c3d4e5f', redirectUri: 'http://localhost:4173/v1/auth/oidc/sso-0a1b2c3d4e5f/callback' }),
+  'POST /v1/admin/sso/providers/update': (_, b) => ({ id: b.id, updated: true }),
+  'DELETE /v1/admin/sso/providers': () => ({ deleted: true }),
+  'POST /v1/admin/sso/providers/test': () => ({ ok: true, message: 'discovery document fetched', authorizationEndpoint: 'https://idp.acme.test/authorize' })
+};
+
+/** Non-JSON GET responses (downloads). */
+const RAW: Record<string, (q: URLSearchParams) => { contentType: string; body: string }> = {
+  '/v1/audit/export': (q) =>
+    q.get('format') === 'json'
+      ? { contentType: 'application/json', body: JSON.stringify(auditRows) }
+      : {
+          contentType: 'text/csv',
+          body: 'id,chainSeq,createdAt,actor,actorType,action,result\n' + auditRows.map((r) => [r.id, r.chainSeq, r.createdAt, r.actor, r.actorType, r.action, r.result].join(',')).join('\n')
+        }
 };
 
 /** Endpoints that answer without a session. */
@@ -419,6 +469,10 @@ export class MockApi {
     if (method === 'POST' && path === '/v1/login') this.signedIn = true;
     if (method === 'POST' && path === '/v1/logout') this.signedIn = false;
 
+    if (method === 'GET' && RAW[path]) {
+      const r = RAW[path](url.searchParams);
+      return route.fulfill({ status: 200, contentType: r.contentType, body: r.body });
+    }
     if (method === 'GET') {
       const h = GET[path];
       if (!h) {
