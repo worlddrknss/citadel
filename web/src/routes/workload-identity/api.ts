@@ -1,15 +1,14 @@
 // Client for Citadel as a workload identity provider: an OIDC issuer that
-// mints ID tokens for machines, signed by Citadel KMS keys. All endpoints are
-// new; the contracts are documented in the console redesign report.
+// mints ID tokens for machines, signed by Citadel KMS keys. Shapes follow
+// internal/server/workload_identity.go.
 
-import { req, api, type AuditEvent } from '$lib/api';
+import { req, type AuditEvent } from '$lib/api';
 
 export type SigningAlg = 'ES256' | 'ES384' | 'RS256' | 'PS256';
 
 export interface SigningKey {
   kid: string;
   kmsKeyId: string;
-  kmsAlias?: string;
   algorithm: SigningAlg;
   activatedAt: string;
 }
@@ -24,10 +23,17 @@ export interface RetiredKey {
 }
 
 export interface IssuerInfo {
+  /** False when KMS_PUBLIC_URL is unset: the URLs are empty and no tokens are issued. */
+  configured: boolean;
+  /** The configured algorithm for new signing keys (the active key may differ until rotated). */
+  algorithm: SigningAlg;
   issuer: string;
   discoveryUrl: string;
   jwksUrl: string;
+  /** The /v1/workload-identity/token route; responses are {token, expiresAt, tokenType: "id_token"}. */
   tokenEndpoint: string;
+  /** Whether Kubernetes TokenReview is configured, so k8s-token-review clients can be created. */
+  k8sTokenReview?: boolean;
   signingKey: SigningKey | null;
   previousKeys: RetiredKey[];
   rotationDays: number;
@@ -36,7 +42,7 @@ export interface IssuerInfo {
 
 export type ClientAuth =
   | { method: 'access-key'; allowedUsers: string[] }
-  | { method: 'k8s-token-review'; apiServer: string; caPem?: string; serviceAccounts: string[]; reviewAudience?: string };
+  | { method: 'k8s-token-review'; apiServer: string; caPem?: string; serviceAccounts: string[]; reviewAudience: string };
 
 export interface WorkloadClient {
   clientId: string;
@@ -71,14 +77,25 @@ export const wiApi = {
   deleteClient: (clientId: string) =>
     req<{ deleted: boolean }>(`/v1/workload-identity/clients?${qs({ clientId })}`, { method: 'DELETE' }),
 
-  /** Token issuance events from the audit log. */
+  /** Token issuance events (issued and denied) from the audit log, newest first. */
   tokenEvents: async (): Promise<AuditEvent[]> => {
-    const { events } = await api.audit();
-    return (events ?? []).filter((e) => TOKEN_ACTIONS.has(e.action));
+    const { events } = await req<{ events: AuditEvent[] }>(`/v1/audit/events?${qs({ action: TOKEN_ACTION, limit: '500' })}`);
+    return (events ?? []).filter((e) => e.action === TOKEN_ACTION);
   }
 };
 
-export const TOKEN_ACTIONS = new Set(['citadel.IssueWorkloadToken', 'workload-identity.IssueToken']);
+export const TOKEN_ACTION = 'citadel.IssueWorkloadToken';
+
+/** Audit results are success | denied | error (older servers said "ok"). */
+export const issued = (e: AuditEvent) => e.result === 'success' || e.result === 'ok';
+
+// Client field rules, mirroring validateWorkloadClient on the server.
+export const TTL_MIN = 60;
+export const TTL_MAX = 3600;
+export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/;
+export const K8S_NAME_RE = /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/;
+export const MAX_AUDIENCES = 10;
+export const MAX_ALLOWED_USERS = 100;
 
 export const ALGS: { value: SigningAlg; label: string; kms: string }[] = [
   { value: 'ES256', label: 'ES256 · ECDSA P-256 / SHA-256', kms: 'ECC_NIST_P256' },
@@ -119,7 +136,7 @@ export function fmtDate(s?: string): string {
 /** Copy-paste examples for one client. */
 export function usage(c: WorkloadClient, info: IssuerInfo | null, origin: string): { id: string; label: string; code: string }[] {
   const tokenUrl = info?.tokenEndpoint || `${origin}/v1/workload-identity/token`;
-  const issuer = info?.issuer || `${origin}/oidc`;
+  const issuer = info?.issuer || '<issuer URL>';
   const aud = c.audiences[0] ?? 'sts.amazonaws.com';
   const fetch =
     c.auth.method === 'access-key'

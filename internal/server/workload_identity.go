@@ -528,6 +528,8 @@ func (s *Server) issuerInfo(ctx context.Context) (map[string]any, error) {
 		"issuer": iss, "discoveryUrl": "", "jwksUrl": "", "tokenEndpoint": "",
 		"signingKey": nil, "previousKeys": []retiredKeyJSON{}, "rotationDays": settings.RotationDays,
 		"algorithm": settings.Algorithm, "configured": iss != "",
+		// Whether k8s-token-review clients can be created on this server.
+		"k8sTokenReview": s.cfg.K8sReviewConfigured(),
 	}
 	if iss != "" {
 		out["discoveryUrl"] = iss + workloadid.DiscoveryPath

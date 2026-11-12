@@ -53,12 +53,13 @@
           <dd class="mono">{client.auth.apiServer}</dd>
           <dt>Service accounts</dt>
           <dd><span class="chips">{#each client.auth.serviceAccounts as s (s)}<span class="badge mono">{s}</span>{/each}</span></dd>
-          {#if client.auth.reviewAudience}<dt>Review audience</dt><dd class="mono">{client.auth.reviewAudience}</dd>{/if}
+          <dt>Review audience</dt>
+          <dd class="mono">{client.auth.reviewAudience}</dd>
           <dt>Cluster CA</dt>
           <dd>{client.auth.caPem ? 'Custom CA' : 'System trust store'}</dd>
         {:else}
           <dt>Allowed users</dt>
-          <dd>{#if client.auth.allowedUsers.length}<span class="chips">{#each client.auth.allowedUsers as u (u)}<span class="badge mono">{u}</span>{/each}</span>{:else}Any active key in this account{/if}</dd>
+          <dd><span class="chips">{#each client.auth.allowedUsers as u (u)}<span class="badge mono">{u}</span>{/each}</span></dd>
         {/if}
         <dt>Last token</dt>
         <dd>{client.lastIssuedAt ? fmtDateTime(client.lastIssuedAt) : 'Never'} <button type="button" class="row-link small" onclick={() => onaudit(client)}>View history</button></dd>
@@ -78,7 +79,7 @@
           </div>
         {/if}
         <p class="subtle small note">
-          Tokens are JWTs signed with {info?.signingKey?.algorithm ?? 'the active key'} and verifiable with the issuer's JWKS. Claims: <code>iss</code>, <code>sub</code>, <code>aud</code>, <code>exp</code>, <code>iat</code>, <code>jti</code>, <code>client_id</code>.
+          Tokens are JWTs signed with {info?.signingKey?.algorithm ?? 'the active key'} and verifiable with the issuer's JWKS. Claims: <code>iss</code>, <code>sub</code>, <code>aud</code>, <code>iat</code>, <code>nbf</code>, <code>exp</code>, <code>jti</code>, and a <code>citadel</code> object with <code>account</code>, <code>client_id</code>, <code>auth_method</code> and the workload's attributes.
         </p>
       </section>
     </div>

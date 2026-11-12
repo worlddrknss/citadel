@@ -7,21 +7,34 @@
   import { errorMessage } from '$lib/api';
   import { toast } from '$lib/stores/toast.svelte';
   import Seg from './Seg.svelte';
-  import { wiApi, SUBJECT_PRESETS, PLACEHOLDERS, type ClientAuth, type ClientInput, type WorkloadClient } from './api';
+  import {
+    wiApi,
+    SUBJECT_PRESETS,
+    PLACEHOLDERS,
+    NAME_RE,
+    K8S_NAME_RE,
+    MAX_AUDIENCES,
+    MAX_ALLOWED_USERS,
+    TTL_MAX,
+    type ClientAuth,
+    type ClientInput,
+    type WorkloadClient
+  } from './api';
 
   let {
     open = $bindable(false),
     client = null,
     existing,
+    k8sAvailable = false,
     onsaved
-  }: { open?: boolean; client?: WorkloadClient | null; existing: WorkloadClient[]; onsaved: (clientId: string) => void } = $props();
+  }: { open?: boolean; client?: WorkloadClient | null; existing: WorkloadClient[]; k8sAvailable?: boolean; onsaved: (clientId: string) => void } = $props();
 
+  // The server accepts 60-3600 seconds.
   const TTLS = [
     { v: 300, l: '5 minutes' },
     { v: 900, l: '15 minutes' },
-    { v: 3600, l: '1 hour' },
-    { v: 14400, l: '4 hours' },
-    { v: 43200, l: '12 hours' }
+    { v: 1800, l: '30 minutes' },
+    { v: TTL_MAX, l: '1 hour' }
   ];
 
   let name = $state('');
@@ -47,22 +60,23 @@
     audiences = client?.audiences.join(', ') ?? 'sts.amazonaws.com';
     ttl = client?.tokenTtlSeconds ?? 900;
     const a = client?.auth;
-    method = a?.method ?? 'k8s-token-review';
+    method = a?.method ?? (k8sAvailable ? 'k8s-token-review' : 'access-key');
     allowedUsers = a?.method === 'access-key' ? a.allowedUsers.join(', ') : '';
     apiServer = a?.method === 'k8s-token-review' ? a.apiServer : '';
     caPem = a?.method === 'k8s-token-review' ? (a.caPem ?? '') : '';
     serviceAccounts = a?.method === 'k8s-token-review' ? a.serviceAccounts.join('\n') : '';
-    reviewAudience = a?.method === 'k8s-token-review' ? (a.reviewAudience ?? '') : '';
-    subjectFormat = client?.subjectFormat ?? 'system:serviceaccount:{namespace}:{serviceAccount}';
+    reviewAudience = a?.method === 'k8s-token-review' ? (a.reviewAudience ?? '') : 'citadel';
+    subjectFormat = client?.subjectFormat ?? (method === 'k8s-token-review' ? 'system:serviceaccount:{namespace}:{serviceAccount}' : 'user:{username}');
     touched = false;
     error = '';
   }
 
   const list = (s: string) => s.split(/[\n,]+/).map((v) => v.trim()).filter(Boolean);
   const placeholders = $derived(PLACEHOLDERS[method]);
-  const usedPlaceholders = $derived(subjectFormat.match(/\{[a-zA-Z]+\}/g) ?? []);
+  // Same placeholder syntax as the server: anything between single braces.
+  const usedPlaceholders = $derived(subjectFormat.match(/\{[^{}]*\}/g) ?? []);
   const sampleValues = $derived<Record<string, string>>({
-    '{clientId}': client?.clientId ?? 'wc_8f2a91',
+    '{clientId}': client?.clientId ?? 'wic-8f2a91c03d5e',
     '{name}': name.trim() || 'orders-api',
     '{accountId}': '123456789012',
     '{username}': 'ci-bot',
@@ -71,27 +85,59 @@
     '{serviceAccount}': 'orders-api',
     '{podName}': 'orders-api-7d9f8-x2k4p'
   });
-  const preview = $derived(subjectFormat.replace(/\{[a-zA-Z]+\}/g, (m) => sampleValues[m] ?? m));
+  const preview = $derived(subjectFormat.replace(/\{[^{}]*\}/g, (m) => sampleValues[m] ?? m));
+  const saErr = (s: string) => {
+    const [ns, sa, extra] = s.split(':');
+    return extra !== undefined || !ns || !sa || ns.length > 63 || !K8S_NAME_RE.test(ns) || !K8S_NAME_RE.test(sa);
+  };
+  const audErr = (a: string) => a.length > 256 || /\s/.test(a);
 
   const errs = $derived({
-    name: !/^[a-z0-9][a-z0-9-]{1,62}$/.test(name.trim())
-      ? 'Use 2–63 lowercase letters, numbers and dashes.'
+    name: !NAME_RE.test(name.trim())
+      ? 'Use 1–64 letters, numbers, spaces, dots, dashes or underscores, starting with a letter or number.'
       : existing.some((c) => c.name === name.trim() && c.clientId !== client?.clientId)
         ? 'Another client already uses this name.'
         : '',
-    audiences: list(audiences).length === 0 ? 'Add at least one audience.' : '',
+    audiences:
+      list(audiences).length === 0
+        ? 'Add at least one audience.'
+        : list(audiences).length > MAX_AUDIENCES
+          ? `At most ${MAX_AUDIENCES} audiences.`
+          : list(audiences).find(audErr)
+            ? `“${list(audiences).find(audErr)}”: no spaces, up to 256 characters.`
+            : '',
     subject: !subjectFormat.trim()
       ? 'Set a subject format.'
-      : usedPlaceholders.find((p) => !placeholders.includes(p))
-        ? `${usedPlaceholders.find((p) => !placeholders.includes(p))} isn't available with this authentication method.`
+      : subjectFormat.length > 255
+        ? 'Use at most 255 characters.'
+        : (subjectFormat.match(/\{/g) ?? []).length !== (subjectFormat.match(/\}/g) ?? []).length
+          ? 'Braces must be balanced.'
+          : usedPlaceholders.find((p) => !placeholders.includes(p))
+            ? `${usedPlaceholders.find((p) => !placeholders.includes(p))} isn't available with this authentication method.`
+            : '',
+    allowedUsers:
+      method === 'access-key'
+        ? list(allowedUsers).length === 0
+          ? 'Name at least one user whose access keys may request tokens.'
+          : list(allowedUsers).length > MAX_ALLOWED_USERS
+            ? `At most ${MAX_ALLOWED_USERS} users.`
+            : ''
         : '',
     apiServer: method === 'k8s-token-review' && !/^https:\/\/\S+$/.test(apiServer.trim()) ? 'Enter the cluster API server https:// URL.' : '',
+    reviewAudience:
+      method === 'k8s-token-review'
+        ? !reviewAudience.trim()
+          ? 'Set the audience the pod token is minted for (for example citadel).'
+          : reviewAudience.includes('kubernetes.default.svc') || reviewAudience.trim().replace(/\/+$/, '') === apiServer.trim().replace(/\/+$/, '')
+            ? "Use an audience dedicated to Citadel, not the API server's own."
+            : ''
+        : '',
     serviceAccounts:
       method === 'k8s-token-review'
         ? list(serviceAccounts).length === 0
           ? 'Allow at least one namespace:serviceaccount.'
-          : list(serviceAccounts).find((s) => !/^[a-z0-9*][a-z0-9.*-]*:[a-z0-9*][a-z0-9.*-]*$/.test(s))
-            ? `“${list(serviceAccounts).find((s) => !/^[a-z0-9*][a-z0-9.*-]*:[a-z0-9*][a-z0-9.*-]*$/.test(s))}” should look like namespace:serviceaccount.`
+          : list(serviceAccounts).find(saErr)
+            ? `“${list(serviceAccounts).find(saErr)}” should look like namespace:serviceaccount (exact names, no wildcards).`
             : ''
         : '',
     caPem: method === 'k8s-token-review' && caPem.trim() && !/-----BEGIN CERTIFICATE-----/.test(caPem) ? 'Paste the CA certificate in PEM form, or leave it empty.' : ''
@@ -116,8 +162,8 @@
             method,
             apiServer: apiServer.trim(),
             serviceAccounts: list(serviceAccounts),
-            ...(caPem.trim() ? { caPem: caPem.trim() } : {}),
-            ...(reviewAudience.trim() ? { reviewAudience: reviewAudience.trim() } : {})
+            reviewAudience: reviewAudience.trim(),
+            ...(caPem.trim() ? { caPem: caPem.trim() } : {})
           };
     const body: ClientInput = { name: name.trim(), audiences: list(audiences), tokenTtlSeconds: ttl, subjectFormat: subjectFormat.trim(), auth };
     busy = true;
@@ -163,17 +209,24 @@
     <section class="box" aria-labelledby="wc-auth-title">
       <div class="box-head">
         <h3 id="wc-auth-title">How the workload proves who it is</h3>
-        <Seg
-          label="Authentication method"
-          bind:value={method}
-          onchange={onMethod}
-          options={[
-            { value: 'k8s-token-review', label: 'Kubernetes service account' },
-            { value: 'access-key', label: 'Citadel access key' }
-          ]}
-        />
+        {#if k8sAvailable || method === 'k8s-token-review'}
+          <Seg
+            label="Authentication method"
+            bind:value={method}
+            onchange={onMethod}
+            options={[
+              { value: 'k8s-token-review', label: 'Kubernetes service account' },
+              { value: 'access-key', label: 'Citadel access key' }
+            ]}
+          />
+        {/if}
       </div>
       <div class="box-body">
+        {#if !k8sAvailable}
+          <p class="muted small">
+            Kubernetes service accounts need TokenReview on this server (<code>KMS_WORKLOAD_K8S_REVIEWER_TOKEN_FILE</code>){method === 'k8s-token-review' ? ', which is not configured, so this client can’t be saved until it is.' : '; it isn’t configured.'}
+          </p>
+        {/if}
         {#if method === 'k8s-token-review'}
           <p class="muted small">The pod sends its projected service-account token. Citadel checks it with the cluster's TokenReview API.</p>
           <div class="field">
@@ -183,14 +236,14 @@
           </div>
           <div class="field">
             <label class="field-label" for="wc-sa">Allowed service accounts</label>
-            <textarea id="wc-sa" class="textarea mono" rows="3" bind:value={serviceAccounts} placeholder={'payments:orders-api\nbatch:*'} spellcheck="false" aria-invalid={!!show('serviceAccounts')}></textarea>
-            {#if show('serviceAccounts')}<span class="field-error">{show('serviceAccounts')}</span>{:else}<span class="field-hint">One <code>namespace:serviceaccount</code> per line; <code>*</code> matches any.</span>{/if}
+            <textarea id="wc-sa" class="textarea mono" rows="3" bind:value={serviceAccounts} placeholder={'payments:orders-api\nbatch:report-runner'} spellcheck="false" aria-invalid={!!show('serviceAccounts')}></textarea>
+            {#if show('serviceAccounts')}<span class="field-error">{show('serviceAccounts')}</span>{:else}<span class="field-hint">One exact <code>namespace:serviceaccount</code> per line.</span>{/if}
           </div>
           <div class="field-row">
             <div class="field">
-              <label class="field-label" for="wc-ra">Token review audience <span class="subtle">(optional)</span></label>
-              <input id="wc-ra" class="input mono" bind:value={reviewAudience} placeholder="citadel" autocomplete="off" spellcheck="false" />
-              <span class="field-hint">Require the pod token to be minted for this audience.</span>
+              <label class="field-label" for="wc-ra">Token review audience</label>
+              <input id="wc-ra" class="input mono" bind:value={reviewAudience} placeholder="citadel" autocomplete="off" spellcheck="false" aria-invalid={!!show('reviewAudience')} />
+              {#if show('reviewAudience')}<span class="field-error">{show('reviewAudience')}</span>{:else}<span class="field-hint">Pods must send a projected token minted for this audience.</span>{/if}
             </div>
             <div class="field">
               <label class="field-label" for="wc-ca">Cluster CA <span class="subtle">(optional)</span></label>
@@ -201,9 +254,9 @@
         {:else}
           <p class="muted small">The workload signs the token request (SigV4) with a Citadel access key from this account.</p>
           <div class="field">
-            <label class="field-label" for="wc-users">Allowed users <span class="subtle">(optional)</span></label>
-            <input id="wc-users" class="input mono" bind:value={allowedUsers} placeholder="ci-bot, deployer" autocomplete="off" spellcheck="false" />
-            <span class="field-hint">Comma-separated usernames whose keys may request tokens. Empty allows any active key in this account.</span>
+            <label class="field-label" for="wc-users">Allowed users</label>
+            <input id="wc-users" class="input mono" bind:value={allowedUsers} placeholder="ci-bot, deployer" autocomplete="off" spellcheck="false" aria-invalid={!!show('allowedUsers')} />
+            {#if show('allowedUsers')}<span class="field-error">{show('allowedUsers')}</span>{:else}<span class="field-hint">Comma-separated usernames (members of this account) whose access keys may request tokens.</span>{/if}
           </div>
         {/if}
       </div>

@@ -16,9 +16,12 @@
   import Seg from './Seg.svelte';
   import ClientEditor from './ClientEditor.svelte';
   import ClientDrawer from './ClientDrawer.svelte';
-  import { wiApi, ALGS, ttlLabel, fmtDate, fmtDateTime, type IssuerInfo, type SigningAlg, type WorkloadClient } from './api';
+  import { wiApi, ALGS, issued, ttlLabel, fmtDate, fmtDateTime, type IssuerInfo, type SigningAlg, type WorkloadClient } from './api';
 
+  // Clients are per account (account admins); the issuer and its signing
+  // key are shared by the whole organization (platform admins only).
   const canEdit = $derived(session.can('admin'));
+  const canManageIssuer = $derived(session.platformAdmin);
   const origin = typeof location !== 'undefined' ? location.origin : '';
 
   // ---- issuer --------------------------------------------------------------
@@ -32,10 +35,18 @@
       infoError = errorMessage(e, 'Could not load the issuer configuration.');
     }
   }
-  // Fallbacks so the URLs show even before the backend answers.
-  const issuer = $derived(info?.issuer || `${origin}/oidc`);
-  const discovery = $derived(info?.discoveryUrl || `${issuer}/.well-known/openid-configuration`);
-  const jwks = $derived(info?.jwksUrl || `${issuer}/.well-known/jwks.json`);
+  // Empty until the server answers; empty for good when KMS_PUBLIC_URL is unset.
+  const configured = $derived(info?.configured ?? true);
+  const urls = $derived(
+    info?.configured
+      ? [
+          { l: 'Issuer URL', v: info.issuer, h: 'The iss claim. Register this URL as an OIDC provider wherever tokens are verified.' },
+          { l: 'Discovery document', v: info.discoveryUrl, h: '' },
+          { l: 'JWKS', v: info.jwksUrl, h: 'Public keys verifiers use to check token signatures.' },
+          { l: 'Token endpoint', v: info.tokenEndpoint, h: 'Workloads POST {clientId, audience} here and get {token, expiresAt, tokenType: "id_token"}.' }
+        ]
+      : []
+  );
 
   let rotating = $state(false);
   async function rotate() {
@@ -61,7 +72,7 @@
   let rotationDays = $state(90);
   let savingSettings = $state(false);
   function openSettings() {
-    alg = info?.signingKey?.algorithm ?? 'ES256';
+    alg = info?.algorithm ?? info?.signingKey?.algorithm ?? 'ES256';
     rotationDays = info?.rotationDays ?? 90;
     settingsOpen = true;
   }
@@ -145,7 +156,7 @@
   const clientName = (id?: string) => clients.find((c) => c.clientId === id)?.name ?? id ?? '—';
   const filteredEvents = $derived(
     events.filter(
-      (e) => (!auditClient || e.keyId === auditClient) && (auditResult === 'all' || (auditResult === 'ok' ? e.result === 'ok' : e.result !== 'ok'))
+      (e) => (!auditClient || e.keyId === auditClient) && (auditResult === 'all' || (auditResult === 'ok' ? issued(e) : !issued(e)))
     )
   );
 
@@ -209,9 +220,22 @@
 
 <div class="top">
   <section class="card" aria-labelledby="iss-title">
-    <div class="card-head"><h2 id="iss-title">Issuer</h2><Badge tone="success" dot={false}>OIDC discovery</Badge></div>
+    <div class="card-head">
+      <h2 id="iss-title">Issuer</h2>
+      {#if info}
+        {#if info.configured}<Badge tone="success" dot={false}>Configured</Badge>{:else}<Badge tone="warning" dot={false}>Not configured</Badge>{/if}
+      {/if}
+    </div>
     <div class="card-pad urls">
-      {#each [{ l: 'Issuer URL', v: issuer, h: 'The iss claim. Register this URL as an OIDC provider wherever tokens are verified.' }, { l: 'Discovery document', v: discovery, h: '' }, { l: 'JWKS', v: jwks, h: 'Public keys verifiers use to check token signatures.' }] as u (u.l)}
+      {#if !configured}
+        <div class="callout callout-warning" role="status">
+          <Icon name="alert-triangle" size={16} />
+          <span>The issuer needs the server's public URL. Set <code class="mono">KMS_PUBLIC_URL</code> and restart Citadel; until then no workload tokens are issued.</span>
+        </div>
+      {:else if !info}
+        <div class="sk" aria-busy="true"><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span></div>
+      {/if}
+      {#each urls as u (u.l)}
         <div class="field">
           <span class="field-label">{u.l}</span>
           <div class="urlbox">
@@ -228,7 +252,7 @@
   <section class="card" aria-labelledby="key-title">
     <div class="card-head">
       <h2 id="key-title">Signing key</h2>
-      {#if canEdit && info}
+      {#if canManageIssuer && info?.configured}
         <span class="head-actions">
           <button type="button" class="btn btn-ghost btn-sm" onclick={openSettings}><Icon name="settings" size={14} />Settings</button>
           <button type="button" class="btn btn-secondary btn-sm" onclick={rotate} disabled={rotating}><Icon name="rotate" size={14} />{rotating ? 'Rotating…' : 'Rotate now'}</button>
@@ -241,17 +265,20 @@
       {:else if !info}
         <div class="sk" aria-busy="true"><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span></div>
       {:else if !info.signingKey}
-        <EmptyState icon="key" title="No signing key yet" description="Citadel creates one in KMS the first time a token is requested, or when you rotate.">
-          {#if canEdit}<button type="button" class="btn btn-primary btn-sm" onclick={rotate}><Icon name="key" size={14} />Create signing key</button>{/if}
+        <EmptyState icon="key" title="No signing key yet" description="Citadel creates a {info.algorithm} key in KMS the first time a token is requested{canManageIssuer ? ', or when you rotate' : ''}.">
+          {#if canManageIssuer && info.configured}<button type="button" class="btn btn-primary btn-sm" onclick={rotate}><Icon name="key" size={14} />Create signing key</button>{/if}
         </EmptyState>
       {:else}
         <dl class="kv">
           <dt>Status</dt>
           <dd><Badge tone="success" dot={false}><Icon name="check-circle" size={12} />Active</Badge></dd>
           <dt>Algorithm</dt>
-          <dd class="mono">{info.signingKey.algorithm} <span class="subtle">({ALGS.find((a) => a.value === info?.signingKey?.algorithm)?.kms ?? ''})</span></dd>
+          <dd class="mono">
+            {info.signingKey.algorithm} <span class="subtle">({ALGS.find((a) => a.value === info?.signingKey?.algorithm)?.kms ?? ''})</span>
+            {#if info.algorithm !== info.signingKey.algorithm}<span class="subtle small">· {info.algorithm} from the next rotation</span>{/if}
+          </dd>
           <dt>KMS key</dt>
-          <dd class="idrow"><span class="mono">{info.signingKey.kmsAlias || info.signingKey.kmsKeyId}</span><CopyButton value={info.signingKey.kmsKeyId} label="Copy KMS key ID" /></dd>
+          <dd class="idrow"><span class="mono">{info.signingKey.kmsKeyId}</span><CopyButton value={info.signingKey.kmsKeyId} label="Copy KMS key ID" /></dd>
           <dt>Key ID (kid)</dt>
           <dd class="mono">{info.signingKey.kid}</dd>
           <dt>Rotation</dt>
@@ -316,7 +343,7 @@
       <td>{#if e.keyId}<button type="button" class="row-link" onclick={() => setParams({ client: e.keyId, tab: null }, { push: true })}>{clientName(e.keyId)}</button>{:else}—{/if}</td>
       <td class="mono small">{e.actor}</td>
       <td>
-        {#if e.result === 'ok'}<Badge tone="success" dot={false}>Issued</Badge>{:else}<Badge tone="danger" dot={false}>{e.errorType || 'Denied'}</Badge>{/if}
+        {#if issued(e)}<Badge tone="success" dot={false}>Issued</Badge>{:else}<Badge tone="danger" dot={false}>{e.errorType || 'Denied'}</Badge>{/if}
       </td>
     {/snippet}
     {#snippet empty()}
@@ -370,9 +397,9 @@
   ondelete={deleteClient}
   onaudit={(c) => setParams({ client: null, tab: 'audit', auditClient: c.clientId })}
 />
-<ClientEditor bind:open={editorOpen} client={editing} existing={clients} onsaved={(id) => loadClients().then(() => setParams({ client: id, tab: null }))} />
+<ClientEditor bind:open={editorOpen} client={editing} existing={clients} k8sAvailable={info?.k8sTokenReview ?? false} onsaved={(id) => loadClients().then(() => setParams({ client: id, tab: null }))} />
 
-<Modal bind:open={settingsOpen} title="Signing settings" description="Changes apply at the next rotation. Rotate now to switch immediately." size="sm">
+<Modal bind:open={settingsOpen} title="Signing settings" description="Changing the algorithm rotates to a new signing key right away. The rotation period applies from the current key's activation." size="sm">
   <form id="sig-form" class="form" onsubmit={saveSettings} novalidate>
     <div class="field">
       <label class="field-label" for="sig-alg">Algorithm</label>
