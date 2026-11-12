@@ -4,15 +4,18 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -30,6 +33,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
+	setupLogging(cfg)
 
 	st, cleanup, err := buildStore(cfg)
 	if err != nil {
@@ -45,7 +49,7 @@ func main() {
 	// Background jobs (session purges...) stop when the server does.
 	jobsCtx, stopJobs := context.WithCancel(context.Background())
 	s.Start(jobsCtx)
-	err = run(cfg, s.Handler())
+	err = run(cfg, s)
 	stopJobs()
 	s.Wait()
 	if err != nil {
@@ -118,13 +122,26 @@ func buildStore(cfg config.Config) (store.Store, func(), error) {
 	return store, cleanup, nil
 }
 
-// run serves h on cfg.Addr (TLS when a certificate is configured), plus the
-// optional pprof listener, until the listener fails or SIGINT/SIGTERM asks
-// for a graceful shutdown.
-func run(cfg config.Config, h http.Handler) error {
+// setupLogging routes both slog and the standard log package through one
+// structured handler, so every log line shares the configured format.
+func setupLogging(cfg config.Config) {
+	var level slog.Level
+	_ = level.UnmarshalText([]byte(cfg.LogLevel))
+	opts := &slog.HandlerOptions{Level: level}
+	var h slog.Handler = slog.NewJSONHandler(os.Stderr, opts)
+	if cfg.LogFormat == "text" {
+		h = slog.NewTextHandler(os.Stderr, opts)
+	}
+	slog.SetDefault(slog.New(h))
+}
+
+// run serves the server on cfg.Addr (TLS when a certificate is configured),
+// plus the optional pprof and metrics listeners, until the listener fails or
+// SIGINT/SIGTERM asks for a graceful shutdown.
+func run(cfg config.Config, s *server.Server) error {
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           h,
+		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -155,11 +172,32 @@ func run(cfg config.Config, h http.Handler) error {
 		}()
 	}
 
+	// Prometheus metrics on their own listener, never on the public port.
+	if cfg.MetricsAddr != "" {
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("GET /metrics", s.MetricsHandler())
+		metricsServer := &http.Server{Addr: cfg.MetricsAddr, Handler: metricsMux, ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			log.Printf("%s metrics listening on %s", server.AppName, cfg.MetricsAddr)
+			if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("metrics server exited: %v", err)
+			}
+		}()
+	}
+
 	serveErr := make(chan error, 1)
 	go func() {
 		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+			// Reload the certificate when the files change (cert-manager,
+			// rotated mounts) without a restart.
+			reloader := newCertReloader(cfg.TLSCertFile, cfg.TLSKeyFile)
+			if _, err := reloader.GetCertificate(nil); err != nil {
+				serveErr <- fmt.Errorf("load TLS certificate: %w", err)
+				return
+			}
+			httpServer.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: reloader.GetCertificate}
 			log.Printf("%s listening on %s (TLS)", server.AppName, cfg.Addr)
-			serveErr <- httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+			serveErr <- httpServer.ListenAndServeTLS("", "")
 			return
 		}
 		log.Printf("%s listening on %s", server.AppName, cfg.Addr)
@@ -176,6 +214,11 @@ func run(cfg config.Config, h http.Handler) error {
 		}
 	case sig := <-sigCh:
 		log.Printf("received %s, shutting down gracefully", sig)
+		// Fail readiness first, keep serving while load balancers notice.
+		s.BeginShutdown()
+		if cfg.ShutdownDelay > 0 {
+			time.Sleep(cfg.ShutdownDelay)
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := httpServer.Shutdown(ctx); err != nil {
@@ -183,4 +226,50 @@ func run(cfg config.Config, h http.Handler) error {
 		}
 	}
 	return nil
+}
+
+// certReloader serves the TLS certificate from disk, re-reading it when the
+// certificate file's modification time changes (checked at most every 30s).
+type certReloader struct {
+	certFile, keyFile string
+	mu                sync.Mutex
+	cert              *tls.Certificate
+	modTime           time.Time
+	checked           time.Time
+}
+
+func newCertReloader(certFile, keyFile string) *certReloader {
+	return &certReloader{certFile: certFile, keyFile: keyFile}
+}
+
+func (c *certReloader) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cert != nil && time.Since(c.checked) < 30*time.Second {
+		return c.cert, nil
+	}
+	c.checked = time.Now()
+	info, err := os.Stat(c.certFile)
+	if err != nil {
+		if c.cert != nil {
+			return c.cert, nil
+		}
+		return nil, err
+	}
+	if c.cert != nil && info.ModTime().Equal(c.modTime) {
+		return c.cert, nil
+	}
+	cert, err := tls.LoadX509KeyPair(c.certFile, c.keyFile)
+	if err != nil {
+		if c.cert != nil {
+			log.Printf("TLS certificate reload failed, keeping the previous one: %v", err)
+			return c.cert, nil
+		}
+		return nil, err
+	}
+	if c.cert != nil {
+		log.Printf("reloaded TLS certificate from %s", c.certFile)
+	}
+	c.cert, c.modTime = &cert, info.ModTime()
+	return c.cert, nil
 }

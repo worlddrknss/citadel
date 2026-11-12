@@ -224,3 +224,6 @@ ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value`,
 	log.Printf("migrated resource ARNs to identity region=%s account=%s", s.region, s.accountID)
 	return nil
 }
+
+// Ping reports whether the database answers; used by the readiness endpoint.
+func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }

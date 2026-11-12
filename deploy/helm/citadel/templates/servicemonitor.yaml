@@ -17,9 +17,9 @@ spec:
     matchLabels:
       {{- include "citadel.selectorLabels" . | nindent 6 }}
   endpoints:
-    - port: http
+    - port: metrics
       path: {{ .Values.metrics.path }}
-      scheme: {{ ternary "https" "http" .Values.tls.enabled }}
+      scheme: http
       interval: {{ .Values.metrics.serviceMonitor.interval }}
       scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout }}
       {{- with .Values.metrics.serviceMonitor.relabelings }}

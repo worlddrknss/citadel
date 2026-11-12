@@ -21,13 +21,6 @@ type awsError struct {
 	RequestID string `json:"RequestId,omitempty"`
 }
 
-func withRequestLogging(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s %s target=%s", r.Method, r.URL.Path, r.Header.Get("X-Amz-Target"))
-		next.ServeHTTP(w, r)
-	})
-}
-
 // awsProtocolCtxKey marks a request as AWS-protocol traffic (as opposed to
 // the native /v1 API). Request decoding is lenient for AWS traffic: real SDKs,
 // Terraform and the AWS CLI send members Citadel does not model, and AWS

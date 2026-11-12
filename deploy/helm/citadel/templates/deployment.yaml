@@ -64,9 +64,18 @@ spec:
             - name: http
               containerPort: {{ .Values.containerPort }}
               protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
           env:
             - name: KMS_LISTEN_ADDR
               value: {{ printf ":%d" (int .Values.containerPort) | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: KMS_METRICS_ADDR
+              value: {{ printf ":%d" (int .Values.metrics.port) | quote }}
+            {{- end }}
             {{- with .Values.config.publicUrl }}
             - name: KMS_PUBLIC_URL
               value: {{ . | quote }}

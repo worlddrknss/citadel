@@ -53,6 +53,7 @@ type Server struct {
 	jobs *jobRunner
 
 	audit auditRuntime
+	obs   observabilityRuntime
 }
 
 // secretsSvc returns the shared protocol-free secrets service, lazily binding
@@ -143,6 +144,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc("GET /readyz", s.handleReady)
 
 	// API endpoint remains available for AWS JSON-RPC clients
 	mux.HandleFunc("/api", s.handleKMS)
@@ -265,7 +267,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Middleware chain (outermost first): panic recovery, security headers,
 	// request logging, audit context, CSRF checks, the bootstrap-mode gate.
-	return withPanicRecovery(s.withSecurityHeaders(withRequestLogging(s.withAuditContext(s.withCSRFProtection(s.withBootstrapGate(mux))))))
+	return withPanicRecovery(s.withSecurityHeaders(s.withObservability(s.withAuditContext(s.withCSRFProtection(s.withBootstrapGate(mux))))))
 }
 
 func maybeBootstrapFromLegacy(ctx context.Context, cfg config.Config, st store.Store) error {

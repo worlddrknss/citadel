@@ -50,6 +50,17 @@ type Config struct {
 
 	// PprofAddr enables the loopback pprof listener (KMS_PPROF_ADDR).
 	PprofAddr string
+	// MetricsAddr enables a separate Prometheus listener (KMS_METRICS_ADDR,
+	// e.g. ":9090"); empty disables metrics.
+	MetricsAddr string
+	// LogFormat is "json" (default) or "text" (KMS_LOG_FORMAT).
+	LogFormat string
+	// LogLevel is debug, info (default), warn or error (KMS_LOG_LEVEL).
+	LogLevel string
+	// ShutdownDelay is how long the server keeps serving after SIGTERM while
+	// /readyz reports not ready, so load balancers stop sending traffic
+	// before connections close (KMS_SHUTDOWN_DELAY, default 0).
+	ShutdownDelay time.Duration
 
 	// TrustedProxies are the reverse proxies (KMS_TRUSTED_PROXIES, comma
 	// separated CIDRs or IPs) whose X-Forwarded-For / X-Real-IP headers are
@@ -163,6 +174,18 @@ func Load() (Config, error) {
 	cfg.TLSCertFile = os.Getenv("KMS_TLS_CERT_FILE")
 	cfg.TLSKeyFile = os.Getenv("KMS_TLS_KEY_FILE")
 	cfg.PprofAddr = strings.TrimSpace(os.Getenv("KMS_PPROF_ADDR"))
+	cfg.MetricsAddr = strings.TrimSpace(os.Getenv("KMS_METRICS_ADDR"))
+	cfg.LogFormat = strings.ToLower(envOrDefault("KMS_LOG_FORMAT", "json"))
+	if cfg.LogFormat != "json" && cfg.LogFormat != "text" {
+		return Config{}, fmt.Errorf("KMS_LOG_FORMAT must be json or text")
+	}
+	cfg.LogLevel = strings.ToLower(envOrDefault("KMS_LOG_LEVEL", "info"))
+	switch cfg.LogLevel {
+	case "debug", "info", "warn", "error":
+	default:
+		return Config{}, fmt.Errorf("KMS_LOG_LEVEL must be debug, info, warn or error")
+	}
+	cfg.ShutdownDelay = envDurationOrDefault("KMS_SHUTDOWN_DELAY", 0)
 	publicURL, err := ParsePublicURL(os.Getenv("KMS_PUBLIC_URL"))
 	if err != nil {
 		return Config{}, err

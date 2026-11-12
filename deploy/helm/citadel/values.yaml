@@ -327,9 +327,9 @@ resources:
 probes:
   # -- Liveness probe path.
   livenessPath: /healthz
-  # -- Readiness probe path. Point it at /readyz on releases that provide a
-  # readiness endpoint that also checks the database.
-  readinessPath: /healthz
+  # -- Readiness probe path. /readyz also checks the database and reports not
+  # ready while the pod drains during shutdown.
+  readinessPath: /readyz
   startup:
     # -- Allows failureThreshold x periodSeconds for first start, which
     # includes waiting for the migration advisory lock.
@@ -465,12 +465,14 @@ networkPolicy:
     extra: []
 
 # ---------------------------------------------------------------------------
-# Metrics. Only enable when your Citadel release serves Prometheus metrics.
+# Metrics. Citadel serves Prometheus metrics on a separate port
+# (KMS_METRICS_ADDR), never on the public one.
 # ---------------------------------------------------------------------------
 metrics:
-  # -- Declare that the pods serve metrics on metrics.path. Required for the
-  # ServiceMonitor below.
+  # -- Serve metrics on metrics.port. Required for the ServiceMonitor below.
   enabled: false
+  # -- Container port for the metrics listener.
+  port: 9090
   # -- HTTP path of the metrics endpoint.
   path: /metrics
   serviceMonitor:
