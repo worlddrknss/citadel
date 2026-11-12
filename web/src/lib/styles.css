@@ -557,6 +557,10 @@ input[type='radio'] {
 /* ---- Tables -------------------------------------------------------------- */
 
 .table {
+  /* Containing block for .sr-only (position: absolute) text in cells. Without
+     it that text escapes the table's overflow: auto wrapper and widens the
+     page, so phones get a sideways scroll. */
+  position: relative;
   width: 100%;
   border-collapse: collapse;
   font-size: var(--text-sm);
