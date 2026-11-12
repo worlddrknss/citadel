@@ -26,7 +26,11 @@ type Store struct {
 	auditSeq     int64
 	AuditHMACKey []byte
 	uiUsers      map[string]store.UIUser
-	uiAccounts   map[string]struct{}
+	uiAccounts   map[string]store.UIAccountInfo
+	members      map[string]map[string]string // username -> accountID -> role
+	sessions     map[string]store.ConsoleSession
+	orgSettings  store.OrgSettings
+	ssoProviders []store.SSOProvider
 	Region       string
 	AccountID    string
 	hier         map[string]*memProject

@@ -31,6 +31,7 @@ type Store interface {
 	ACMEStore
 	ParameterStore
 	HierarchyStore
+	AuthStore
 }
 
 // KeyStore persists KMS keys, aliases, key policies and grants.

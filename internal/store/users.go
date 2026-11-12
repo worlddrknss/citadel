@@ -12,6 +12,11 @@ type UIUser struct {
 	Role         string   `json:"role"`
 	DisplayName  string   `json:"displayName"`
 	Accounts     []string `json:"accounts"`
+	// PlatformAdmin, together with the global admin role, makes the user a
+	// platform admin: one who may manage every account, all users and the
+	// organization settings. Other admins administer only the accounts in
+	// which they hold the admin role.
+	PlatformAdmin bool `json:"platformAdmin,omitempty"`
 }
 
 func NormalizeUIRole(role string) string {
