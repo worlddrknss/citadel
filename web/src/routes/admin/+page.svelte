@@ -1,283 +1,414 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { api, ApiError, type Me, type AdminUser, type Account } from '$lib/api';
+  import PageHeader from '$lib/components/PageHeader.svelte';
+  import Tabs from '$lib/components/Tabs.svelte';
+  import DataTable, { type Column } from '$lib/components/DataTable.svelte';
+  import EmptyState from '$lib/components/EmptyState.svelte';
+  import Badge from '$lib/components/Badge.svelte';
+  import CopyButton from '$lib/components/CopyButton.svelte';
+  import Modal from '$lib/components/Modal.svelte';
+  import Icon from '$lib/components/Icon.svelte';
+  import { api, errorMessage, type Account } from '$lib/api';
+  import { session } from '$lib/stores/session.svelte';
+  import { toast } from '$lib/stores/toast.svelte';
+  import { confirm } from '$lib/stores/confirm.svelte';
+  import { param, setParams } from '$lib/url';
+  import UserModal from './UserModal.svelte';
+  import MembershipModal from './MembershipModal.svelte';
+  import SettingsPanel from './SettingsPanel.svelte';
+  import SsoPanel from './SsoPanel.svelte';
+  import { roleTone, fmtDate, type RoleName, type UserRow } from './api';
 
-  let me: Me | null = $state(null);
-  let users: AdminUser[] = $state([]);
-  let accounts: Account[] = $state([]);
-  let flash = $state('');
-  let flashOk = $state(true);
-  let loaded = $state(false);
+  const isAdmin = $derived(session.can('admin'));
+  // Account admins manage their current account only; platform admins
+  // manage accounts, org settings and every user (the server enforces this).
+  const isPlatform = $derived(session.platformAdmin);
+  const me = $derived(session.me);
 
-  // User form
-  let uUsername = $state('');
-  let uDisplayName = $state('');
-  let uRole = $state('viewer');
-  let uPassword = $state('');
-  let savingUser = $state(false);
-
-  // Account form
-  let aName = $state('');
-  let creatingAccount = $state(false);
-
-  // Assignment form
-  let asgUsername = $state('');
-  let asgAccount = $state('');
-  let asgRole = $state('viewer');
-
-  const isAdmin = $derived(me?.role === 'admin');
-
-  function notify(msg: string, ok = true) {
-    flash = msg;
-    flashOk = ok;
-    setTimeout(() => (flash = ''), 5000);
-  }
+  let users = $state<UserRow[]>([]);
+  let accounts = $state<Account[]>([]);
+  let loading = $state(true);
+  let loadError = $state('');
+  let started = false;
 
   async function load() {
+    loading = true;
+    loadError = '';
     try {
-      me = await api.me();
+      const [u, a] = await Promise.all([api.users(), api.accounts()]);
+      users = u.users ?? [];
+      accounts = a.accounts ?? [];
     } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-      return;
-    }
-    if (me?.role !== 'admin') {
-      loaded = true;
-      return;
-    }
-    try {
-      users = (await api.users()).users;
-      accounts = (await api.accounts()).accounts;
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
+      loadError = errorMessage(e, 'Could not load users and accounts.');
     } finally {
-      loaded = true;
+      loading = false;
     }
   }
-
-  async function saveUser() {
-    if (!uUsername.trim()) {
-      notify('username is required', false);
-      return;
+  $effect(() => {
+    if (isAdmin && !started) {
+      started = true;
+      load();
     }
-    savingUser = true;
-    try {
-      const res = await api.upsertUser({
-        username: uUsername.trim(),
-        displayName: uDisplayName.trim(),
-        role: uRole,
-        password: uPassword || undefined
-      });
-      notify(res.created ? `Created user ${res.username}` : `Updated user ${res.username}`);
-      uUsername = '';
-      uDisplayName = '';
-      uPassword = '';
-      users = (await api.users()).users;
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    } finally {
-      savingUser = false;
-    }
-  }
+  });
 
-  function editUser(u: AdminUser) {
-    uUsername = u.username;
-    uDisplayName = u.displayName;
-    uRole = u.role;
-    uPassword = '';
-  }
+  const tab = $derived(param('tab', 'users'));
+  let tabValue = $state('users');
+  $effect(() => {
+    tabValue = tab;
+  });
+  let query = $state('');
 
-  async function deleteUser(u: AdminUser) {
-    if (!confirm(`Delete user ${u.username}?`)) return;
+  const accountName = (id: string) => accounts.find((a) => a.accountId === id)?.name ?? id;
+  /** Accounts the signed-in admin may add members to. */
+  const manageableAccounts = $derived(isPlatform ? accounts : accounts.filter((a) => a.accountId === me?.accountId));
+  /** Mirrors the server: account admins can't touch platform admins or people in other accounts. */
+  const canManageUser = (u: UserRow) =>
+    isPlatform || (!u.platformAdmin && (u.accounts ?? []).length > 0 && (u.accounts ?? []).every((a) => a === me?.accountId));
+  const canManageAccount = (id: string) => isPlatform || id === me?.accountId;
+
+  interface Membership {
+    username: string;
+    displayName: string;
+    accountId: string;
+    role: RoleName | '';
+  }
+  const memberships = $derived<Membership[]>(
+    users.flatMap((u) => {
+      const roles = new Map((u.memberships ?? []).map((m) => [m.accountId, m.role]));
+      const ids = new Set([...(u.accounts ?? []), ...roles.keys()]);
+      return [...ids].map((accountId) => ({ username: u.username, displayName: u.displayName, accountId, role: roles.get(accountId) ?? '' }));
+    })
+  );
+  const memberCount = (id: string) => memberships.filter((m) => m.accountId === id).length;
+
+  // ---- users ---------------------------------------------------------------
+  let userOpen = $state(false);
+  let editingUser = $state<UserRow | null>(null);
+
+  async function deleteUser(u: UserRow) {
+    const ok = await confirm({
+      title: `Delete ${u.username}?`,
+      message: `They lose console access to ${u.accounts?.length ?? 0} account(s) immediately. Their access keys are deleted too. This cannot be undone.`,
+      confirmLabel: 'Delete user',
+      danger: true,
+      typeToConfirm: u.username
+    });
+    if (!ok) return;
     try {
       await api.deleteUser(u.username);
-      notify(`Deleted ${u.username}`);
-      users = (await api.users()).users;
+      toast.success(`Deleted ${u.username}`);
+      await load();
     } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
+      toast.error(e, 'Could not delete the user');
     }
   }
 
-  async function createAccount() {
-    if (!aName.trim()) {
-      notify('account name is required', false);
+  // ---- accounts ------------------------------------------------------------
+  let accountOpen = $state(false);
+  let accountName_ = $state('');
+  let accountBusy = $state(false);
+  let accountError = $state('');
+
+  async function createAccount(e: SubmitEvent) {
+    e.preventDefault();
+    if (!accountName_.trim()) {
+      accountError = 'Give the account a name.';
       return;
     }
-    creatingAccount = true;
+    accountBusy = true;
+    accountError = '';
     try {
-      const res = await api.createAccount(aName.trim());
-      notify(`Created account ${res.accountId}`);
-      aName = '';
-      accounts = (await api.accounts()).accounts;
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
+      const r = await api.createAccount(accountName_.trim());
+      toast.success(`Created ${accountName_.trim()} (${r.accountId})`);
+      accountOpen = false;
+      await load();
+    } catch (err) {
+      accountError = errorMessage(err, 'Could not create the account.');
     } finally {
-      creatingAccount = false;
+      accountBusy = false;
     }
   }
 
   async function deleteAccount(a: Account) {
-    if (!confirm(`Delete account ${a.name} (${a.accountId})?`)) return;
+    const ok = await confirm({
+      title: `Delete ${a.name}?`,
+      message: `Every secret, parameter, key, certificate and role in ${a.accountId} is permanently destroyed, and ${memberCount(a.accountId)} member(s) lose access. This cannot be undone.`,
+      confirmLabel: 'Delete account',
+      danger: true,
+      typeToConfirm: a.accountId
+    });
+    if (!ok) return;
     try {
       await api.deleteAccount(a.accountId);
-      notify(`Deleted ${a.accountId}`);
-      accounts = (await api.accounts()).accounts;
+      toast.success(`Deleted ${a.name}`);
+      await load();
     } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
+      toast.error(e, 'Could not delete the account');
     }
   }
 
-  async function assign() {
-    if (!asgUsername.trim() || !asgAccount) {
-      notify('username and account are required', false);
-      return;
-    }
+  // ---- memberships ---------------------------------------------------------
+  let memOpen = $state(false);
+  let memPreset = $state<{ username?: string; accountId?: string; role?: RoleName; editing?: boolean } | null>(null);
+
+  function addMembership(preset: { username?: string; accountId?: string } | null = null) {
+    memPreset = preset;
+    memOpen = true;
+  }
+
+  async function removeMembership(m: Membership) {
+    const self = m.username === me?.username && m.accountId === me?.accountId;
+    const ok = await confirm({
+      title: `Remove ${m.username} from ${accountName(m.accountId)}?`,
+      message: self
+        ? 'This is the account you are signed in to. You will lose access to it when your session ends.'
+        : 'They lose access to this account at their next request. Their access keys for it stop working.',
+      confirmLabel: 'Remove',
+      danger: true
+    });
+    if (!ok) return;
     try {
-      await api.assignUserAccount(asgUsername.trim(), asgAccount, asgRole);
-      notify(`Assigned ${asgUsername} to ${asgAccount}`);
-      asgUsername = '';
+      await api.removeUserAccount(m.username, m.accountId);
+      toast.success(`Removed ${m.username} from ${accountName(m.accountId)}`);
+      await load();
     } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
+      toast.error(e, 'Could not remove the membership');
     }
   }
 
-  onMount(load);
+  const userCols: Column<UserRow>[] = [
+    { id: 'user', label: 'User', sort: (u) => u.displayName || u.username },
+    { id: 'role', label: 'Default role', sort: (u) => u.role },
+    { id: 'accounts', label: 'Accounts', sort: (u) => u.accounts?.length ?? 0, hideOnMobile: true },
+    { id: 'act', label: '', align: 'end', width: '96px' }
+  ];
+  const accountCols: Column<Account>[] = [
+    { id: 'name', label: 'Account', sort: (a) => a.name },
+    { id: 'id', label: 'Account ID', sort: (a) => a.accountId },
+    { id: 'members', label: 'Members', sort: (a) => memberCount(a.accountId), hideOnMobile: true },
+    { id: 'created', label: 'Created', sort: (a) => a.createdAt, hideOnMobile: true },
+    { id: 'act', label: '', align: 'end', width: '64px' }
+  ];
+  const memCols: Column<Membership>[] = [
+    { id: 'user', label: 'User', sort: (m) => m.username },
+    { id: 'account', label: 'Account', sort: (m) => accountName(m.accountId) },
+    { id: 'role', label: 'Role in account', sort: (m) => m.role },
+    { id: 'act', label: '', align: 'end', width: '120px' }
+  ];
 </script>
 
-<div class="ph">
-  <h1 class="ph-title">Master Administration</h1>
-  <p class="ph-sub">Deployment-level management of users, accounts (organizations), and role assignments.</p>
-</div>
+<PageHeader title="Administration" description="Users, accounts and who can reach what, plus organization-wide security settings.">
+  {#snippet actions()}
+    {#if isAdmin}
+      {#if tab === 'users'}
+        <button type="button" class="btn btn-primary" onclick={() => { editingUser = null; userOpen = true; }}><Icon name="plus" size={16} />Create user</button>
+      {:else if tab === 'accounts' && isPlatform}
+        <button type="button" class="btn btn-primary" onclick={() => { accountName_ = ''; accountError = ''; accountOpen = true; }}><Icon name="plus" size={16} />Create account</button>
+      {:else if tab === 'memberships'}
+        <button type="button" class="btn btn-primary" onclick={() => addMembership()}><Icon name="plus" size={16} />Add membership</button>
+      {/if}
+    {/if}
+  {/snippet}
+</PageHeader>
 
-{#if flash}
-  <div class="flash {flashOk ? 'ok' : 'err'}">{flash}</div>
+{#if session.status === 'signed-in' && !isAdmin}
+  <div class="card card-pad">
+    <EmptyState icon="lock" title="Administrators only" description="Ask an administrator if you need a user created, an account added or a role changed." />
+  </div>
+{:else}
+  <div class="tabs-row">
+    <Tabs
+      label="Administration sections"
+      tabs={[
+        { id: 'users', label: 'Users', count: loading ? undefined : users.length },
+        { id: 'accounts', label: 'Accounts', count: loading ? undefined : accounts.length },
+        { id: 'memberships', label: 'Memberships', count: loading ? undefined : memberships.length },
+        { id: 'settings', label: 'Settings' }
+      ]}
+      bind:active={tabValue}
+      onchange={(t) => {
+        query = '';
+        setParams({ tab: t === 'users' ? null : t });
+      }}
+    />
+  </div>
+
+  {#if loadError && tab !== 'settings'}
+    <div class="callout callout-danger err" role="alert">
+      <Icon name="alert-circle" size={16} /><span>{loadError}</span>
+      <button type="button" class="btn btn-ghost btn-sm push" onclick={load}>Retry</button>
+    </div>
+  {/if}
+
+  {#if tab === 'accounts'}
+    <DataTable caption="Accounts" rows={accounts} columns={accountCols} key={(a) => a.accountId} {loading} searchable={(a) => `${a.name} ${a.accountId}`} searchPlaceholder="Search accounts" bind:query>
+      {#snippet row(a)}
+        <td>
+          <span class="strong">{a.name}</span>
+          {#if a.accountId === me?.accountId}<Badge tone="success" dot={false}>Current</Badge>{/if}
+        </td>
+        <td><span class="idrow"><span class="mono">{a.accountId}</span><CopyButton value={a.accountId} label="Copy account ID" /></span></td>
+        <td class="hide-sm">
+          <button type="button" class="row-link" onclick={() => { query = a.accountId; setParams({ tab: 'memberships' }); }}>{memberCount(a.accountId)} member{memberCount(a.accountId) === 1 ? '' : 's'}</button>
+        </td>
+        <td class="subtle hide-sm">{fmtDate(a.createdAt)}</td>
+        <td class="end">
+          {#if isPlatform}
+            <button
+              type="button"
+              class="btn-icon danger"
+              aria-label="Delete {a.name}"
+              title={a.accountId === me?.accountId ? "You can't delete the account you're signed in to" : 'Delete'}
+              disabled={a.accountId === me?.accountId}
+              onclick={() => deleteAccount(a)}
+            >
+              <Icon name="trash" size={14} />
+            </button>
+          {/if}
+        </td>
+      {/snippet}
+      {#snippet empty()}
+        <EmptyState icon="building" title="No accounts" description="Accounts isolate secrets, keys and certificates, like separate AWS accounts." />
+      {/snippet}
+    </DataTable>
+  {:else if tab === 'memberships'}
+    <DataTable
+      caption="Memberships"
+      rows={memberships}
+      columns={memCols}
+      key={(m) => `${m.username}@${m.accountId}`}
+      {loading}
+      searchable={(m) => `${m.username} ${m.displayName} ${m.accountId} ${accountName(m.accountId)} ${m.role}`}
+      searchPlaceholder="Search by user, account or role"
+      bind:query
+    >
+      {#snippet row(m)}
+        <td><span class="strong">{m.displayName || m.username}</span>{#if m.displayName && m.displayName !== m.username}<span class="mono subtle sub">{m.username}</span>{/if}</td>
+        <td><span class="strong">{accountName(m.accountId)}</span><span class="mono subtle sub">{m.accountId}</span></td>
+        <td>{#if m.role}<Badge tone={roleTone(m.role)} dot={false}>{m.role}</Badge>{:else}<span class="subtle small">Default role</span>{/if}</td>
+        <td class="end">
+          {#if canManageAccount(m.accountId)}
+            <span class="cell-actions">
+              <button type="button" class="btn btn-ghost btn-sm" onclick={() => { memPreset = { username: m.username, accountId: m.accountId, role: m.role || 'viewer', editing: true }; memOpen = true; }}>Change role</button>
+              <button type="button" class="btn-icon danger" aria-label="Remove {m.username} from {accountName(m.accountId)}" title="Remove" onclick={() => removeMembership(m)}><Icon name="x" size={14} /></button>
+            </span>
+          {/if}
+        </td>
+      {/snippet}
+      {#snippet empty()}
+        <EmptyState icon="users" title="No memberships" description="Add users to accounts so they can sign in to them.">
+          <button type="button" class="btn btn-primary btn-sm" onclick={() => addMembership()}><Icon name="plus" size={14} />Add membership</button>
+        </EmptyState>
+      {/snippet}
+    </DataTable>
+  {:else if tab === 'settings'}
+    <div class="stack">
+      <SettingsPanel />
+      <SsoPanel {accounts} />
+    </div>
+  {:else}
+    <DataTable caption="Users" rows={users} columns={userCols} key={(u) => u.username} {loading} searchable={(u) => `${u.username} ${u.displayName} ${u.role}`} searchPlaceholder="Search users" bind:query>
+      {#snippet row(u)}
+        <td>
+          <span class="who">
+            <span class="avatar" aria-hidden="true">{(u.displayName || u.username).split(/\s+/).map((p) => p[0]).join('').slice(0, 2).toUpperCase()}</span>
+            <span><span class="strong">{u.displayName || u.username}</span>{#if u.username === me?.username}<span class="subtle small"> (you)</span>{/if}<span class="mono subtle sub">{u.username}</span></span>
+          </span>
+        </td>
+        <td><Badge tone={roleTone(u.role)} dot={false}>{u.role}</Badge>{#if u.platformAdmin}<Badge tone="info" dot={false}>Platform admin</Badge>{/if}</td>
+        <td class="hide-sm">
+          <span class="chips">
+            {#each (u.accounts ?? []).slice(0, 3) as a (a)}<span class="badge">{accountName(a)}</span>{/each}
+            {#if (u.accounts?.length ?? 0) > 3}<span class="subtle small">+{(u.accounts?.length ?? 0) - 3}</span>{/if}
+            <button type="button" class="btn btn-ghost btn-sm" onclick={() => addMembership({ username: u.username })} aria-label="Add {u.username} to an account"><Icon name="plus" size={12} /></button>
+          </span>
+        </td>
+        <td class="end">
+          {#if canManageUser(u)}
+            <span class="cell-actions">
+              <button type="button" class="btn-icon" aria-label="Edit {u.username}" title="Edit" onclick={() => { editingUser = u; userOpen = true; }}><Icon name="edit" size={14} /></button>
+              <button type="button" class="btn-icon danger" aria-label="Delete {u.username}" title={u.username === me?.username ? "You can't delete yourself" : 'Delete'} disabled={u.username === me?.username} onclick={() => deleteUser(u)}><Icon name="trash" size={14} /></button>
+            </span>
+          {/if}
+        </td>
+      {/snippet}
+      {#snippet empty()}
+        <EmptyState icon="user" title="No users" description="Create console users, then add them to accounts." />
+      {/snippet}
+    </DataTable>
+  {/if}
 {/if}
 
-{#if loaded && !isAdmin}
-  <div class="card">
-    <div class="empty">Administrator role required to manage the deployment.</div>
-  </div>
-{:else if isAdmin}
-  <div class="card">
-    <h3 style="margin-top:0">Users</h3>
-    {#if users.length === 0}
-      <div class="empty">No users yet.</div>
-    {:else}
-      <table>
-        <thead>
-          <tr><th>Username</th><th>Display name</th><th>Role</th><th>Accounts</th><th></th></tr>
-        </thead>
-        <tbody>
-          {#each users as u}
-            <tr>
-              <td class="mono">{u.username}</td>
-              <td>{u.displayName || '—'}</td>
-              <td><span class="badge">{u.role}</span></td>
-              <td>
-                {#if u.accounts && u.accounts.length}
-                  {#each u.accounts as a}<span class="badge mono">{a}</span> {/each}
-                {:else}—{/if}
-              </td>
-              <td>
-                <button class="btn btn-sm" onclick={() => editUser(u)}>Edit</button>
-                <button class="btn btn-sm btn-d" onclick={() => deleteUser(u)}>Delete</button>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {/if}
-  </div>
+<UserModal bind:open={userOpen} user={editingUser} accounts={manageableAccounts} {users} onsaved={load} />
+<MembershipModal bind:open={memOpen} {users} accounts={manageableAccounts} preset={memPreset} onsaved={load} />
 
-  <div class="card" style="margin-top:1.25rem">
-    <h3 style="margin-top:0">Create / update user</h3>
-    <div class="toolbar" style="margin-bottom:0">
-      <div class="field">
-        <label for="uu">Username</label>
-        <input id="uu" class="mono" bind:value={uUsername} />
-      </div>
-      <div class="field" style="flex:1">
-        <label for="ud">Display name</label>
-        <input id="ud" bind:value={uDisplayName} />
-      </div>
-      <div class="field">
-        <label for="ur">Role</label>
-        <select id="ur" bind:value={uRole}>
-          <option value="viewer">viewer</option>
-          <option value="editor">editor</option>
-          <option value="admin">admin</option>
-        </select>
-      </div>
-      <div class="field">
-        <label for="up">Password</label>
-        <input id="up" type="password" placeholder="(unchanged)" bind:value={uPassword} />
-      </div>
-      <div class="field" style="align-self:flex-end">
-        <button class="btn btn-p" onclick={saveUser} disabled={savingUser}>
-          {savingUser ? 'Saving…' : 'Save user'}
-        </button>
-      </div>
+<Modal bind:open={accountOpen} title="Create account" description="A new isolated account with its own default KMS key." size="sm">
+  <form id="acct-form" onsubmit={createAccount} novalidate>
+    <div class="field">
+      <label class="field-label" for="acct-name">Name</label>
+      <input id="acct-name" class="input" bind:value={accountName_} placeholder="payments-prod" autocomplete="off" aria-invalid={!!accountError} />
+      {#if accountError}<span class="field-error">{accountError}</span>{:else}<span class="field-hint">Citadel assigns the 12-digit account ID.</span>{/if}
     </div>
-  </div>
+  </form>
+  {#snippet footer()}
+    <button type="button" class="btn btn-ghost" onclick={() => (accountOpen = false)}>Cancel</button>
+    <button type="submit" form="acct-form" class="btn btn-primary" disabled={accountBusy}>{accountBusy ? 'Creating…' : 'Create account'}</button>
+  {/snippet}
+</Modal>
 
-  <div class="card" style="margin-top:1.25rem">
-    <h3 style="margin-top:0">Accounts</h3>
-    {#if accounts.length === 0}
-      <div class="empty">No accounts yet.</div>
-    {:else}
-      <table>
-        <thead><tr><th>Account ID</th><th>Name</th><th>Created</th><th></th></tr></thead>
-        <tbody>
-          {#each accounts as a}
-            <tr>
-              <td class="mono">{a.accountId}</td>
-              <td>{a.name}</td>
-              <td class="muted">{a.createdAt}</td>
-              <td><button class="btn btn-sm btn-d" onclick={() => deleteAccount(a)}>Delete</button></td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {/if}
-    <div class="toolbar" style="margin:0.75rem 0 0">
-      <div class="field" style="flex:1">
-        <label for="an">New account name</label>
-        <input id="an" bind:value={aName} />
-      </div>
-      <div class="field" style="align-self:flex-end">
-        <button class="btn btn-p" onclick={createAccount} disabled={creatingAccount}>
-          {creatingAccount ? 'Creating…' : 'Create account'}
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <div class="card" style="margin-top:1.25rem">
-    <h3 style="margin-top:0">Assign user to account</h3>
-    <div class="toolbar" style="margin-bottom:0">
-      <div class="field" style="flex:1">
-        <label for="au">Username</label>
-        <input id="au" class="mono" bind:value={asgUsername} />
-      </div>
-      <div class="field">
-        <label for="aa">Account</label>
-        <select id="aa" bind:value={asgAccount}>
-          <option value="">(select)</option>
-          {#each accounts as a}
-            <option value={a.accountId}>{a.name} ({a.accountId})</option>
-          {/each}
-        </select>
-      </div>
-      <div class="field">
-        <label for="ar">Role</label>
-        <select id="ar" bind:value={asgRole}>
-          <option value="viewer">viewer</option>
-          <option value="editor">editor</option>
-          <option value="admin">admin</option>
-        </select>
-      </div>
-      <div class="field" style="align-self:flex-end">
-        <button class="btn btn-p" onclick={assign}>Assign</button>
-      </div>
-    </div>
-  </div>
-{/if}
+<style>
+  .tabs-row {
+    margin: calc(-1 * var(--space-2)) 0 var(--space-5);
+  }
+  .err {
+    margin-bottom: var(--space-4);
+    align-items: center;
+  }
+  .push {
+    margin-left: auto;
+  }
+  .strong {
+    font-weight: 500;
+  }
+  .sub {
+    display: block;
+    font-size: 11.5px;
+  }
+  .idrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .who {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent-text);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+  }
+  .danger:hover:not(:disabled) {
+    color: var(--danger);
+    background: var(--danger-soft);
+  }
+  @media (max-width: 720px) {
+    .hide-sm {
+      display: none;
+    }
+  }
+</style>

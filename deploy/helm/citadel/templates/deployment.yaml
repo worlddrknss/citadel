@@ -1,0 +1,227 @@
+{{- include "citadel.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "citadel.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "citadel.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  {{- if .Values.devMode.inMemory }}
+  # In-memory mode: never run two copies, even during a rollout.
+  strategy:
+    type: Recreate
+  {{- else }}
+  strategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "citadel.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- $checksum := and .Values.secrets.create (include "citadel.hasInlineSecrets" .) }}
+      {{- if or $checksum .Values.podAnnotations }}
+      annotations:
+        {{- if $checksum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      labels:
+        {{- include "citadel.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "citadel.serviceAccountName" . }}
+      # The API token is only needed for Kubernetes TokenReview.
+      automountServiceAccountToken: {{ .Values.workloadIdentity.kubernetes.tokenReview }}
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: citadel
+          image: {{ include "citadel.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.containerPort }}
+              protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: KMS_LISTEN_ADDR
+              value: {{ printf ":%d" (int .Values.containerPort) | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: KMS_METRICS_ADDR
+              value: {{ printf ":%d" (int .Values.metrics.port) | quote }}
+            {{- end }}
+            {{- with .Values.config.publicUrl }}
+            - name: KMS_PUBLIC_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.config.trustedProxies }}
+            - name: KMS_TRUSTED_PROXIES
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.config.awsRegion }}
+            - name: KMS_AWS_REGION
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.config.awsAccountId }}
+            - name: KMS_AWS_ACCOUNT_ID
+              value: {{ . | quote }}
+            {{- end }}
+            - name: KMS_POLICY_DEFAULT_DENY
+              value: {{ .Values.config.policyDefaultDeny | quote }}
+            - name: KMS_UI_SECURE_COOKIES
+              value: {{ .Values.config.uiSecureCookies | quote }}
+            {{- with .Values.config.sessionIdleTTL }}
+            - name: KMS_UI_SESSION_IDLE_TTL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.config.sessionMaxTTL }}
+            - name: KMS_UI_SESSION_MAX_TTL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.config.pprofAddr }}
+            - name: KMS_PPROF_ADDR
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if and .Values.workloadIdentity.kubernetes.tokenReview .Values.workloadIdentity.kubernetes.reviewerTokenFile }}
+            - name: KMS_WORKLOAD_K8S_REVIEWER_TOKEN_FILE
+              value: {{ .Values.workloadIdentity.kubernetes.reviewerTokenFile | quote }}
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            - name: KMS_TLS_CERT_FILE
+              value: /etc/citadel/tls/tls.crt
+            - name: KMS_TLS_KEY_FILE
+              value: /etc/citadel/tls/tls.key
+            {{- end }}
+            {{- include "citadel.secretEnv" . | trim | nindent 12 }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.probes.livenessPath }}
+              port: http
+              scheme: {{ include "citadel.scheme" . }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.livenessPath }}
+              port: http
+              scheme: {{ include "citadel.scheme" . }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readinessPath }}
+              port: http
+              scheme: {{ include "citadel.scheme" . }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+          {{- if and (gt (int .Values.preStopSleepSeconds) 0) (semverCompare ">=1.30-0" .Capabilities.KubeVersion.Version) }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ .Values.preStopSleepSeconds }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              mountPath: /etc/citadel/tls
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.existingSecret }}
+            defaultMode: 0440
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- if .Values.affinity }}
+      affinity:
+        {{- toYaml .Values.affinity | nindent 8 }}
+      {{- else if .Values.podAntiAffinity }}
+      affinity:
+        podAntiAffinity:
+          {{- if eq .Values.podAntiAffinity "hard" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: {{ .Values.podAntiAffinityTopologyKey }}
+              labelSelector:
+                matchLabels:
+                  {{- include "citadel.selectorLabels" . | nindent 18 }}
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: {{ .Values.podAntiAffinityTopologyKey }}
+                labelSelector:
+                  matchLabels:
+                    {{- include "citadel.selectorLabels" . | nindent 20 }}
+          {{- end }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- range . }}
+        - {{ toYaml (omit . "labelSelector") | indent 10 | trim }}
+          labelSelector:
+            {{- if .labelSelector }}
+            {{- toYaml .labelSelector | nindent 12 }}
+            {{- else }}
+            matchLabels:
+              {{- include "citadel.selectorLabels" $ | nindent 14 }}
+            {{- end }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

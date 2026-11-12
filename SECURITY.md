@@ -1,25 +1,62 @@
 # Security Policy
 
-Citadel is a control plane for keys, secrets, certificates, and parameters. Treat security issues as sensitive by default.
+Citadel stores and uses encryption keys, secrets and certificate authorities.
+We treat every security report as sensitive.
 
 ## Reporting a vulnerability
 
-Do not open public issues for suspected vulnerabilities.
+Please do not open a public issue, discussion or pull request for a suspected
+vulnerability.
 
-Use one of these private channels instead:
+Report it privately through GitHub's
+[private vulnerability reporting](https://github.com/worlddrknss/citadel/security/advisories/new)
+for this repository.
 
-- GitHub private vulnerability reporting, if it is enabled for this repository.
-- Direct contact with the maintainers through the repository owner's published contact channels.
+Helpful details:
 
-Please include:
+- The affected component and version or commit.
+- Steps to reproduce, or a proof of concept.
+- The impact you see: what an attacker could read, change or disrupt.
+- Configuration that affects exploitability (for example, whether
+  `KMS_INSECURE_DEV` or a reverse proxy is involved).
 
-- A description of the issue and affected component.
-- Reproduction steps or a proof of concept, if available.
-- Impact assessment, including confidentiality, integrity, or availability concerns.
-- Any mitigations or configuration details that affect exploitability.
-
-We will aim to acknowledge reports promptly and work on coordinated disclosure once a fix or mitigation is available.
+We aim to acknowledge reports within three business days and to agree on a
+disclosure timeline with you once we understand the issue. We credit
+reporters in the advisory unless you ask us not to.
 
 ## Supported versions
 
-Security fixes are best-effort and are expected to land on the `main` branch first unless documented otherwise.
+Security fixes land on `main` and in the next release. We support the latest
+release; older releases receive fixes only when stated in the advisory.
+
+## Scope
+
+In scope: the Citadel server, its AWS-compatible and native APIs, the web
+console, the container image built from this repository, and the Go SDK in
+`sdk/`.
+
+Out of scope:
+
+- Deployments running with `KMS_INSECURE_DEV=true`, which disables
+  authentication by design.
+- Findings that require an already-compromised host, database or wrapping key.
+- Missing hardening on infrastructure you operate (TLS termination, network
+  policy, database access).
+
+## How Citadel is built to be secure
+
+- **FIPS 140-3.** Release images are built with the Go Cryptographic Module
+  (`GOFIPS140=certified`) and run with `GODEBUG=fips140=only`, so non-approved
+  algorithms fail at runtime. CI runs the test suite in the same mode.
+- **Authentication by default.** Every AWS-protocol request must carry a valid
+  SigV4 signature within a 15-minute clock window, and the console requires a
+  signed-in user. The server refuses to start without credentials configured.
+- **Envelope encryption.** Key material and secrets are encrypted with a
+  wrapping key that never leaves the process and is never stored with the
+  data.
+- **Tenant isolation.** Data is scoped to the caller's account in every query.
+- **Tamper-evident audit log.** Audit events form an HMAC chain that can be
+  verified from the console or API.
+
+See [docs/security-model.md](docs/security-model.md) for the full threat model
+and operator guidance.

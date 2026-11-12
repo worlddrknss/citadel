@@ -1,1027 +1,325 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, ApiError, type Certificate, type CertificateDetail } from '$lib/api';
+  import PageHeader from '$lib/components/PageHeader.svelte';
+  import Tabs from '$lib/components/Tabs.svelte';
+  import Icon from '$lib/components/Icon.svelte';
+  import { errorMessage } from '$lib/api';
+  import { api } from '$lib/api';
+  import { session } from '$lib/stores/session.svelte';
+  import { param, setParams } from '$lib/url';
+  import { certApi, type CertRow } from './api';
+  import { cnOf, firstDomain, rowKey, safeFileName, type Filter, type SortKey } from './certs';
+  import CATree from './CATree.svelte';
+  import CertTable from './CertTable.svelte';
+  import CertDrawer from './CertDrawer.svelte';
+  import IssueWizard, { type IssueResult } from './IssueWizard.svelte';
+  import RevokeModal from './RevokeModal.svelte';
+  import RenewModal from './RenewModal.svelte';
+  import CreateCAModal from './CreateCAModal.svelte';
+  import ImportCAModal from './ImportCAModal.svelte';
+  import LetsEncryptPanel from './LetsEncryptPanel.svelte';
+  import AcmeServerPanel from './AcmeServerPanel.svelte';
+  import OnceSecret from './OnceSecret.svelte';
 
-  let certs: Certificate[] = $state([]);
+  // ---- data ----------------------------------------------------------------
+  let rows = $state<CertRow[]>([]);
   let loading = $state(true);
-  let flash = $state('');
-  let flashOk = $state(true);
+  let loadError = $state('');
+  /** CN / serial / revocation date filled from the detail endpoint while the
+   *  list endpoint doesn't return them for issued certificates. */
+  let extra = $state<Record<string, { commonName?: string; serial?: string; revokedAt?: string }>>({});
+  let le = $state<{ environment: string; directoryUrl: string; contactEmail: string } | null>(null);
+  let leError = $state('');
 
-  // Detail drawer
-  let detail: CertificateDetail | null = $state(null);
-  let detailTab = $state('overview');
-
-  const sourceLabel: Record<string, string> = {
-    'pca-ca': 'Private CA',
-    'pca-cert': 'Issued (PCA)',
-    'lets-encrypt': "Let's Encrypt"
-  };
-
-  // Create-CA form
-  let caCommonName = $state('');
-  let caOrg = $state('');
-  let caCountry = $state('');
-  let caType = $state('ROOT');
-  let caKeyAlg = $state('RSA_2048');
-  let creatingCA = $state(false);
-
-  // Issue-cert form
-  let issueCaArn = $state('');
-  let csrPem = $state('');
-  let validityDays = $state('365');
-  let sanNames = $state('');
-  let issuing = $state(false);
-
-  // Import-CA form
-  let importCertPem = $state('');
-  let importKeyPem = $state('');
-  let importDescription = $state('');
-  let importing = $state(false);
-
-  // Let's Encrypt request + settings
-  let leDomains = $state('');
-  let leEnvironment = $state('staging');
-  let leDirectoryUrl = $state('');
-  let leContactEmail = $state('');
-  let leSavingSettings = $state(false);
-  // Manual DNS-01 two-phase order state
-  let leOrderId = $state('');
-  let leDnsRecords: { domain: string; name: string; value: string }[] = $state([]);
-  let leBeginning = $state(false);
-  let leCompleting = $state(false);
-
-  // Renew confirmation
-  let renewCert: Certificate | null = $state(null);
-  let renewValidityDays = $state('365');
-  let renewing = $state(false);
-
-  const cas = $derived(certs.filter((c) => c.source === 'pca-ca'));
-
-  // CA hierarchy: each CA grouped with the certificates it has issued.
-  const caGroups = $derived(
-    cas.map((ca) => ({
-      ca,
-      issued: certs.filter((c) => c.source === 'pca-cert' && c.issuerCaId === ca.id)
-    }))
-  );
-  // pca-cert rows whose issuing CA is not present in the listing.
-  const orphanCerts = $derived(
-    certs.filter((c) => c.source === 'pca-cert' && !cas.some((ca) => ca.id === c.issuerCaId))
-  );
-  const otherCerts = $derived(certs.filter((c) => c.source === 'lets-encrypt'));
-
-  let expanded = $state<Record<string, boolean>>({});
-  function toggleCA(id: string) {
-    expanded = { ...expanded, [id]: !expanded[id] };
-  }
-
-  // In-app revoke confirmation (no native confirm()).
-  let confirmCert: Certificate | null = $state(null);
-  let confirmReason = $state('Unspecified');
-  let revoking = $state(false);
-  const revokeReasons = [
-    'Unspecified',
-    'KeyCompromise',
-    'CACompromise',
-    'AffiliationChanged',
-    'Superseded',
-    'CessationOfOperation',
-    'PrivilegeWithdrawn'
-  ];
-
-  function fmtType(t?: string): string {
-    return t === 'SUBORDINATE' ? 'Subordinate' : t === 'ROOT' ? 'Root' : t || '—';
-  }
-
-  function notify(msg: string, ok = true) {
-    flash = msg;
-    flashOk = ok;
-    setTimeout(() => (flash = ''), 5000);
-  }
-
+  let generation = 0;
   async function load() {
+    const gen = ++generation;
     loading = true;
+    loadError = '';
     try {
-      certs = (await api.certificates()).certificates;
+      const r = await certApi.list();
+      if (gen !== generation) return;
+      rows = r.certificates ?? [];
+      enrich(gen);
     } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
+      if (gen === generation) loadError = errorMessage(e, 'Could not load certificates.');
     } finally {
-      loading = false;
+      if (gen === generation) loading = false;
     }
   }
 
-  async function createCA() {
-    if (!caCommonName.trim()) {
-      notify('common name is required', false);
-      return;
-    }
-    creatingCA = true;
+  async function enrich(gen: number) {
+    const todo = rows.filter((c) => c.source === 'pca-cert' && !c.commonName && !extra[rowKey(c)]);
+    let i = 0;
+    const worker = async () => {
+      while (i < todo.length && gen === generation) {
+        const c = todo[i++];
+        try {
+          const d = await certApi.detail(c.source, c.id);
+          if (gen !== generation) return;
+          extra[rowKey(c)] = { commonName: cnOf(d.subject) || d.sans?.[0], serial: d.serial, revokedAt: d.revokedAt };
+        } catch {
+          /* the row keeps showing its serial */
+        }
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+  }
+
+  async function loadLE() {
+    leError = '';
     try {
-      const res = await api.createCA({
-        caType,
-        keyAlgorithm: caKeyAlg,
-        commonName: caCommonName.trim(),
-        organization: caOrg.trim(),
-        country: caCountry.trim()
-      });
-      notify(`Created CA ${res.caId}`);
-      caCommonName = '';
-      caOrg = '';
-      caCountry = '';
-      await load();
+      le = await api.letsEncryptSettings();
     } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    } finally {
-      creatingCA = false;
+      leError = errorMessage(e, "Could not load Let's Encrypt settings.");
     }
   }
 
-  async function issueCert() {
-    if (!issueCaArn || !csrPem.trim()) {
-      notify('CA and CSR are required', false);
-      return;
-    }
-    issuing = true;
-    try {
-      await api.issueCert({ caArn: issueCaArn, csrPem: csrPem.trim(), validityDays, sanNames: sanNames.trim() });
-      notify('Certificate issued');
-      csrPem = '';
-      sanNames = '';
-      await load();
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    } finally {
-      issuing = false;
-    }
+  onMount(() => {
+    load();
+    loadLE();
+  });
+
+  // ---- derived -------------------------------------------------------------
+  const merged = $derived(rows.map((c) => ({ ...c, ...(extra[rowKey(c)] ?? {}), ...pick(c) })));
+  function pick(c: CertRow) {
+    // Fields the server sent win over enrichment.
+    const o: Partial<CertRow> = {};
+    if (c.commonName) o.commonName = c.commonName;
+    if (c.revokedAt) o.revokedAt = c.revokedAt;
+    return o;
+  }
+  const cas = $derived(merged.filter((c) => c.source === 'pca-ca'));
+  const leaves = $derived(merged.filter((c) => c.source !== 'pca-ca'));
+
+  function caName(id?: string): string {
+    if (!id) return '';
+    const ca = cas.find((c) => c.id === id);
+    return ca ? cnOf(ca.subject) || ca.id : id;
+  }
+  function nameOf(c: CertRow): string {
+    if (c.source === 'pca-ca') return cnOf(c.subject) || c.id;
+    if (c.source === 'lets-encrypt') return firstDomain(c.subject) || c.id;
+    if (c.commonName) return c.commonName;
+    const serial = c.serial || c.subject;
+    return serial ? `serial ${serial.length > 16 ? serial.slice(0, 16) + '…' : serial}` : c.id;
+  }
+  function issuerOf(c: CertRow): string {
+    return c.source === 'lets-encrypt' ? "Let's Encrypt" : caName(c.issuerCaId) || '—';
   }
 
-  function askRevoke(c: Certificate) {
-    confirmReason = 'Unspecified';
-    confirmCert = c;
+  // ---- URL state -----------------------------------------------------------
+  const tab = $derived(param('tab', 'overview'));
+  const filter = $derived(param('filter', 'all') as Filter);
+  const sort = $derived(param('sort', 'left') as SortKey);
+  const dir = $derived(param('dir', 'asc') as 'asc' | 'desc');
+  const selectedKey = $derived(param('cert'));
+  const drawerTab = $derived(param('view', 'overview'));
+  const selected = $derived(merged.find((c) => rowKey(c) === selectedKey) ?? null);
+
+  let tabValue = $state('overview');
+  $effect(() => {
+    tabValue = tab;
+  });
+
+  let drawerOpen = $state(false);
+  $effect(() => {
+    drawerOpen = !!selectedKey && (!!selected || loading);
+  });
+
+  function openCert(c: CertRow) {
+    setParams({ cert: rowKey(c), view: null }, { push: true });
+  }
+  function closeDrawer() {
+    setParams({ cert: null, view: null });
   }
 
-  async function importCA() {
-    if (!importCertPem.trim() || !importKeyPem.trim()) {
-      notify('CA certificate and private key are both required', false);
-      return;
-    }
-    importing = true;
-    try {
-      const res = await api.importCA({
-        caCertPem: importCertPem.trim(),
-        caKeyPem: importKeyPem.trim(),
-        description: importDescription.trim()
-      });
-      notify(`Imported CA ${res.caId}`);
-      importCertPem = '';
-      importKeyPem = '';
-      importDescription = '';
-      await load();
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    } finally {
-      importing = false;
-    }
+  // ---- roles ---------------------------------------------------------------
+  const canIssue = $derived(session.can('editor'));
+  const canAdmin = $derived(session.can('admin'));
+
+  // ---- dialogs -------------------------------------------------------------
+  let issueOpen = $state(false);
+  let issueCa = $state('');
+  let caOpen = $state(false);
+  let caParent = $state('');
+  let importOpen = $state(false);
+  let revokeOpen = $state(false);
+  let renewOpen = $state(false);
+  let target = $state<CertRow | null>(null);
+  let generated = $state<NonNullable<IssueResult['generated']> | null>(null);
+  let generatedOpen = $state(false);
+  let afterGenerated: string | undefined;
+
+  function issue(caId = '') {
+    issueCa = caId;
+    issueOpen = true;
+  }
+  function newCA(parent = '') {
+    caParent = parent;
+    caOpen = true;
+  }
+  function askRevoke(c: CertRow) {
+    target = c;
+    revokeOpen = true;
+  }
+  function askRenew(c: CertRow) {
+    target = c;
+    renewOpen = true;
   }
 
-  function askRenew(c: Certificate) {
-    renewValidityDays = '365';
-    renewCert = c;
-  }
-
-  async function confirmRenew() {
-    if (!renewCert) return;
-    renewing = true;
-    try {
-      await api.renewCert(renewCert.id, renewValidityDays);
-      notify(`Renewed ${renewCert.id}`);
-      renewCert = null;
-      await load();
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    } finally {
-      renewing = false;
-    }
-  }
-
-  async function loadLESettings() {
-    try {
-      const s = await api.letsEncryptSettings();
-      leEnvironment = s.environment || 'staging';
-      leDirectoryUrl = s.directoryUrl || '';
-      leContactEmail = s.contactEmail || '';
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    }
-  }
-
-  async function saveLESettings() {
-    leSavingSettings = true;
-    try {
-      await api.saveLetsEncryptSettings({
-        environment: leEnvironment,
-        directoryUrl: leDirectoryUrl.trim(),
-        contactEmail: leContactEmail.trim()
-      });
-      notify("Let's Encrypt settings saved");
-      await loadLESettings();
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    } finally {
-      leSavingSettings = false;
-    }
-  }
-
-  async function requestLECert() {
-    if (!leDomains.trim()) {
-      notify('at least one domain is required', false);
-      return;
-    }
-    leBeginning = true;
-    try {
-      const res = await api.beginLetsEncryptDns(leDomains.trim());
-      leOrderId = res.orderId;
-      leDnsRecords = res.records;
-      notify('DNS challenge created — publish the TXT records below, then complete');
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    } finally {
-      leBeginning = false;
+  async function issued(r: IssueResult) {
+    await load();
+    if (r.generated) {
+      generated = r.generated;
+      generatedOpen = true;
+      afterGenerated = r.certId;
+    } else if (r.certId) {
+      setParams({ cert: `pca-cert:${r.certId}`, tab: null }, { push: true });
     }
   }
-
-  async function completeLECert() {
-    if (!leOrderId) return;
-    leCompleting = true;
-    try {
-      await api.completeLetsEncryptDns(leOrderId);
-      notify("Let's Encrypt certificate issued");
-      leDomains = '';
-      leOrderId = '';
-      leDnsRecords = [];
-      await load();
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    } finally {
-      leCompleting = false;
-    }
+  function generatedDone() {
+    generated = null;
+    if (afterGenerated) setParams({ cert: `pca-cert:${afterGenerated}`, tab: null }, { push: true });
+    afterGenerated = undefined;
   }
-
-  function cancelLECert() {
-    leOrderId = '';
-    leDnsRecords = [];
-  }
-
-  async function confirmRevoke() {
-    if (!confirmCert) return;
-    revoking = true;
-    try {
-      await api.revokeCert(confirmCert.id, confirmReason);
-      notify(`Revoked ${confirmCert.id}`);
-      confirmCert = null;
-      await load();
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    } finally {
-      revoking = false;
-    }
-  }
-
-  // ---- detail drawer -------------------------------------------------------
-  async function openDetail(c: Certificate) {
-    detailTab = 'overview';
-    detail = null;
-    try {
-      detail = await api.certificateDetail(c.source, c.id);
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    }
-  }
-
-  function closeDetail() {
-    detail = null;
-  }
-
-  async function copyText(text: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      notify('Copied to clipboard');
-    } catch {
-      notify('Copy failed', false);
-    }
-  }
-
-  function downloadText(filename: string, text: string) {
-    const blob = new Blob([text], { type: 'application/x-pem-file' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function fmtDate(s?: string): string {
-    return s ? s.replace('T', ' ').replace('Z', '') : '—';
-  }
-
-  onMount(load);
-  onMount(loadLESettings);
 </script>
 
-<div class="ph">
-  <h1 class="ph-title">Certificate Authority</h1>
-  <p class="ph-sub">Manage your private CA hierarchy, issue and revoke certificates, and publish revocation lists.</p>
-</div>
-
-{#if flash}
-  <div class="flash {flashOk ? 'ok' : 'err'}">{flash}</div>
-{/if}
-
-<div class="card">
-  <h3 style="margin-top:0">Certificate authorities</h3>
-  {#if loading}
-    <div class="empty">Loading…</div>
-  {:else if caGroups.length === 0}
-    <div class="empty">No certificate authorities yet. Create one below to start issuing certificates.</div>
-  {:else}
-    <div class="ca-list">
-      {#each caGroups as g}
-        <div class="ca-node">
-          <div class="ca-head">
-            <button class="ca-toggle" onclick={() => toggleCA(g.ca.id)} aria-label="Toggle issued certificates">
-              <span class="caret" class:open={expanded[g.ca.id]}>▸</span>
-            </button>
-            <div class="ca-main">
-              <button class="linklike ca-name" onclick={() => openDetail(g.ca)}>{g.ca.subject || g.ca.id}</button>
-              <div class="ca-meta">
-                <span class="badge">{fmtType(g.ca.caType)}</span>
-                <span class="badge">{g.ca.status || '—'}</span>
-                <span class="muted small">{g.issued.length} issued</span>
-                {#if g.ca.notAfter}
-                  <span class="muted small">expires {new Date(g.ca.notAfter).toLocaleDateString()}</span>
-                {/if}
-              </div>
-            </div>
-            <div class="ca-act">
-              <a class="btn btn-sm" href={api.crlUrl(g.ca.id)} target="_blank" rel="noopener" download>Download CRL</a>
-            </div>
-          </div>
-          {#if expanded[g.ca.id]}
-            <div class="ca-children">
-              {#if g.issued.length === 0}
-                <div class="empty small">No certificates issued by this CA.</div>
-              {:else}
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Certificate</th>
-                      <th>Serial</th>
-                      <th>Status</th>
-                      <th>Not after</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {#each g.issued as c}
-                      <tr class:rowsel={detail?.id === c.id}>
-                        <td class="mono">
-                          <button class="linklike" onclick={() => openDetail(c)}>{c.id}</button>
-                        </td>
-                        <td class="mono small">{c.subject || '—'}</td>
-                        <td><span class="badge">{c.status || '—'}</span></td>
-                        <td class="muted">{c.notAfter ? new Date(c.notAfter).toLocaleDateString() : '—'}</td>
-                        <td>
-                          {#if c.status !== 'REVOKED'}
-                            <button class="btn btn-sm" onclick={() => askRenew(c)}>Renew</button>
-                            <button class="btn btn-sm btn-d" onclick={() => askRevoke(c)}>Revoke</button>
-                          {/if}
-                        </td>
-                      </tr>
-                    {/each}
-                  </tbody>
-                </table>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {/each}
-    </div>
-  {/if}
-</div>
-
-{#if orphanCerts.length > 0}
-  <div class="card" style="margin-top:1.25rem">
-    <h3 style="margin-top:0">Issued certificates (CA unavailable)</h3>
-    <table>
-      <thead>
-        <tr>
-          <th>Certificate</th>
-          <th>Serial</th>
-          <th>Status</th>
-          <th>Not after</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each orphanCerts as c}
-          <tr class:rowsel={detail?.id === c.id}>
-            <td class="mono"><button class="linklike" onclick={() => openDetail(c)}>{c.id}</button></td>
-            <td class="mono small">{c.subject || '—'}</td>
-            <td><span class="badge">{c.status || '—'}</span></td>
-            <td class="muted">{c.notAfter ? new Date(c.notAfter).toLocaleDateString() : '—'}</td>
-            <td>
-              {#if c.status !== 'REVOKED'}
-                <button class="btn btn-sm" onclick={() => askRenew(c)}>Renew</button>
-                <button class="btn btn-sm btn-d" onclick={() => askRevoke(c)}>Revoke</button>
-              {/if}
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  </div>
-{/if}
-
-{#if otherCerts.length > 0}
-  <div class="card" style="margin-top:1.25rem">
-    <h3 style="margin-top:0">ACME / Let's Encrypt certificates</h3>
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>Subject</th>
-          <th>Status</th>
-          <th>Not after</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each otherCerts as c}
-          <tr class:rowsel={detail?.id === c.id}>
-            <td class="mono"><button class="linklike" onclick={() => openDetail(c)}>{c.id}</button></td>
-            <td>{c.subject || '—'}</td>
-            <td><span class="badge">{c.status || '—'}</span></td>
-            <td class="muted">{c.notAfter ? new Date(c.notAfter).toLocaleDateString() : '—'}</td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  </div>
-{/if}
-
-<div class="card" style="margin-top:1.25rem">
-  <h3 style="margin-top:0">Create private CA</h3>
-  <div class="toolbar">
-    <div class="field" style="flex:1">
-      <label for="cn">Common name</label>
-      <input id="cn" placeholder="Example Root CA" bind:value={caCommonName} />
-    </div>
-    <div class="field">
-      <label for="org">Organization</label>
-      <input id="org" placeholder="Example Inc" bind:value={caOrg} />
-    </div>
-    <div class="field" style="width:5rem">
-      <label for="cc">Country</label>
-      <input id="cc" placeholder="US" bind:value={caCountry} />
-    </div>
-  </div>
-  <div class="toolbar" style="margin-bottom:0">
-    <div class="field">
-      <label for="ct">Type</label>
-      <select id="ct" bind:value={caType}>
-        <option value="ROOT">ROOT</option>
-        <option value="SUBORDINATE">SUBORDINATE</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="ka">Key algorithm</label>
-      <select id="ka" bind:value={caKeyAlg}>
-        <option value="RSA_2048">RSA_2048</option>
-        <option value="RSA_3072">RSA_3072</option>
-        <option value="RSA_4096">RSA_4096</option>
-        <option value="EC_prime256v1">EC_prime256v1</option>
-        <option value="EC_secp384r1">EC_secp384r1</option>
-      </select>
-    </div>
-    <div class="field" style="align-self:flex-end">
-      <button class="btn btn-p" onclick={createCA} disabled={creatingCA}>
-        {creatingCA ? 'Creating…' : 'Create CA'}
-      </button>
-    </div>
-  </div>
-</div>
-
-<div class="card" style="margin-top:1.25rem">
-  <h3 style="margin-top:0">Issue certificate</h3>
-  <div class="toolbar">
-    <div class="field" style="flex:1">
-      <label for="ica">Issuing CA</label>
-      <select id="ica" bind:value={issueCaArn}>
-        <option value="">(select a CA)</option>
-        {#each cas as ca}
-          <option value={ca.id}>{ca.subject}</option>
-        {/each}
-      </select>
-    </div>
-    <div class="field" style="width:8rem">
-      <label for="vd">Validity (days)</label>
-      <input id="vd" bind:value={validityDays} />
-    </div>
-  </div>
-  <div class="field" style="margin-bottom:0.75rem">
-    <label for="csr">CSR (PEM)</label>
-    <textarea id="csr" class="mono" rows="6" placeholder="-----BEGIN CERTIFICATE REQUEST-----" bind:value={csrPem}></textarea>
-  </div>
-  <div class="toolbar" style="margin-bottom:0">
-    <div class="field" style="flex:1">
-      <label for="san">SAN names (optional, comma/space separated)</label>
-      <input id="san" placeholder="example.com www.example.com" bind:value={sanNames} />
-    </div>
-    <div class="field" style="align-self:flex-end">
-      <button class="btn btn-p" onclick={issueCert} disabled={issuing}>
-        {issuing ? 'Issuing…' : 'Issue certificate'}
-      </button>
-    </div>
-  </div>
-</div>
-
-<div class="card" style="margin-top:1.25rem">
-  <h3 style="margin-top:0">Import certificate authority</h3>
-  <p class="muted small" style="margin-top:0">
-    Import an externally generated CA certificate and its matching private key so Citadel can issue certificates from it.
-  </p>
-  <div class="field" style="margin-bottom:0.75rem">
-    <label for="imp-desc">Description (optional)</label>
-    <input id="imp-desc" placeholder="Imported Root CA" bind:value={importDescription} />
-  </div>
-  <div class="field" style="margin-bottom:0.75rem">
-    <label for="imp-cert">CA certificate (PEM)</label>
-    <textarea id="imp-cert" class="mono" rows="6" placeholder="-----BEGIN CERTIFICATE-----" bind:value={importCertPem}></textarea>
-  </div>
-  <div class="field" style="margin-bottom:0.75rem">
-    <label for="imp-key">CA private key (PEM)</label>
-    <textarea id="imp-key" class="mono" rows="6" placeholder="-----BEGIN PRIVATE KEY-----" bind:value={importKeyPem}></textarea>
-  </div>
-  <div class="toolbar" style="margin-bottom:0">
-    <div class="field" style="align-self:flex-end">
-      <button class="btn btn-p" onclick={importCA} disabled={importing}>
-        {importing ? 'Importing…' : 'Import CA'}
-      </button>
-    </div>
-  </div>
-</div>
-
-<div class="card" style="margin-top:1.25rem">
-  <h3 style="margin-top:0">Let's Encrypt</h3>
-  <p class="muted small" style="margin-top:0">
-    Issue publicly-trusted certificates via ACME using manual DNS-01 validation. Begin an order, publish the
-    returned <span class="mono">TXT</span> records at your DNS provider, then complete it. DNS-01 supports
-    wildcard certificates (<span class="mono">*.example.com</span>) and needs no inbound connectivity.
-  </p>
-  <div class="toolbar">
-    <div class="field">
-      <label for="le-env">Environment</label>
-      <select id="le-env" bind:value={leEnvironment}>
-        <option value="staging">Staging</option>
-        <option value="production">Production</option>
-        <option value="custom">Custom</option>
-      </select>
-    </div>
-    {#if leEnvironment === 'custom'}
-      <div class="field" style="flex:1">
-        <label for="le-dir">Directory URL</label>
-        <input id="le-dir" placeholder="https://acme.example.com/directory" bind:value={leDirectoryUrl} />
-      </div>
+<PageHeader title="Certificates" description="Private CA hierarchy and public certificates from Let's Encrypt, in one place.">
+  {#snippet actions()}
+    {#if canAdmin}
+      <button type="button" class="btn btn-secondary" onclick={() => (importOpen = true)}><Icon name="upload" size={16} />Import</button>
     {/if}
-    <div class="field" style="flex:1">
-      <label for="le-email">Contact email</label>
-      <input id="le-email" placeholder="admin@example.com" bind:value={leContactEmail} />
-    </div>
-    <div class="field" style="align-self:flex-end">
-      <button class="btn" onclick={saveLESettings} disabled={leSavingSettings}>
-        {leSavingSettings ? 'Saving…' : 'Save settings'}
-      </button>
-    </div>
-  </div>
-  <div class="toolbar" style="margin-bottom:0">
-    <div class="field" style="flex:1">
-      <label for="le-domains">Domains (comma/space separated, wildcards allowed)</label>
-      <input
-        id="le-domains"
-        placeholder="example.com *.example.com"
-        bind:value={leDomains}
-        disabled={!!leOrderId}
-      />
-    </div>
-    <div class="field" style="align-self:flex-end">
-      <button class="btn btn-p" onclick={requestLECert} disabled={leBeginning || !!leOrderId}>
-        {leBeginning ? 'Starting…' : 'Begin DNS challenge'}
-      </button>
-    </div>
-  </div>
+    {#if canIssue}
+      <button type="button" class="btn btn-primary" onclick={() => issue()}><Icon name="plus" size={16} />Issue certificate</button>
+    {/if}
+  {/snippet}
+</PageHeader>
 
-  {#if leOrderId}
-    <div class="le-challenge">
-      <p class="muted small">
-        Add the following <span class="mono">TXT</span> record{leDnsRecords.length > 1 ? 's' : ''} at your DNS
-        provider, wait for propagation, then click <strong>Complete issuance</strong>. Validation may take a
-        few minutes after the records go live.
-      </p>
-      <table>
-        <thead>
-          <tr>
-            <th>Record name</th>
-            <th>Type</th>
-            <th>Value</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each leDnsRecords as rec}
-            <tr>
-              <td class="mono small">{rec.name}</td>
-              <td><span class="badge">TXT</span></td>
-              <td class="mono small" style="word-break:break-all">{rec.value}</td>
-              <td>
-                <button class="btn btn-sm" onclick={() => copyText(rec.value)}>Copy</button>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-      <div class="row-act" style="justify-content:flex-end;margin-top:0.75rem">
-        <button class="btn btn-sm" onclick={cancelLECert} disabled={leCompleting}>Cancel</button>
-        <button class="btn btn-sm btn-p" onclick={completeLECert} disabled={leCompleting}>
-          {leCompleting ? 'Completing…' : 'Complete issuance'}
-        </button>
-      </div>
-    </div>
-  {/if}
+<div class="tabs-row">
+  <Tabs
+    label="Certificate sections"
+    tabs={[
+      { id: 'overview', label: 'Overview' },
+      { id: 'letsencrypt', label: "Let's Encrypt" },
+      { id: 'acme', label: 'ACME server' }
+    ]}
+    bind:active={tabValue}
+    onchange={(t) => setParams({ tab: t === 'overview' ? null : t })}
+  />
 </div>
 
-<!-- renew confirmation modal -->
-{#if renewCert}
-  <div
-    class="modal-scrim"
-    role="button"
-    tabindex="0"
-    aria-label="Cancel"
-    onclick={() => (renewCert = null)}
-    onkeydown={(e) => e.key === 'Escape' && (renewCert = null)}
-  ></div>
-  <div class="modal" role="dialog" aria-modal="true" aria-label="Renew certificate">
-    <h3 style="margin-top:0">Renew certificate</h3>
-    <p class="muted small">
-      Re-issues <span class="mono">{renewCert.id}</span> from the same CA using its stored CSR with a fresh validity window and serial number.
-    </p>
-    <div class="field" style="margin-bottom:1rem">
-      <label for="rnv">Validity (days)</label>
-      <input id="rnv" bind:value={renewValidityDays} />
-    </div>
-    <div class="row-act" style="justify-content:flex-end">
-      <button class="btn btn-sm" onclick={() => (renewCert = null)} disabled={renewing}>Cancel</button>
-      <button class="btn btn-sm btn-p" onclick={confirmRenew} disabled={renewing}>
-        {renewing ? 'Renewing…' : 'Renew'}
-      </button>
-    </div>
+{#if loadError && tab === 'overview'}
+  <div class="callout callout-danger err" role="alert">
+    <Icon name="alert-circle" size={16} />
+    <span>{loadError}</span>
+    <button type="button" class="btn btn-ghost btn-sm push" onclick={load}>Retry</button>
   </div>
 {/if}
 
-<!-- revoke confirmation modal -->
-{#if confirmCert}
-  <div
-    class="modal-scrim"
-    role="button"
-    tabindex="0"
-    aria-label="Cancel"
-    onclick={() => (confirmCert = null)}
-    onkeydown={(e) => e.key === 'Escape' && (confirmCert = null)}
-  ></div>
-  <div class="modal" role="dialog" aria-modal="true" aria-label="Revoke certificate">
-    <h3 style="margin-top:0">Revoke certificate</h3>
-    <p class="muted small">
-      This permanently revokes <span class="mono">{confirmCert.id}</span> and adds it to the CA's revocation list. This cannot be undone.
-    </p>
-    <div class="field" style="margin-bottom:1rem">
-      <label for="rr">Revocation reason</label>
-      <select id="rr" bind:value={confirmReason}>
-        {#each revokeReasons as r}
-          <option value={r}>{r}</option>
-        {/each}
-      </select>
-    </div>
-    <div class="row-act" style="justify-content:flex-end">
-      <button class="btn btn-sm" onclick={() => (confirmCert = null)} disabled={revoking}>Cancel</button>
-      <button class="btn btn-sm btn-d" onclick={confirmRevoke} disabled={revoking}>
-        {revoking ? 'Revoking…' : 'Revoke'}
-      </button>
-    </div>
+{#if tab === 'letsencrypt'}
+  <LetsEncryptPanel
+    settings={le}
+    settingsError={leError}
+    canRequest={canIssue}
+    canConfigure={canAdmin}
+    onsaved={loadLE}
+    onissued={async (id) => {
+      await load();
+      if (id) setParams({ tab: null, cert: `lets-encrypt:${id}` }, { push: true });
+    }}
+  />
+{:else if tab === 'acme'}
+  <AcmeServerPanel
+    accountId={session.me?.accountId ?? ''}
+    canManage={canAdmin}
+    cas={cas.map((c) => ({ id: c.id, name: nameOf(c), status: c.status }))}
+  />
+{:else}
+  <div class="layout">
+    <CATree
+      {cas}
+      {loading}
+      selected={selectedKey}
+      canCreate={canAdmin}
+      le={le ? { environment: le.environment, contactEmail: le.contactEmail } : null}
+      onselect={openCert}
+      onnew={() => newCA()}
+      onle={() => setParams({ tab: 'letsencrypt' })}
+    />
+    <CertTable
+      rows={leaves}
+      {loading}
+      {filter}
+      {sort}
+      {dir}
+      selected={selectedKey}
+      {nameOf}
+      {issuerOf}
+      {canIssue}
+      canRevoke={canAdmin}
+      onfilter={(f) => setParams({ filter: f === 'all' ? null : f })}
+      onsort={(k, d) => setParams({ sort: k === 'left' ? null : k, dir: d === 'asc' ? null : d })}
+      onopen={openCert}
+      onrenew={askRenew}
+      onrevoke={askRevoke}
+      onissue={() => issue()}
+    />
   </div>
 {/if}
 
-<!-- detail drawer -->
-{#if detail}
-  <div
-    class="drawer-scrim"
-    role="button"
-    tabindex="0"
-    aria-label="Close details"
-    onclick={closeDetail}
-    onkeydown={(e) => e.key === 'Escape' && closeDetail()}
-  ></div>
-  <aside class="drawer">
-    <div class="drawer-head">
-      <div>
-        <div class="mono drawer-title">{detail.subject || detail.id}</div>
-        <div class="muted small">{sourceLabel[detail.source] ?? detail.source}</div>
-      </div>
-      <button class="btn btn-sm" onclick={closeDetail}>✕</button>
-    </div>
+<CertDrawer
+  bind:open={drawerOpen}
+  row={selected}
+  tab={drawerTab}
+  {caName}
+  {canIssue}
+  {canAdmin}
+  ontab={(t) => setParams({ view: t === 'overview' ? null : t })}
+  onclose={closeDrawer}
+  onrenew={askRenew}
+  onrevoke={askRevoke}
+  onissuefrom={(ca) => issue(ca.id)}
+  onsubordinate={(ca) => newCA(ca.id)}
+/>
 
-    <div class="tabs">
-      <button class="tab" class:active={detailTab === 'overview'} onclick={() => (detailTab = 'overview')}
-        >Overview</button
-      >
-      {#if detail.pem}
-        <button class="tab" class:active={detailTab === 'pem'} onclick={() => (detailTab = 'pem')}
-          >PEM</button
-        >
-      {/if}
-      {#if detail.chainPem}
-        <button class="tab" class:active={detailTab === 'chain'} onclick={() => (detailTab = 'chain')}
-          >Chain</button
-        >
-      {/if}
-    </div>
+<IssueWizard bind:open={issueOpen} {cas} initialCaId={issueCa} oncomplete={issued} />
+<CreateCAModal bind:open={caOpen} {cas} initialParent={caParent} oncreated={(id) => load().then(() => setParams({ cert: `pca-ca:${id}`, tab: null }))} />
+<ImportCAModal bind:open={importOpen} onimported={(id) => load().then(() => setParams({ cert: `pca-ca:${id}`, tab: null }))} />
+<RevokeModal bind:open={revokeOpen} cert={target} name={target ? nameOf(target) : ''} ondone={load} />
+<RenewModal bind:open={renewOpen} cert={target} name={target ? nameOf(target) : ''} ondone={load} />
 
-    {#if detailTab === 'overview'}
-      <div class="tab-body">
-        <div class="kv">
-          <div class="kv-row"><span class="kv-l">ID</span><span class="kv-v mono small">{detail.id}</span></div>
-          <div class="kv-row">
-            <span class="kv-l">Status</span>
-            <span class="kv-v"><span class="badge">{detail.status || '—'}</span></span>
-          </div>
-          <div class="kv-row"><span class="kv-l">Subject</span><span class="kv-v small">{detail.subject || '—'}</span></div>
-          <div class="kv-row"><span class="kv-l">Issuer</span><span class="kv-v small">{detail.issuer || '—'}</span></div>
-          <div class="kv-row"><span class="kv-l">Serial</span><span class="kv-v mono small">{detail.serial || '—'}</span></div>
-          <div class="kv-row"><span class="kv-l">Not before</span><span class="kv-v small">{fmtDate(detail.notBefore)}</span></div>
-          <div class="kv-row"><span class="kv-l">Not after</span><span class="kv-v small">{fmtDate(detail.notAfter)}</span></div>
-          {#if detail.keyAlgorithm}
-            <div class="kv-row"><span class="kv-l">Key alg</span><span class="kv-v small">{detail.keyAlgorithm}</span></div>
-          {/if}
-          {#if detail.signatureAlgorithm}
-            <div class="kv-row"><span class="kv-l">Sig alg</span><span class="kv-v small">{detail.signatureAlgorithm}</span></div>
-          {/if}
-          <div class="kv-row"><span class="kv-l">CA</span><span class="kv-v small">{detail.isCA ? 'yes' : 'no'}</span></div>
-          {#if detail.caType}
-            <div class="kv-row"><span class="kv-l">CA type</span><span class="kv-v small">{detail.caType}</span></div>
-          {/if}
-          {#if detail.template}
-            <div class="kv-row"><span class="kv-l">Template</span><span class="kv-v small">{detail.template}</span></div>
-          {/if}
-          {#if detail.kmsKeyId}
-            <div class="kv-row"><span class="kv-l">KMS key</span><span class="kv-v mono small">{detail.kmsKeyId}</span></div>
-          {/if}
-          {#if detail.domains}
-            <div class="kv-row"><span class="kv-l">Domains</span><span class="kv-v small">{detail.domains}</span></div>
-          {/if}
-          {#if detail.sans && detail.sans.length}
-            <div class="kv-row"><span class="kv-l">SANs</span><span class="kv-v small">{detail.sans.join(', ')}</span></div>
-          {/if}
-          {#if detail.revokedAt}
-            <div class="kv-row"><span class="kv-l">Revoked</span><span class="kv-v small">{fmtDate(detail.revokedAt)}</span></div>
-          {/if}
-          {#if detail.revocationReason}
-            <div class="kv-row"><span class="kv-l">Reason</span><span class="kv-v small">{detail.revocationReason}</span></div>
-          {/if}
-        </div>
-      </div>
-    {:else if detailTab === 'pem' && detail.pem}
-      <div class="tab-body">
-        <pre class="pem">{detail.pem}</pre>
-        <div class="row-act">
-          <button class="btn btn-sm" onclick={() => copyText(detail!.pem!)}>Copy</button>
-          <button class="btn btn-sm" onclick={() => downloadText(`${detail!.id}.pem`, detail!.pem!)}
-            >Download .pem</button
-          >
-        </div>
-      </div>
-    {:else if detailTab === 'chain' && detail.chainPem}
-      <div class="tab-body">
-        <pre class="pem">{detail.chainPem}</pre>
-        <div class="row-act">
-          <button class="btn btn-sm" onclick={() => copyText(detail!.chainPem!)}>Copy</button>
-          <button
-            class="btn btn-sm"
-            onclick={() => downloadText(`${detail!.id}-chain.pem`, detail!.chainPem!)}
-            >Download chain</button
-          >
-        </div>
-      </div>
-    {/if}
-  </aside>
+{#if generated}
+  <OnceSecret
+    bind:open={generatedOpen}
+    title="Certificate issued"
+    description="Citadel generated the key pair for {generated.commonName}. The private key isn't stored; download it now."
+    fields={[
+      { label: 'Private key', value: generated.privateKeyPem, multiline: true, secret: true, filename: `${safeFileName(generated.commonName)}.key` },
+      { label: 'Certificate', value: generated.certificatePem, multiline: true, filename: `${safeFileName(generated.commonName)}.pem` },
+      ...(generated.chainPem
+        ? [{ label: 'Issuer chain', value: generated.chainPem, multiline: true, filename: `${safeFileName(generated.commonName)}-chain.pem` }]
+        : [])
+    ]}
+    ondone={generatedDone}
+  />
 {/if}
 
 <style>
-  textarea {
-    width: 100%;
-    box-sizing: border-box;
-    resize: vertical;
+  .tabs-row {
+    margin: calc(-1 * var(--space-2)) 0 var(--space-5);
   }
-  /* Let inputs/selects fill their field and shrink so the create-CA and
-     issue-certificate forms wrap cleanly instead of overflowing horizontally. */
-  .field {
-    min-width: 0;
-  }
-  .field :global(input),
-  .field :global(select) {
-    width: 100%;
-    min-width: 0;
-  }
-  .linklike {
-    background: none;
-    border: none;
-    padding: 0;
-    color: var(--c-blue);
-    cursor: pointer;
-    font: inherit;
-  }
-  .rowsel {
-    background: rgba(43, 108, 176, 0.06);
-  }
-  .small {
-    font-size: 0.82rem;
-  }
-  .drawer-scrim {
-    position: fixed;
-    inset: 0;
-    background: rgba(15, 20, 30, 0.35);
-    z-index: 40;
-    border: none;
-  }
-  .drawer {
-    position: fixed;
-    top: 0;
-    right: 0;
-    height: 100vh;
-    width: min(560px, 92vw);
-    background: var(--c-surface);
-    border-left: 1px solid var(--c-border);
-    box-shadow: -8px 0 24px rgba(15, 20, 30, 0.12);
-    z-index: 41;
-    padding: 1.25rem;
-    overflow-y: auto;
-  }
-  .drawer-head {
+  .layout {
     display: flex;
-    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
     align-items: flex-start;
-    margin-bottom: 1rem;
   }
-  .drawer-title {
-    font-size: 1.1rem;
-    font-weight: 700;
-  }
-  .kv {
-    border: 1px solid var(--c-border);
-    border-radius: var(--radius);
-    padding: 0.5rem 0.75rem;
-  }
-  .kv-row {
-    display: flex;
-    gap: 0.75rem;
-    padding: 0.3rem 0;
-    border-bottom: 1px solid var(--c-border);
-  }
-  .kv-row:last-child {
-    border-bottom: none;
-  }
-  .kv-l {
-    width: 110px;
-    color: var(--c-muted);
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    flex-shrink: 0;
-  }
-  .kv-v {
-    word-break: break-all;
-    flex: 1;
-  }
-  .tabs {
-    display: flex;
-    gap: 0.25rem;
-    border-bottom: 1px solid var(--c-border);
-    margin: 1rem 0 0.75rem;
-    flex-wrap: wrap;
-  }
-  .tab {
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    padding: 0.5rem 0.7rem;
-    cursor: pointer;
-    color: var(--c-muted);
-    font: inherit;
-  }
-  .tab.active {
-    color: var(--c-text);
-    border-bottom-color: var(--c-blue);
-    font-weight: 600;
-  }
-  .tab-body {
-    padding-top: 0.25rem;
-  }
-  .row-act {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-  .pem {
-    background: var(--c-surface);
-    border: 1px solid var(--c-border);
-    border-radius: var(--radius);
-    padding: 0.6rem;
-    font-size: 0.74rem;
-    white-space: pre-wrap;
-    word-break: break-all;
-    max-height: 360px;
-    overflow-y: auto;
-    margin: 0 0 0.6rem;
-  }
-  .ca-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-  }
-  .ca-node {
-    border: 1px solid var(--c-border);
-    border-radius: var(--radius);
-    overflow: hidden;
-  }
-  .ca-head {
-    display: flex;
+  .err {
+    margin-bottom: var(--space-4);
     align-items: center;
-    gap: 0.6rem;
-    padding: 0.6rem 0.75rem;
   }
-  .ca-toggle {
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 0;
-    color: var(--c-muted);
-    flex-shrink: 0;
-  }
-  .caret {
-    display: inline-block;
-    transition: transform 0.12s ease;
-  }
-  .caret.open {
-    transform: rotate(90deg);
-  }
-  .ca-main {
-    flex: 1;
-    min-width: 0;
-  }
-  .ca-name {
-    font-weight: 600;
-    display: block;
-    margin-bottom: 0.2rem;
-  }
-  .ca-meta {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-  .ca-act {
-    flex-shrink: 0;
-  }
-  .ca-children {
-    border-top: 1px solid var(--c-border);
-    padding: 0.5rem 0.75rem;
-    background: rgba(43, 108, 176, 0.03);
-  }
-  .modal-scrim {
-    position: fixed;
-    inset: 0;
-    background: rgba(15, 20, 30, 0.35);
-    z-index: 50;
-    border: none;
-  }
-  .modal {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: min(440px, 92vw);
-    background: var(--c-surface);
-    border: 1px solid var(--c-border);
-    border-radius: var(--radius);
-    box-shadow: 0 12px 32px rgba(15, 20, 30, 0.18);
-    z-index: 51;
-    padding: 1.25rem;
+  .push {
+    margin-left: auto;
   }
 </style>

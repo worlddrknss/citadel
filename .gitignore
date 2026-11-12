@@ -7,6 +7,18 @@ web/.svelte-kit/
 web/build/
 web/.vite/
 
-# Note: cmd/server/webdist/ (the embedded SPA build output) is committed so the
-# Go binary builds and runs without requiring Node. Regenerate it with
-# scripts/build-web.sh whenever web/ sources change.
+
+# Web console build output, embedded by cmd/server/webui.go. Produced by
+# scripts/build-web.sh locally and by the Dockerfile in images; never committed.
+cmd/server/webdist/*
+!cmd/server/webdist/.keep
+
+# go build output when run inside cmd/server
+/cmd/server/server
+# Agent worktrees (local tooling)
+/.claude/
+/web/test-results/
+/web/test-results-live/
+/web/playwright-report/
+/web/playwright-report-live/
+/web/e2e-live/.run/

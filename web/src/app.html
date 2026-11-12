@@ -4,17 +4,19 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
+    <meta name="robots" content="noindex" />
+    <link rel="icon" href="%sveltekit.assets%/favicon.svg" type="image/svg+xml" />
     <title>Citadel</title>
     <script>
-      // Apply the persisted theme before first paint to avoid a flash of the
-      // wrong theme. Defaults to dark when no preference has been saved.
+      // Apply an explicitly chosen theme before first paint. With no choice
+      // saved, CSS follows the OS preference (prefers-color-scheme).
       (function () {
         try {
-          var t = localStorage.getItem('citadel-theme') || 'dark';
-          document.documentElement.setAttribute('data-theme', t);
-        } catch (e) {
-          document.documentElement.setAttribute('data-theme', 'dark');
-        }
+          var t = localStorage.getItem('citadel-theme');
+          if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+          var d = localStorage.getItem('citadel-density');
+          if (d === 'compact') document.documentElement.setAttribute('data-density', d);
+        } catch (e) {}
       })();
     </script>
     %sveltekit.head%

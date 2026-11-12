@@ -11,12 +11,45 @@ export class ApiError extends Error {
   }
 }
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-    credentials: 'same-origin'
-  });
+/** How long a request may take before it is aborted. */
+const REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * Listeners told when the server says the session is gone (401). The session
+ * store subscribes so the whole console drops back to the sign-in screen
+ * instead of leaving a dead UI flashing "session expired".
+ */
+const unauthorizedListeners = new Set<() => void>();
+export function onUnauthorized(fn: () => void): () => void {
+  unauthorizedListeners.add(fn);
+  return () => unauthorizedListeners.delete(fn);
+}
+
+export async function req<T>(path: string, init?: RequestInit & { signal?: AbortSignal }): Promise<T> {
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(), REQUEST_TIMEOUT_MS);
+  const signal = init?.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal;
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      ...init,
+      signal,
+      headers: {
+        'Content-Type': 'application/json',
+        // The server requires this on state-changing /v1 calls. A cross-site
+        // form or <img> can't set it, so it backs up SameSite cookies.
+        'X-Citadel-Request': '1',
+        ...(init?.headers ?? {})
+      },
+      credentials: 'same-origin'
+    });
+  } catch (e) {
+    if (timeout.signal.aborted) throw new ApiError(0, 'timeout', 'The server took too long to respond.');
+    if (init?.signal?.aborted) throw e;
+    throw new ApiError(0, 'network', 'Can\'t reach the Citadel server. Check your connection.');
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     let code = 'error';
     let message = res.statusText;
@@ -27,10 +60,37 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* non-JSON error */
     }
+    // A bare 404 means this server build doesn't have the endpoint yet.
+    if (res.status === 404 && code === 'error') message = 'This feature is not available on this server yet.';
+    if (res.status === 401 && path !== '/v1/login') {
+      for (const fn of unauthorizedListeners) fn();
+    }
     throw new ApiError(res.status, code, message);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** A readable message for any thrown value, for toasts and inline errors. */
+export function errorMessage(e: unknown, fallback = 'Something went wrong.'): string {
+  if (e instanceof ApiError) return e.message || fallback;
+  if (e instanceof Error && e.name !== 'AbortError') return e.message || fallback;
+  return fallback;
+}
+
+export interface ChangeRequest {
+  id: string;
+  project: string;
+  env: string;
+  path: string;
+  key: string;
+  requester: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+  decidedBy?: string;
+  decidedAt?: string;
+  /** Pending rows: whether the caller may approve (server decides: role, policy, not the requester). */
+  canApprove?: boolean;
 }
 
 export interface Me {
@@ -39,6 +99,12 @@ export interface Me {
   role: string;
   accountId: string;
   accounts: string[];
+  /**
+   * Platform admins manage the whole organization: accounts, org settings,
+   * the workload identity issuer and SSO providers that reach other accounts.
+   * An account admin is `role: 'admin'` without this.
+   */
+  platformAdmin?: boolean;
 }
 
 export interface Project {
@@ -204,6 +270,8 @@ export interface AdminUser {
   displayName: string;
   role: string;
   accounts: string[];
+  /** Organization-wide admin; only platform admins can change such users. */
+  platformAdmin?: boolean;
 }
 
 export interface Account {
@@ -580,7 +648,7 @@ export const api = {
       body: JSON.stringify(body)
     }),
   requestLetsEncryptCert: (domains: string) =>
-    req<{ requested: boolean }>('/v1/certificates/letsencrypt/request', {
+    req<{ requested: boolean; certId?: string; domains?: string }>('/v1/certificates/letsencrypt/request', {
       method: 'POST',
       body: JSON.stringify({ domains })
     }),
@@ -630,6 +698,8 @@ export const api = {
     role: string;
     password?: string;
     accounts?: string[];
+    /** Platform admins only; omit to keep the current flag. */
+    platformAdmin?: boolean;
   }) =>
     req<{ username: string; created: boolean }>('/v1/admin/users', {
       method: 'POST',
@@ -654,6 +724,15 @@ export const api = {
     req<{ removed: boolean }>(`/v1/admin/accounts/assign?${qs({ username, accountId })}`, {
       method: 'DELETE'
     }),
+
+  // Change requests (approvals)
+  changeRequests: () => req<{ changeRequests: ChangeRequest[] }>('/v1/change-requests'),
+  createChangeRequest: (body: { project: string; env: string; path: string; key: string; value: string }) =>
+    req<ChangeRequest>('/v1/change-requests', { method: 'POST', body: JSON.stringify(body) }),
+  approveChangeRequest: (id: string) =>
+    req<unknown>('/v1/change-requests/approve', { method: 'POST', body: JSON.stringify({ id }) }),
+  rejectChangeRequest: (id: string) =>
+    req<unknown>('/v1/change-requests/reject', { method: 'POST', body: JSON.stringify({ id }) }),
 
   // IAM identity federation (OIDC providers + roles consumed by STS)
   oidcProviders: () => req<{ providers: OIDCProvider[] }>('/v1/iam/oidc-providers'),

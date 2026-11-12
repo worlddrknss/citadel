@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
   packages: write
+  # Keyless image signing (Sigstore) and build provenance attestations.
+  id-token: write
+  attestations: write
 
 jobs:
   build-and-push:
@@ -39,11 +42,30 @@ jobs:
             type=sha,prefix=sha-
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
+          provenance: mode=max
+          sbom: true
           context: .
           file: ./Dockerfile
           push: true
           platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign the image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          for tag in $TAGS; do cosign sign --yes "${tag}@${DIGEST}"; done
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/citadel
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

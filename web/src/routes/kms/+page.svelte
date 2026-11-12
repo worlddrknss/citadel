@@ -1,684 +1,623 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, ApiError, type KMSKey, type KMSKeyDetail } from '$lib/api';
+  import { base } from '$app/paths';
+  import { api, errorMessage } from '$lib/api';
+  import { param, setParams } from '$lib/url';
+  import { session } from '$lib/stores/session.svelte';
+  import { toast } from '$lib/stores/toast.svelte';
+  import { confirm } from '$lib/stores/confirm.svelte';
+  import PageHeader from '$lib/components/PageHeader.svelte';
+  import DataTable, { type Column } from '$lib/components/DataTable.svelte';
+  import EmptyState from '$lib/components/EmptyState.svelte';
+  import Modal from '$lib/components/Modal.svelte';
+  import Icon from '$lib/components/Icon.svelte';
+  import CopyButton from '$lib/components/CopyButton.svelte';
+  import ActionMenu, { type MenuItem } from './ActionMenu.svelte';
+  import StatusBadge from './StatusBadge.svelte';
+  import KeyPanel from './KeyPanel.svelte';
+  import DeletionDialog from './DeletionDialog.svelte';
+  import {
+    statusOf,
+    isManaged,
+    primaryAlias,
+    shortId,
+    fmtDate,
+    rotationLabel,
+    USAGE_LABEL,
+    SPECS,
+    type Key,
+    type Status
+  } from './api';
 
-  let keys: KMSKey[] = $state([]);
+  const canEdit = $derived(session.can('editor'));
+  // The server only lets admins schedule or cancel key deletion.
+  const canAdmin = $derived(session.can('admin'));
+
+  let keys = $state<Key[]>([]);
   let loading = $state(true);
-  let flash = $state('');
-  let flashOk = $state(true);
+  let loadError = $state('');
 
-  // Detail drawer
-  let detail: KMSKeyDetail | null = $state(null);
-  let detailTab = $state('overview');
-  let policyText = $state('');
-  let savingPolicy = $state(false);
+  // ---- URL state ------------------------------------------------------------
+  const STATUS_FILTERS: { id: string; label: string; match?: Status }[] = [
+    { id: 'all', label: 'All' },
+    { id: 'enabled', label: 'Enabled', match: 'Enabled' },
+    { id: 'disabled', label: 'Disabled', match: 'Disabled' },
+    { id: 'pending', label: 'Pending deletion', match: 'Pending deletion' }
+  ];
+  const statusFilter = $derived(param('status', 'all'));
+  const specFilter = $derived(param('spec'));
+  const usageFilter = $derived(param('usage'));
+  const selectedId = $derived(param('key'));
+  let query = $state(param('q'));
+  let tab = $state(param('tab', 'overview'));
 
-  // Alias management
-  let aliasInput = $state('');
-  let addingAlias = $state(false);
+  $effect(() => {
+    setParams({ q: query.trim() || null });
+  });
+  $effect(() => {
+    if (selectedId) setParams({ tab: tab === 'overview' ? null : tab });
+  });
 
-  // Confirm modal
-  let confirmOpen = $state(false);
-  let confirmTitle = $state('');
-  let confirmBody = $state('');
-  let confirmLabel = $state('Confirm');
-  let confirmAction: (() => Promise<void>) | null = $state(null);
-  let description = $state('');
-  let keyUsage = $state('ENCRYPT_DECRYPT');
-  let keySpec = $state('SYMMETRIC_DEFAULT');
-  let creating = $state(false);
-
-  const specsFor = $derived(
-    keyUsage === 'SIGN_VERIFY'
-      ? ['RSA_2048', 'RSA_3072', 'RSA_4096', 'ECC_NIST_P256', 'ECC_NIST_P384']
-      : ['SYMMETRIC_DEFAULT', 'RSA_2048', 'RSA_3072', 'RSA_4096']
-  );
-
-  function notify(msg: string, ok = true) {
-    flash = msg;
-    flashOk = ok;
-    setTimeout(() => (flash = ''), 4000);
+  async function openKey(id: string, nextTab = 'overview') {
+    // Navigate first: changing `tab` before the URL holds the new key would
+    // let the tab effect above write the old key back into the URL.
+    await setParams({ key: id, tab: nextTab === 'overview' ? null : nextTab });
+    tab = nextTab;
+  }
+  function closeKey() {
+    const id = selectedId;
+    setParams({ key: null, tab: null });
+    // Return focus to the row that opened the panel.
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-key-open="${CSS.escape(id)}"]`)?.focus());
   }
 
+  // ---- Data -----------------------------------------------------------------
   async function load() {
-    loading = true;
+    loadError = '';
     try {
-      keys = (await api.kmsKeys()).keys;
+      keys = (await api.kmsKeys()).keys as Key[];
     } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
+      loadError = errorMessage(e);
     } finally {
       loading = false;
     }
   }
+  onMount(load);
 
-  async function createKey() {
-    if (creating) return;
-    creating = true;
+  let panel = $state<{ refresh: () => void }>();
+  function reloadAll() {
+    load();
+    panel?.refresh();
+  }
+
+  const counts = $derived(
+    Object.fromEntries(
+      STATUS_FILTERS.map((f) => [f.id, f.match ? keys.filter((k) => statusOf(k) === f.match).length : keys.length])
+    ) as Record<string, number>
+  );
+  const specs = $derived([...new Set(keys.map((k) => k.keySpec))].sort());
+
+  const rows = $derived(
+    keys.filter((k) => {
+      const f = STATUS_FILTERS.find((s) => s.id === statusFilter);
+      if (f?.match && statusOf(k) !== f.match) return false;
+      if (specFilter && k.keySpec !== specFilter) return false;
+      if (usageFilter && k.keyUsage !== usageFilter) return false;
+      return true;
+    })
+  );
+
+  const columns: Column<Key>[] = [
+    { id: 'alias', label: 'Alias / key ID', sort: (k) => primaryAlias(k) ?? `\uffff${k.keyId}` },
+    { id: 'spec', label: 'Key spec', sort: (k) => k.keySpec },
+    { id: 'usage', label: 'Usage', sort: (k) => k.keyUsage, hideOnMobile: true },
+    { id: 'status', label: 'Status', sort: (k) => statusOf(k) },
+    { id: 'rotation', label: 'Rotation', hideOnMobile: true },
+    { id: 'created', label: 'Created', sort: (k) => new Date(k.createdAt), hideOnMobile: true },
+    { id: 'actions', label: '', width: '48px', align: 'end' }
+  ];
+  let sortBy = $state('alias');
+  let sortDir = $state<'asc' | 'desc'>('asc');
+
+  // ---- Actions --------------------------------------------------------------
+  async function toggle(k: Key) {
+    const name = primaryAlias(k) ?? k.keyId;
+    if (k.enabled) {
+      const ok = await confirm({
+        title: `Disable ${name}?`,
+        message:
+          'Encrypt, decrypt and every other operation with this key fail until you enable it again. Secrets and parameters encrypted with it become unreadable meanwhile.',
+        confirmLabel: 'Disable key',
+        danger: true
+      });
+      if (!ok) return;
+    }
     try {
-      const res = await api.createKmsKey({ description, keyUsage, keySpec });
-      notify(`Created key ${res.keyId}`);
-      description = '';
-      await load();
+      await api.setKmsKeyEnabled(k.keyId, !k.enabled);
+      toast.success(`${k.enabled ? 'Disabled' : 'Enabled'} ${name}`);
+      reloadAll();
     } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
+      toast.error(e);
+    }
+  }
+
+  let deleting = $state<Key | null>(null);
+  let deleteOpen = $state(false);
+  function askDelete(k: Key) {
+    deleting = k;
+    deleteOpen = true;
+  }
+  async function scheduleDeletion(days: number) {
+    if (!deleting) return;
+    const k = deleting;
+    const res = await api.scheduleKmsKeyDeletion(k.keyId, days);
+    toast.success(`${primaryAlias(k) ?? k.keyId} deletes on ${fmtDate(res.deletionDate)}`);
+    reloadAll();
+  }
+
+  async function cancelDeletion(k: Key) {
+    try {
+      await api.cancelKmsKeyDeletion(k.keyId);
+      toast.success(`Kept ${primaryAlias(k) ?? k.keyId}. It's disabled; enable it to use it again.`);
+      reloadAll();
+    } catch (e) {
+      toast.error(e);
+    }
+  }
+
+  async function copy(text: string, what: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`Copied ${what}`);
+    } catch (e) {
+      toast.error(e, 'Copy failed');
+    }
+  }
+
+  function rowMenu(k: Key): MenuItem[] {
+    const items: MenuItem[] = [
+      { label: 'View details', icon: 'eye', onselect: () => openKey(k.keyId) },
+      { label: 'Copy key ID', icon: 'copy', onselect: () => copy(k.keyId, 'key ID') },
+      { label: 'Copy ARN', icon: 'copy', onselect: () => copy(k.arn, 'ARN') }
+    ];
+    if (!canEdit) return items;
+    if (k.deletionDate) {
+      if (canAdmin) items.push({ label: 'Cancel deletion', icon: 'rotate', onselect: () => cancelDeletion(k) });
+      return items;
+    }
+    items.push({ label: 'Add alias', icon: 'plus', onselect: () => openKey(k.keyId, 'aliases') });
+    if (!isManaged(k)) {
+      items.push({ label: k.enabled ? 'Disable' : 'Enable', icon: k.enabled ? 'eye-off' : 'check-circle', onselect: () => toggle(k) });
+      if (canAdmin) items.push({ label: 'Schedule deletion', icon: 'trash', danger: true, onselect: () => askDelete(k) });
+    }
+    return items;
+  }
+
+  const filterLabel = (v: string, any: string, fmt: (v: string) => string = (x) => x) => (v ? fmt(v) : any);
+
+  // ---- Create key -----------------------------------------------------------
+  let createOpen = $state(false);
+  let cDescription = $state('');
+  let cUsage = $state('ENCRYPT_DECRYPT');
+  let cSpec = $state('SYMMETRIC_DEFAULT');
+  let cAlias = $state('');
+  let creating = $state(false);
+  let createError = $state('');
+  const specChoice = $derived(SPECS[cUsage].find((s) => s.value === cSpec));
+
+  function startCreate() {
+    cDescription = '';
+    cUsage = 'ENCRYPT_DECRYPT';
+    cSpec = 'SYMMETRIC_DEFAULT';
+    cAlias = '';
+    createError = '';
+    createOpen = true;
+  }
+  function pickUsage(u: string) {
+    cUsage = u;
+    cSpec = SPECS[u][0].value;
+  }
+  const aliasError = $derived.by(() => {
+    const t = cAlias.trim();
+    if (!t) return '';
+    const full = t.startsWith('alias/') ? t : `alias/${t}`;
+    if (!/^alias\/[A-Za-z0-9/_-]{1,250}$/.test(full)) return 'Use letters, numbers, /, _ and - after "alias/".';
+    if (full === 'alias/default' || full.startsWith('alias/aws/')) return 'That alias is reserved.';
+    return '';
+  });
+
+  async function createKey(e: SubmitEvent) {
+    e.preventDefault();
+    if (creating || aliasError) return;
+    creating = true;
+    createError = '';
+    try {
+      const res = await api.createKmsKey({ description: cDescription.trim(), keyUsage: cUsage, keySpec: cSpec });
+      const t = cAlias.trim();
+      if (t) {
+        const full = t.startsWith('alias/') ? t : `alias/${t}`;
+        try {
+          await api.createKmsAlias(res.keyId, full);
+        } catch (err) {
+          toast.error(`Key created, but the alias failed: ${errorMessage(err)}`);
+        }
+      }
+      toast.success(`Created key ${shortId(res.keyId)}`);
+      createOpen = false;
+      await load();
+      openKey(res.keyId);
+    } catch (err) {
+      createError = errorMessage(err);
     } finally {
       creating = false;
     }
   }
 
-  async function toggle(k: KMSKey) {
-    try {
-      await api.setKmsKeyEnabled(k.keyId, !k.enabled);
-      notify(`${k.enabled ? 'Disabled' : 'Enabled'} ${k.keyId}`);
-      await load();
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    }
-  }
-
-  async function scheduleDeletion(k: KMSKey) {
-    if (!confirm(`Schedule ${k.keyId} for deletion in 30 days?`)) return;
-    try {
-      await api.scheduleKmsKeyDeletion(k.keyId, 30);
-      notify(`Scheduled ${k.keyId} for deletion`);
-      await load();
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    }
-  }
-
-  async function cancelDeletion(k: KMSKey) {
-    try {
-      await api.cancelKmsKeyDeletion(k.keyId);
-      notify(`Cancelled deletion of ${k.keyId}`);
-      await load();
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    }
-  }
-
-  // ---- detail drawer -------------------------------------------------------
-  function prettyJSON(s: string): string {
-    if (!s) return s;
-    try {
-      return JSON.stringify(JSON.parse(s), null, 2);
-    } catch {
-      return s;
-    }
-  }
-
-  async function openDetail(k: KMSKey) {
-    detailTab = 'overview';
-    detail = null;
-    try {
-      const d = await api.kmsKeyDetail(k.keyId);
-      detail = d;
-      policyText = prettyJSON(d.policyDocument || '');
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    }
-  }
-
-  function closeDetail() {
-    detail = null;
-  }
-
-  async function refreshDetail() {
-    if (!detail) return;
-    try {
-      const d = await api.kmsKeyDetail(detail.keyId);
-      detail = d;
-      policyText = prettyJSON(d.policyDocument || '');
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    }
-  }
-
-  function formatPolicy() {
-    policyText = prettyJSON(policyText);
-  }
-
-  async function savePolicy() {
-    if (!detail || savingPolicy) return;
-    savingPolicy = true;
-    try {
-      await api.putKmsKeyPolicy(detail.keyId, policyText);
-      notify(`Saved key policy for ${detail.keyId}`);
-      await openDetail(detail);
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    } finally {
-      savingPolicy = false;
-    }
-  }
-
-  function askConfirm(opts: { title: string; body: string; label?: string; action: () => Promise<void> }) {
-    confirmTitle = opts.title;
-    confirmBody = opts.body;
-    confirmLabel = opts.label ?? 'Confirm';
-    confirmAction = opts.action;
-    confirmOpen = true;
-  }
-
-  async function runConfirm() {
-    const action = confirmAction;
-    confirmOpen = false;
-    if (action) await action();
-    confirmAction = null;
-  }
-
-  async function addAlias() {
-    if (!detail || addingAlias) return;
-    const name = aliasInput.trim();
-    if (!name) {
-      notify('Enter an alias name', false);
-      return;
-    }
-    addingAlias = true;
-    try {
-      const res = await api.createKmsAlias(detail.keyId, name);
-      notify(`Added ${res.aliasName}`);
-      aliasInput = '';
-      await refreshDetail();
-    } catch (e) {
-      if (e instanceof ApiError) notify(e.message, false);
-    } finally {
-      addingAlias = false;
-    }
-  }
-
-  function deleteAlias(aliasName: string) {
-    if (!detail) return;
-    askConfirm({
-      title: `Delete alias "${aliasName}"?`,
-      body: 'The alias will be removed. The underlying key is not affected.',
-      label: 'Delete alias',
-      action: async () => {
-        try {
-          await api.deleteKmsAlias(aliasName);
-          notify(`Deleted ${aliasName}`);
-          await refreshDetail();
-        } catch (e) {
-          if (e instanceof ApiError) notify(e.message, false);
-        }
-      }
-    });
-  }
-
-  async function copyText(text: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      notify('Copied to clipboard');
-    } catch {
-      notify('Copy failed', false);
-    }
-  }
-
-  function downloadText(filename: string, text: string) {
-    const blob = new Blob([text], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  onMount(load);
+  // ---- API endpoint ---------------------------------------------------------
+  let endpointOpen = $state(false);
+  const endpoint = $derived(typeof window === 'undefined' ? '' : window.location.origin);
 </script>
 
-<div class="ph">
-  <h1 class="ph-title">Key Management Service</h1>
-  <p class="ph-sub">Symmetric and asymmetric keys managed by the Citadel KMS service.</p>
-</div>
+<svelte:head><title>KMS keys · Citadel</title></svelte:head>
 
-{#if flash}
-  <div class="flash {flashOk ? 'ok' : 'err'}">{flash}</div>
-{/if}
+<PageHeader
+  title="KMS keys"
+  description="Customer managed keys{session.me ? ` for ${session.me.accountId}` : ''}. Compatible with the AWS KMS API and SDKs."
+>
+  {#snippet actions()}
+    <button type="button" class="btn btn-ghost" onclick={() => (endpointOpen = true)}><Icon name="external-link" size={16} />API endpoint</button>
+    {#if canEdit}
+      <button type="button" class="btn btn-primary" onclick={startCreate}><Icon name="plus" size={16} />Create key</button>
+    {/if}
+  {/snippet}
+</PageHeader>
 
-<div class="card">
-  <h3 style="margin-top:0">Customer Master Keys</h3>
-  {#if loading}
-    <div class="empty">Loading…</div>
-  {:else if keys.length === 0}
-    <div class="empty">No KMS keys yet.</div>
-  {:else}
-    <table>
-      <thead>
-        <tr>
-          <th>Key ID</th>
-          <th>Description</th>
-          <th>Spec</th>
-          <th>Usage</th>
-          <th>Status</th>
-          <th>Created</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each keys as k}
-          <tr class:rowsel={detail?.keyId === k.keyId}>
-            <td class="mono">
-              <button class="linklike" onclick={() => openDetail(k)}>{k.keyId}</button>
-            </td>
-            <td>{k.description || '—'}</td>
-            <td>{k.keySpec || '—'}</td>
-            <td>{k.keyUsage || '—'}</td>
-            <td>
-              {#if k.deletionDate}
-                <span class="badge">Pending deletion</span>
-              {:else if k.enabled}
-                <span class="badge">Enabled</span>
-              {:else}
-                <span class="badge">Disabled</span>
-              {/if}
-            </td>
-            <td class="muted">{new Date(k.createdAt).toLocaleString()}</td>
-            <td>
-              {#if k.deletionDate}
-                <button class="btn btn-sm" onclick={() => cancelDeletion(k)}>Cancel deletion</button>
-              {:else}
-                <button class="btn btn-sm" onclick={() => toggle(k)}>
-                  {k.enabled ? 'Disable' : 'Enable'}
-                </button>
-                <button class="btn btn-sm btn-d" onclick={() => scheduleDeletion(k)}>Delete</button>
-              {/if}
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
+<div class="layout">
+  <div class="main-col">
+    {#if loadError}
+      <div class="callout callout-danger" role="alert">
+        <Icon name="alert-circle" size={16} />
+        <span class="grow">Couldn't load keys. {loadError}</span>
+        <button type="button" class="btn btn-ghost btn-sm" onclick={() => { loading = true; load(); }}>Retry</button>
+      </div>
+    {/if}
+
+    <DataTable
+      {rows}
+      {columns}
+      key={(k) => k.keyId}
+      {loading}
+      caption="KMS keys"
+      searchable={(k) => [k.keyId, k.arn, k.description, ...k.aliases].join(' ')}
+      searchPlaceholder="Alias, key ID or ARN"
+      bind:query
+      bind:sortBy
+      bind:sortDir
+      selected={selectedId ? [selectedId] : []}
+    >
+      {#snippet toolbar()}
+        <div class="seg" role="group" aria-label="Status filter">
+          {#each STATUS_FILTERS as f (f.id)}
+            <button type="button" aria-pressed={statusFilter === f.id} onclick={() => setParams({ status: f.id === 'all' ? null : f.id })}>
+              {f.label}<span class="count">{counts[f.id] ?? 0}</span>
+            </button>
+          {/each}
+        </div>
+        <ActionMenu
+          label="Filter by key spec"
+          triggerClass="btn btn-secondary"
+          items={[
+            { label: 'Any key spec', checked: !specFilter, onselect: () => setParams({ spec: null }) },
+            ...specs.map((s) => ({ label: s, checked: specFilter === s, onselect: () => setParams({ spec: s }) }))
+          ]}
+        >
+          <Icon name="filter" size={16} />Key spec: <span class:mono={!!specFilter}>{filterLabel(specFilter, 'any')}</span><Icon name="chevron-down" size={14} />
+        </ActionMenu>
+        <ActionMenu
+          label="Filter by usage"
+          triggerClass="btn btn-secondary"
+          items={[
+            { label: 'Any usage', checked: !usageFilter, onselect: () => setParams({ usage: null }) },
+            ...Object.entries(USAGE_LABEL).map(([v, l]) => ({ label: l, checked: usageFilter === v, onselect: () => setParams({ usage: v }) }))
+          ]}
+        >
+          Usage: {filterLabel(usageFilter, 'any', (v) => USAGE_LABEL[v] ?? v)}<Icon name="chevron-down" size={14} />
+        </ActionMenu>
+      {/snippet}
+
+      {#snippet row(k)}
+        {@const alias = primaryAlias(k)}
+        {@const status = statusOf(k)}
+        <td>
+          <button type="button" class="key-open" data-key-open={k.keyId} onclick={() => openKey(k.keyId)}>
+            <span class="mono key-name">
+              {alias ?? k.keyId}
+              {#if isManaged(k)}<span class="managed" title="Account default key"><Icon name="lock" size={12} /><span class="sr-only">(account default key)</span></span>{/if}
+            </span>
+            <span class="mono subtle key-sub">{alias ? shortId(k.keyId) : k.description || shortId(k.keyId)}</span>
+          </button>
+        </td>
+        <td class="mono spec">{k.keySpec}</td>
+        <td class="hide-sm nowrap">{USAGE_LABEL[k.keyUsage] ?? k.keyUsage}</td>
+        <td class="nowrap">
+          <StatusBadge {status} />
+          {#if k.deletionDate}<span class="subtle deletes">deletes {fmtDate(k.deletionDate, false)}</span>{/if}
+        </td>
+        <td class="muted hide-sm nowrap">{rotationLabel(k)}</td>
+        <td class="subtle hide-sm nowrap">{fmtDate(k.createdAt)}</td>
+        <td class="end"><ActionMenu label="More actions for {alias ?? k.keyId}" items={rowMenu(k)} /></td>
+      {/snippet}
+
+      {#snippet empty()}
+        <EmptyState icon="key" title="No KMS keys yet" description="Create a key to encrypt secrets and parameters, or to sign tokens. Keys never leave the FIPS 140 module.">
+          {#if canEdit}
+            <button type="button" class="btn btn-primary btn-sm" onclick={startCreate}><Icon name="plus" size={14} />Create key</button>
+          {/if}
+        </EmptyState>
+      {/snippet}
+    </DataTable>
+
+    {#if !loading && keys.length > 0}
+      <div class="table-foot">
+        <span>{rows.length === keys.length ? `${keys.length} key${keys.length === 1 ? '' : 's'}` : `${rows.length} of ${keys.length} keys`}</span>
+        <span class="fips"><Icon name="shield-check" size={14} />All keys are generated inside the FIPS 140 module</span>
+      </div>
+    {/if}
+  </div>
+
+  {#if selectedId}
+    <KeyPanel
+      bind:this={panel}
+      keyId={selectedId}
+      {keys}
+      bind:tab
+      {canEdit}
+      onclose={closeKey}
+      onchanged={load}
+      ontoggle={toggle}
+      onschedule={askDelete}
+      oncancel={cancelDeletion}
+    />
   {/if}
 </div>
 
-<div class="card" style="margin-top:1.25rem">
-  <h3 style="margin-top:0">Create key</h3>
-  <div class="toolbar" style="margin-bottom:0">
-    <div class="field" style="flex:1">
-      <label for="kd">Description</label>
-      <input id="kd" placeholder="payments signing key" bind:value={description} />
-    </div>
-    <div class="field">
-      <label for="ku">Usage</label>
-      <select id="ku" bind:value={keyUsage}>
-        <option value="ENCRYPT_DECRYPT">ENCRYPT_DECRYPT</option>
-        <option value="SIGN_VERIFY">SIGN_VERIFY</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="ks">Spec</label>
-      <select id="ks" bind:value={keySpec}>
-        {#each specsFor as s}
-          <option value={s}>{s}</option>
+<DeletionDialog bind:open={deleteOpen} target={deleting} onconfirm={scheduleDeletion} />
+
+<Modal bind:open={createOpen} title="Create key" description="The key material is generated inside the FIPS 140 module and never leaves it.">
+  <form id="create-key" class="form" onsubmit={createKey}>
+    <fieldset class="field">
+      <legend class="field-label">Usage</legend>
+      <div class="choices">
+        {#each Object.entries(USAGE_LABEL) as [v, l] (v)}
+          <label class="choice" class:on={cUsage === v}>
+            <input type="radio" name="usage" value={v} checked={cUsage === v} onchange={() => pickUsage(v)} />
+            <span class="choice-text">
+              <span class="choice-title">{l}</span>
+              <span class="subtle small">{v === 'ENCRYPT_DECRYPT' ? 'Protect secrets, parameters and data keys.' : 'Sign tokens and verify signatures.'}</span>
+            </span>
+          </label>
         {/each}
+      </div>
+    </fieldset>
+    <label class="field">
+      <span class="field-label">Key spec</span>
+      <select class="select" bind:value={cSpec}>
+        {#each SPECS[cUsage] as s (s.value)}<option value={s.value}>{s.label} · {s.value}</option>{/each}
       </select>
+      {#if specChoice}<span class="field-hint">{specChoice.hint}</span>{/if}
+    </label>
+    <label class="field">
+      <span class="field-label">Alias <span class="subtle opt">(optional)</span></span>
+      <input class="input mono" bind:value={cAlias} placeholder="alias/payments-prod" autocomplete="off" spellcheck="false" aria-invalid={!!aliasError} />
+      <span class={aliasError ? 'field-error' : 'field-hint'}>{aliasError || 'A stable name applications can use instead of the key ID.'}</span>
+    </label>
+    <label class="field">
+      <span class="field-label">Description <span class="subtle opt">(optional)</span></span>
+      <input class="input" bind:value={cDescription} maxlength="8192" placeholder="Encrypts payment secrets in production" />
+    </label>
+    <div class="callout callout-info" role="note">
+      <Icon name="shield-check" size={16} />
+      <span>FIPS 140-3 mode: only approved algorithms are offered (AES-256-GCM; RSA 2048+ and ECDSA P-256/P-384 with SHA-2; RSAES-OAEP-SHA-256).</span>
     </div>
-    <div class="field" style="align-self:flex-end">
-      <button class="btn btn-p" onclick={createKey} disabled={creating}>
-        {creating ? 'Creating…' : 'Create key'}
-      </button>
+    {#if createError}<p class="field-error" role="alert">{createError}</p>{/if}
+  </form>
+  {#snippet footer()}
+    <button type="button" class="btn btn-ghost" onclick={() => (createOpen = false)}>Cancel</button>
+    <button type="submit" form="create-key" class="btn btn-primary" disabled={creating || !!aliasError}>{creating ? 'Creating…' : 'Create key'}</button>
+  {/snippet}
+</Modal>
+
+<Modal bind:open={endpointOpen} title="API endpoint" description="Point any AWS SDK or the AWS CLI at Citadel to use these keys." size="sm">
+  <div class="form">
+    <div class="field">
+      <span class="field-label">Endpoint URL</span>
+      <span class="endpoint"><code>{endpoint}</code><CopyButton value={endpoint} label="Copy endpoint URL" /></span>
     </div>
+    <div class="field">
+      <span class="field-label">AWS CLI</span>
+      <pre class="snippet">aws kms list-keys --endpoint-url {endpoint}</pre>
+    </div>
+    <p class="field-hint">Authenticate with an access key from My account. Every call is written to the audit log.</p>
   </div>
-</div>
-
-<!-- detail drawer -->
-{#if detail}
-  <div
-    class="drawer-scrim"
-    role="button"
-    tabindex="0"
-    aria-label="Close details"
-    onclick={closeDetail}
-    onkeydown={(e) => e.key === 'Escape' && closeDetail()}
-  ></div>
-  <aside class="drawer">
-    <div class="drawer-head">
-      <div>
-        <div class="mono drawer-title">{detail.keyId}</div>
-        <div class="muted small">{detail.description || '—'}</div>
-      </div>
-      <button class="btn btn-sm" onclick={closeDetail}>✕</button>
-    </div>
-
-    <div class="kv">
-      <div class="kv-row"><span class="kv-l">ARN</span><span class="kv-v mono small">{detail.arn}</span></div>
-      <div class="kv-row">
-        <span class="kv-l">State</span>
-        <span class="kv-v">
-          {#if detail.deletionDate}
-            <span class="badge warn">pending deletion</span>
-            <span class="muted small">{detail.deletionDate.replace('T', ' ').replace('Z', '')}</span>
-          {:else if detail.enabled}
-            <span class="badge ok">enabled</span>
-          {:else}
-            <span class="badge">disabled</span>
-          {/if}
-          <span class="muted small"> · {detail.keyState}</span>
-        </span>
-      </div>
-      <div class="kv-row"><span class="kv-l">Usage</span><span class="kv-v">{detail.keyUsage}</span></div>
-      <div class="kv-row"><span class="kv-l">Spec</span><span class="kv-v">{detail.keySpec}</span></div>
-      <div class="kv-row">
-        <span class="kv-l">Created</span>
-        <span class="kv-v small">{detail.createdAt.replace('T', ' ').replace('Z', '')}</span>
-      </div>
-    </div>
-
-    <div class="tabs">
-      <button class="tab" class:active={detailTab === 'overview'} onclick={() => (detailTab = 'overview')}
-        >Overview</button
-      >
-      <button class="tab" class:active={detailTab === 'policy'} onclick={() => (detailTab = 'policy')}
-        >Key policy</button
-      >
-      <button class="tab" class:active={detailTab === 'grants'} onclick={() => (detailTab = 'grants')}
-        >Grants</button
-      >
-      <button class="tab" class:active={detailTab === 'aliases'} onclick={() => (detailTab = 'aliases')}
-        >Aliases</button
-      >
-      {#if detail.publicKeyPem}
-        <button class="tab" class:active={detailTab === 'pubkey'} onclick={() => (detailTab = 'pubkey')}
-          >Public key</button
-        >
-      {/if}
-    </div>
-
-    {#if detailTab === 'overview'}
-      <div class="tab-body">
-        <div class="kv">
-          <div class="kv-row">
-            <span class="kv-l">Encryption</span>
-            <span class="kv-v small">{(detail.encryptionAlgorithms || []).join(', ') || '—'}</span>
-          </div>
-          <div class="kv-row">
-            <span class="kv-l">Signing</span>
-            <span class="kv-v small">{(detail.signingAlgorithms || []).join(', ') || '—'}</span>
-          </div>
-          <div class="kv-row">
-            <span class="kv-l">Aliases</span>
-            <span class="kv-v small">{detail.aliases.length}</span>
-          </div>
-          <div class="kv-row">
-            <span class="kv-l">Grants</span>
-            <span class="kv-v small">{detail.grants.length}</span>
-          </div>
-        </div>
-      </div>
-    {:else if detailTab === 'policy'}
-      <div class="tab-body">
-        <div class="field block">
-          <label for="kpol">Key policy document</label>
-          <textarea id="kpol" class="mono" rows="16" bind:value={policyText}></textarea>
-        </div>
-        <div class="row-act">
-          <button class="btn btn-sm" onclick={formatPolicy}>Format JSON</button>
-          <button class="btn btn-p btn-sm" onclick={savePolicy} disabled={savingPolicy}>
-            {savingPolicy ? 'Saving…' : 'Save policy'}
-          </button>
-        </div>
-      </div>
-    {:else if detailTab === 'grants'}
-      <div class="tab-body">
-        {#if detail.grants.length === 0}
-          <div class="empty">No grants.</div>
-        {:else}
-          {#each detail.grants as g}
-            <div class="kv" style="margin-bottom:0.6rem">
-              <div class="kv-row"><span class="kv-l">Grant ID</span><span class="kv-v mono small">{g.grantId}</span></div>
-              {#if g.name}
-                <div class="kv-row"><span class="kv-l">Name</span><span class="kv-v small">{g.name}</span></div>
-              {/if}
-              <div class="kv-row"><span class="kv-l">Grantee</span><span class="kv-v mono small">{g.granteePrincipal}</span></div>
-              {#if g.retiringPrincipal}
-                <div class="kv-row"><span class="kv-l">Retiring</span><span class="kv-v mono small">{g.retiringPrincipal}</span></div>
-              {/if}
-              <div class="kv-row"><span class="kv-l">Operations</span><span class="kv-v small">{g.operations.join(', ')}</span></div>
-              <div class="kv-row"><span class="kv-l">Created</span><span class="kv-v small">{g.createdAt.replace('T', ' ').replace('Z', '')}</span></div>
-            </div>
-          {/each}
-        {/if}
-      </div>
-    {:else if detailTab === 'aliases'}
-      <div class="tab-body">
-        <div class="alias-add">
-          <input
-            placeholder="alias/my-key"
-            bind:value={aliasInput}
-            onkeydown={(e) => e.key === 'Enter' && addAlias()}
-          />
-          <button class="btn btn-p btn-sm" onclick={addAlias} disabled={addingAlias}>
-            {addingAlias ? 'Adding…' : 'Add alias'}
-          </button>
-        </div>
-        <p class="muted small" style="margin:0.25rem 0 0.75rem">
-          The <code>alias/</code> prefix is added automatically if omitted.
-        </p>
-        {#if detail.aliases.length === 0}
-          <div class="empty">No aliases.</div>
-        {:else}
-          <ul class="plain alias-list">
-            {#each detail.aliases as a}
-              <li>
-                <span class="mono small">{a}</span>
-                <button class="btn btn-sm btn-d" onclick={() => deleteAlias(a)}>Delete</button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </div>
-    {:else if detailTab === 'pubkey' && detail.publicKeyPem}
-      <div class="tab-body">
-        <pre class="pem">{detail.publicKeyPem}</pre>
-        <div class="row-act">
-          <button class="btn btn-sm" onclick={() => copyText(detail!.publicKeyPem!)}>Copy</button>
-          <button
-            class="btn btn-sm"
-            onclick={() => downloadText(`${detail!.keyId}-public.pem`, detail!.publicKeyPem!)}
-            >Download .pem</button
-          >
-        </div>
-      </div>
-    {/if}
-  </aside>
-{/if}
-
-<!-- confirm modal -->
-{#if confirmOpen}
-  <div class="modal-scrim" role="presentation" onclick={() => (confirmOpen = false)}></div>
-  <div class="modal" role="dialog" aria-modal="true">
-    <h3 style="margin-top:0">{confirmTitle}</h3>
-    <p class="muted">{confirmBody}</p>
-    <div class="modal-act">
-      <button class="btn" onclick={() => (confirmOpen = false)}>Cancel</button>
-      <button class="btn btn-d" onclick={runConfirm}>{confirmLabel}</button>
-    </div>
-  </div>
-{/if}
+  {#snippet footer()}
+    <a class="btn btn-secondary" href="{base}/account">Access keys</a>
+    <button type="button" class="btn btn-primary" onclick={() => (endpointOpen = false)}>Done</button>
+  {/snippet}
+</Modal>
 
 <style>
-  .linklike {
-    background: none;
-    border: none;
-    padding: 0;
-    color: var(--c-blue);
-    cursor: pointer;
-    font: inherit;
-  }
-  .alias-add {
+  .layout {
     display: flex;
-    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: var(--space-5);
   }
-  .alias-add input {
-    flex: 1;
-  }
-  .alias-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
+  .main-col {
+    flex: 999 1 560px;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: var(--space-3);
   }
-  .alias-list li {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    padding: 0.4rem 0.5rem;
-    border: 1px solid var(--c-border);
-    border-radius: var(--radius);
-  }
-  .modal-scrim {
-    position: fixed;
-    inset: 0;
-    background: rgba(15, 20, 30, 0.35);
-    z-index: 50;
-  }
-  .modal {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background: var(--c-surface);
-    border: 1px solid var(--c-border);
-    border-radius: var(--radius);
-    padding: 1.25rem;
-    width: min(460px, 92vw);
-    z-index: 51;
-    box-shadow: 0 12px 32px rgba(15, 20, 30, 0.2);
-  }
-  .modal-act {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    margin-top: 1rem;
-  }
-  .rowsel {
-    background: rgba(43, 108, 176, 0.06);
-  }
-  .small {
-    font-size: 0.82rem;
-  }
-  .drawer-scrim {
-    position: fixed;
-    inset: 0;
-    background: rgba(15, 20, 30, 0.35);
-    z-index: 40;
-    border: none;
-  }
-  .drawer {
-    position: fixed;
-    top: 0;
-    right: 0;
-    height: 100vh;
-    width: min(560px, 92vw);
-    background: var(--c-surface);
-    border-left: 1px solid var(--c-border);
-    box-shadow: -8px 0 24px rgba(15, 20, 30, 0.12);
-    z-index: 41;
-    padding: 1.25rem;
-    overflow-y: auto;
-  }
-  .drawer-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 1rem;
-  }
-  .drawer-title {
-    font-size: 1.1rem;
-    font-weight: 700;
-  }
-  .kv {
-    border: 1px solid var(--c-border);
-    border-radius: var(--radius);
-    padding: 0.5rem 0.75rem;
-  }
-  .kv-row {
-    display: flex;
-    gap: 0.75rem;
-    padding: 0.3rem 0;
-    border-bottom: 1px solid var(--c-border);
-  }
-  .kv-row:last-child {
-    border-bottom: none;
-  }
-  .kv-l {
-    width: 130px;
-    color: var(--c-muted);
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    flex-shrink: 0;
-  }
-  .kv-v {
-    word-break: break-all;
+  .grow {
     flex: 1;
   }
-  .tabs {
+  .key-open {
     display: flex;
-    gap: 0.25rem;
-    border-bottom: 1px solid var(--c-border);
-    margin: 1rem 0 0.75rem;
-    flex-wrap: wrap;
-  }
-  .tab {
+    flex-direction: column;
+    gap: 2px;
+    padding: 0;
+    border: 0;
     background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    padding: 0.5rem 0.7rem;
+    color: var(--text);
+    font: inherit;
+    text-align: start;
     cursor: pointer;
-    color: var(--c-muted);
-    font: inherit;
   }
-  .tab.active {
-    color: var(--c-text);
-    border-bottom-color: var(--c-blue);
-    font-weight: 600;
+  .key-open:hover .key-name {
+    color: var(--accent-text);
+    text-decoration: underline;
   }
-  .tab-body {
-    padding-top: 0.25rem;
+  .key-name {
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
   }
-  .field.block {
-    display: block;
-    margin-bottom: 0.75rem;
+  .managed {
+    display: inline-flex;
+    color: var(--info);
   }
-  .field.block textarea {
-    width: 100%;
+  .key-sub {
+    font-size: 11.5px;
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  textarea {
-    font: inherit;
-    padding: 0.45rem 0.6rem;
-    border: 1px solid var(--c-border);
-    border-radius: 6px;
-    width: 100%;
-    resize: vertical;
+  .spec {
+    font-size: var(--text-sm);
   }
-  .row-act {
+  .deletes {
+    margin-left: var(--space-2);
+    font-size: var(--text-sm);
+  }
+  @media (max-width: 720px) {
+    .hide-sm {
+      display: none;
+    }
+  }
+  .table-foot {
     display: flex;
-    gap: 0.5rem;
     flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: 0 var(--space-1);
+    color: var(--text-subtle);
+    font-size: var(--text-sm);
   }
-  .pem {
-    background: var(--c-surface);
-    border: 1px solid var(--c-border);
-    border-radius: var(--radius);
-    padding: 0.6rem;
-    font-size: 0.74rem;
-    white-space: pre-wrap;
-    word-break: break-all;
-    max-height: 320px;
-    overflow-y: auto;
-    margin: 0 0 0.6rem;
+  .fips {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
   }
-  ul.plain {
-    list-style: none;
+  /* Segmented control (DesignSystem "seg"). */
+  .seg {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 3px;
+    border-radius: var(--radius-md);
+    background: var(--surface-pressed);
+  }
+  .seg button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font: 500 var(--text-sm) / 1 var(--font-sans);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .seg button[aria-pressed='true'] {
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: var(--shadow-xs);
+  }
+  .count {
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--surface-pressed);
+    color: var(--text-muted);
+    font: 500 var(--text-xs) / 16px var(--font-sans);
+    font-variant-numeric: tabular-nums;
+  }
+  .seg button[aria-pressed='true'] .count {
+    background: var(--surface-hover);
+  }
+  .form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .form .field + .field {
+    margin-top: 0;
+  }
+  fieldset {
     margin: 0;
     padding: 0;
+    border: 0;
   }
-  ul.plain li {
-    padding: 0.3rem 0;
-    border-bottom: 1px solid var(--c-border);
+  .choices {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--space-2);
+  }
+  .choice {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+  }
+  .choice.on {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .choice input {
+    margin-top: 2px;
+  }
+  .choice-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .choice-title {
+    font-weight: 500;
+  }
+  .opt {
+    font-weight: 400;
+  }
+  .endpoint {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .endpoint code {
+    overflow-wrap: anywhere;
+  }
+  .snippet {
+    white-space: pre-wrap;
+    word-break: break-all;
   }
 </style>

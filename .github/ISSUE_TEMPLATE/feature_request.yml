@@ -1,0 +1,19 @@
+name: Feature request
+description: Suggest a capability or an AWS API Citadel should support.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+  - type: textarea
+    id: aws
+    attributes:
+      label: AWS API compatibility
+      description: If this is about an AWS API action, name the service and action (for example `kms:ReEncrypt`).

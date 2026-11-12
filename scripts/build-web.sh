@@ -3,20 +3,20 @@
 #
 # Usage: ./scripts/build-web.sh
 #
-# Produces cmd/server/webdist/, which is embedded by cmd/server/webui.go via
-# //go:embed. Run this before `go build ./...` whenever the web/ sources change.
+# Produces cmd/server/webdist/ (not committed), which cmd/server/webui.go embeds
+# via //go:embed. Run this before `go build ./...` for a binary with the console.
+# Container images build the console themselves (see Dockerfile).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 echo ">> Building Svelte SPA (web/)…"
-npm --prefix web install --no-audit --no-fund
+npm --prefix web ci --no-audit --no-fund
 npm --prefix web run build
 
 echo ">> Embedding build output into cmd/server/webdist/…"
-rm -rf cmd/server/webdist
-mkdir -p cmd/server/webdist
+find cmd/server/webdist -mindepth 1 ! -name .keep -exec rm -rf {} +
 cp -R web/build/. cmd/server/webdist/
 
 echo ">> Done. Now run: go build ./..."

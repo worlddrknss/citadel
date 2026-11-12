@@ -1,0 +1,68 @@
+# Citadel with PostgreSQL, for local evaluation and development.
+#
+#   cd deploy/compose
+#   ./generate-env.sh          # writes .env with fresh random secrets
+#   docker compose up -d
+#   docker compose logs citadel | grep -i bootstrap
+#   open http://localhost:8080/app/
+#
+# This is not a production deployment: the database is not backed up, TLS
+# is off and both containers run on one host. See docs/deployment.md.
+name: citadel
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: citadel
+      POSTGRES_USER: citadel
+      # At least 14 characters: Citadel runs in FIPS 140-3 mode, which
+      # rejects shorter SCRAM-SHA-256 passwords.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U citadel -d citadel"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [backend]
+
+  citadel:
+    image: ghcr.io/worlddrknss/citadel:${CITADEL_TAG:-2.0.0}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      KMS_LISTEN_ADDR: ":8080"
+      KMS_DB_URL: postgres://citadel:${POSTGRES_PASSWORD}@postgres:5432/citadel?sslmode=disable
+      KMS_WRAPPING_KEY_B64: ${KMS_WRAPPING_KEY_B64:?set KMS_WRAPPING_KEY_B64 in .env (see .env.example)}
+      KMS_AUDIT_HMAC_KEY_B64: ${KMS_AUDIT_HMAC_KEY_B64:?set KMS_AUDIT_HMAC_KEY_B64 in .env (see .env.example)}
+      KMS_PREVIOUS_WRAPPING_KEYS_B64: ${KMS_PREVIOUS_WRAPPING_KEYS_B64:-}
+      KMS_BOOTSTRAP_TOKEN: ${KMS_BOOTSTRAP_TOKEN:-}
+      KMS_PUBLIC_URL: ${KMS_PUBLIC_URL:-http://localhost:8080}
+      # The console is served over plain http://localhost here, so session
+      # cookies cannot be Secure. Never do this behind a real hostname.
+      KMS_UI_SECURE_COOKIES: "false"
+    ports:
+      - "127.0.0.1:${CITADEL_PORT:-8080}:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    user: "65532:65532"
+    stop_grace_period: 20s
+    networks: [backend, frontend]
+
+volumes:
+  pgdata:
+
+networks:
+  backend:
+    internal: true
+  frontend: {}

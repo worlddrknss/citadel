@@ -1,0 +1,2 @@
+The web console build output is copied here by scripts/build-web.sh or the
+Dockerfile. It is not committed; this file keeps the go:embed pattern valid.

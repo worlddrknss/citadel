@@ -1,0 +1,76 @@
+Citadel {{ include "citadel.imageTag" . }} is deployed as {{ include "citadel.fullname" . }} in namespace {{ .Release.Namespace }}.
+
+1. Wait for the rollout:
+
+   kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "citadel.fullname" . }}
+
+2. Open the console:
+{{- if .Values.config.publicUrl }}
+
+   {{ .Values.config.publicUrl }}/app/
+{{- else if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+
+   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}/app/
+{{- end }}
+{{- else }}
+
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "citadel.fullname" . }} 8080:{{ .Values.service.port }}
+   then open {{ ternary "https" "http" .Values.tls.enabled }}://127.0.0.1:8080/app/
+{{- if .Values.config.uiSecureCookies }}
+   (Session cookies are Secure: over plain http://127.0.0.1 some browsers
+   refuse them. Use the ingress, or tls.enabled, for real use.)
+{{- end }}
+{{- end }}
+
+3. First-run setup.
+{{- if or .Values.secrets.uiUsersJson.value .Values.secrets.uiUsersJson.existingSecret }}
+   Console users come from KMS_UI_USERS_JSON; sign in with one of them.
+{{- else }}
+   With no console users the server starts in bootstrap mode: its API is
+   closed until you create the organization and first admin in the console.
+   Setup asks for the one-time bootstrap token.
+{{- if or .Values.secrets.bootstrapToken.value .Values.secrets.bootstrapToken.existingSecret }}
+   You supplied it as KMS_BOOTSTRAP_TOKEN.
+{{- else }}
+   The server generated one and printed it in its log. Each replica
+   generates its OWN token, valid only on that replica: with more than one
+   replica, set secrets.bootstrapToken so setup works whichever pod answers,
+   or scale to one replica for setup. Read the logs with:
+
+   kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/name={{ include "citadel.name" . }} --tail=-1 | grep -i bootstrap
+{{- end }}
+   The token stops working once the first admin exists.
+{{- end }}
+
+4. Check health (the image is distroless, so probe from outside the pod):
+
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "citadel.fullname" . }} 8080:{{ .Values.service.port }} &
+   curl -s{{ if .Values.tls.enabled }}k https{{ else }} http{{ end }}://127.0.0.1:8080{{ .Values.probes.livenessPath }}
+{{- if not .Values.config.publicUrl }}
+
+WARNING: config.publicUrl (KMS_PUBLIC_URL) is not set. The ACME server is
+disabled, and console SSO and workload identity cannot build correct URLs.
+{{- end }}
+{{- if not .Values.config.trustedProxies }}
+{{- if or .Values.ingress.enabled .Values.httpRoute.enabled }}
+
+WARNING: config.trustedProxies is empty while traffic arrives through a
+proxy. Audit logs and rate limits will see the proxy's address instead of
+the client's. Set it to the ingress controller's / gateway's pod CIDR.
+{{- end }}
+{{- end }}
+{{- if .Values.devMode.inMemory }}
+
+WARNING: devMode.inMemory is set. All data is lost when the pod restarts.
+Do not use this for anything you need to keep.
+{{- end }}
+{{- if .Values.secrets.create }}
+
+NOTE: secrets.create=true. Secret values are stored in this release's
+history. Move them to an externally managed Secret (secrets.existingSecret).
+{{- end }}
+
+Back up the PostgreSQL database AND the wrapping key (KMS_WRAPPING_KEY_B64),
+stored separately. A database backup cannot be restored without the key.
+See docs/deployment.md.

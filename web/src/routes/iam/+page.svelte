@@ -1,365 +1,312 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, ApiError, type OIDCProvider, type Role, type TrustType } from '$lib/api';
+  import PageHeader from '$lib/components/PageHeader.svelte';
+  import Tabs from '$lib/components/Tabs.svelte';
+  import DataTable, { type Column } from '$lib/components/DataTable.svelte';
+  import EmptyState from '$lib/components/EmptyState.svelte';
+  import Badge from '$lib/components/Badge.svelte';
+  import Icon from '$lib/components/Icon.svelte';
+  import { api, errorMessage, type OIDCProvider, type Role } from '$lib/api';
+  import { session } from '$lib/stores/session.svelte';
+  import { toast } from '$lib/stores/toast.svelte';
+  import { confirm } from '$lib/stores/confirm.svelte';
+  import { param, setParams } from '$lib/url';
+  import RoleEditor from './RoleEditor.svelte';
+  import RoleDrawer from './RoleDrawer.svelte';
+  import ProviderModal from './ProviderModal.svelte';
+  import { sessionLabel, fmtDate } from './trust';
 
-  let providers: OIDCProvider[] = $state([]);
-  let roles: Role[] = $state([]);
-  let loading = $state(false);
-
-  let flash = $state('');
-  let flashOk = $state(true);
-
-  // Add-provider modal.
-  let providerOpen = $state(false);
-  let pUrl = $state('');
-  let pAudiences = $state('');
-
-  // Create-role modal.
-  let roleOpen = $state(false);
-  let rName = $state('');
-  let rDescription = $state('');
-  let rType: TrustType = $state('oidc');
-  let rProvider = $state('');
-  let rAudiences = $state('');
-  let rSubjects = $state('');
-  let rPrincipals = $state('');
-  let rMaxSession = $state(3600);
-
-  // Confirm modal (avoids native confirm per UX guidelines).
-  let confirmOpen = $state(false);
-  let confirmTitle = $state('');
-  let confirmBody = $state('');
-  let confirmLabel = $state('Delete');
-  let confirmAction: (() => Promise<void>) | null = $state(null);
-
-  function notify(msg: string, ok = true) {
-    flash = msg;
-    flashOk = ok;
-    setTimeout(() => (flash = ''), 5000);
-  }
-
-  function err(e: unknown) {
-    if (e instanceof ApiError) notify(e.message, false);
-    else notify('Unexpected error', false);
-  }
-
-  function splitList(s: string): string[] {
-    return s
-      .split(',')
-      .map((v) => v.trim())
-      .filter(Boolean);
-  }
-
-  function fmt(ts: string): string {
-    if (!ts) return '—';
-    const d = new Date(ts);
-    return isNaN(d.getTime()) ? ts : d.toLocaleString();
-  }
+  let providers = $state<OIDCProvider[]>([]);
+  let roles = $state<Role[]>([]);
+  let loading = $state(true);
+  let loadError = $state('');
 
   async function load() {
     loading = true;
+    loadError = '';
     try {
-      providers = (await api.oidcProviders()).providers;
-      roles = (await api.roles()).roles;
+      const [p, r] = await Promise.all([api.oidcProviders(), api.roles()]);
+      providers = p.providers ?? [];
+      roles = r.roles ?? [];
     } catch (e) {
-      err(e);
+      loadError = errorMessage(e, 'Could not load identity federation settings.');
     } finally {
       loading = false;
     }
   }
+  onMount(load);
 
-  function openProvider() {
-    pUrl = '';
-    pAudiences = '';
+  const canEdit = $derived(session.can('admin'));
+  const tab = $derived(param('tab', 'roles'));
+  const q = $derived(param('q'));
+  const selectedName = $derived(param('role'));
+  const selected = $derived(roles.find((r) => r.roleName === selectedName) ?? null);
+
+  let tabValue = $state('roles');
+  let query = $state('');
+  $effect(() => {
+    tabValue = tab;
+  });
+  $effect(() => {
+    query = q;
+  });
+  $effect(() => {
+    if (query !== q) setParams({ q: query });
+  });
+
+  let drawerOpen = $state(false);
+  $effect(() => {
+    drawerOpen = !!selected;
+  });
+
+  const rolesUsing = (p: OIDCProvider) => roles.filter((r) => r.trust.type === 'oidc' && r.trust.providerUrl?.replace(/\/+$/, '') === p.url.replace(/\/+$/, ''));
+
+  // Dialogs
+  let editorOpen = $state(false);
+  let editing = $state<Role | null>(null);
+  let providerOpen = $state(false);
+  let editingProvider = $state<OIDCProvider | null>(null);
+
+  function createRole() {
+    editing = null;
+    editorOpen = true;
+  }
+  function editRole(r: Role) {
+    editing = r;
+    editorOpen = true;
+  }
+  function addProvider() {
+    editingProvider = null;
+    providerOpen = true;
+  }
+  function editProvider(p: OIDCProvider) {
+    editingProvider = p;
     providerOpen = true;
   }
 
-  async function addProvider() {
-    const auds = splitList(pAudiences);
-    if (!pUrl.trim() || auds.length === 0) {
-      notify('Issuer URL and at least one audience are required', false);
-      return;
-    }
+  async function deleteRole(r: Role) {
+    const ok = await confirm({
+      title: `Delete ${r.roleName}?`,
+      message: 'Workloads that assume this role lose access when their current credentials expire. This cannot be undone.',
+      confirmLabel: 'Delete role',
+      danger: true,
+      typeToConfirm: r.roleName
+    });
+    if (!ok) return;
     try {
-      await api.createOIDCProvider(pUrl.trim(), auds);
-      notify('Identity provider added');
-      providerOpen = false;
+      await api.deleteRole(r.roleName);
+      toast.success(`Deleted ${r.roleName}`);
+      if (selectedName === r.roleName) setParams({ role: null });
       await load();
     } catch (e) {
-      err(e);
+      toast.error(e, 'Could not delete the role');
     }
   }
 
-  function openRole() {
-    rName = '';
-    rDescription = '';
-    rType = 'oidc';
-    rProvider = providers[0]?.url ?? '';
-    rAudiences = providers[0]?.clientIds?.join(', ') ?? '';
-    rSubjects = '';
-    rPrincipals = '';
-    rMaxSession = 3600;
-    roleOpen = true;
-  }
-
-  async function addRole() {
-    if (!rName.trim()) {
-      notify('Role name is required', false);
-      return;
-    }
-    const trust =
-      rType === 'oidc'
-        ? {
-            type: 'oidc' as TrustType,
-            providerUrl: rProvider.trim(),
-            audiences: splitList(rAudiences),
-            subjects: splitList(rSubjects)
-          }
-        : { type: 'account' as TrustType, principals: splitList(rPrincipals) };
+  async function deleteProvider(p: OIDCProvider) {
+    const using = rolesUsing(p);
+    const ok = await confirm({
+      title: 'Delete identity provider?',
+      message: using.length
+        ? `${using.length} role${using.length > 1 ? 's' : ''} (${using.map((r) => r.roleName).join(', ')}) trust ${p.url}. They will stop accepting its tokens.`
+        : `Tokens from ${p.url} will no longer be accepted.`,
+      confirmLabel: 'Delete provider',
+      danger: true,
+      typeToConfirm: using.length ? new URL(p.url).host : undefined
+    });
+    if (!ok) return;
     try {
-      await api.createRole({
-        roleName: rName.trim(),
-        description: rDescription.trim(),
-        trust,
-        maxSessionSeconds: Number(rMaxSession) || 3600
-      });
-      notify('Role created');
-      roleOpen = false;
-      await load();
-    } catch (e) {
-      err(e);
-    }
-  }
-
-  function confirmDeleteProvider(p: OIDCProvider) {
-    confirmTitle = 'Delete identity provider';
-    confirmBody = `Remove ${p.url}? Roles that trust this provider will stop working.`;
-    confirmLabel = 'Delete provider';
-    confirmAction = async () => {
       await api.deleteOIDCProvider(p.providerArn);
-      notify('Identity provider deleted');
+      toast.success('Identity provider deleted');
       await load();
-    };
-    confirmOpen = true;
-  }
-
-  function confirmDeleteRole(role: Role) {
-    confirmTitle = 'Delete role';
-    confirmBody = `Delete role ${role.roleName}? Workloads assuming it will lose access.`;
-    confirmLabel = 'Delete role';
-    confirmAction = async () => {
-      await api.deleteRole(role.roleName);
-      notify('Role deleted');
-      await load();
-    };
-    confirmOpen = true;
-  }
-
-  async function runConfirm() {
-    if (!confirmAction) return;
-    try {
-      await confirmAction();
     } catch (e) {
-      err(e);
-    } finally {
-      confirmOpen = false;
-      confirmAction = null;
+      toast.error(e, 'Could not delete the provider');
     }
   }
 
-  onMount(load);
+  const roleCols: Column<Role>[] = [
+    { id: 'name', label: 'Role', sort: (r) => r.roleName },
+    { id: 'trust', label: 'Trusted principal', sort: (r) => r.trust.type },
+    { id: 'cond', label: 'Conditions', hideOnMobile: true },
+    { id: 'max', label: 'Max session', sort: (r) => r.maxSessionSeconds, hideOnMobile: true },
+    { id: 'updated', label: 'Updated', sort: (r) => r.updatedAt, hideOnMobile: true },
+    { id: 'act', label: '', align: 'end', width: '96px' }
+  ];
+  const provCols: Column<OIDCProvider>[] = [
+    { id: 'url', label: 'Issuer', sort: (p) => p.url },
+    { id: 'aud', label: 'Audiences' },
+    { id: 'roles', label: 'Roles', sort: (p) => rolesUsing(p).length, hideOnMobile: true },
+    { id: 'created', label: 'Added', sort: (p) => p.createdAt, hideOnMobile: true },
+    { id: 'act', label: '', align: 'end', width: '96px' }
+  ];
 </script>
 
-<div class="ph">
-  <h1 class="ph-title">Identity &amp; Access</h1>
-  <p class="ph-sub">
-    OIDC identity providers and IAM roles for the Security Token Service. Workloads exchange a
-    web-identity token for short-lived credentials via <code>AssumeRoleWithWebIdentity</code> — no
-    static access keys required.
-  </p>
-</div>
-
-{#if flash}
-  <div class="flash {flashOk ? 'ok' : 'err'}">{flash}</div>
-{/if}
-
-<div class="card">
-  <div class="card-head">
-    <h3 style="margin:0">Identity providers</h3>
-    <button class="btn btn-p btn-sm" onclick={openProvider}>Add provider</button>
-  </div>
-  {#if loading}
-    <div class="empty">Loading…</div>
-  {:else if providers.length === 0}
-    <div class="empty">No identity providers registered.</div>
-  {:else}
-    <table class="table">
-      <thead>
-        <tr><th>Issuer URL</th><th>Audiences</th><th>Created</th><th></th></tr>
-      </thead>
-      <tbody>
-        {#each providers as p}
-          <tr>
-            <td class="mono">{p.url}</td>
-            <td>
-              {#each p.clientIds as c}<span class="badge mono">{c}</span> {/each}
-            </td>
-            <td class="muted">{fmt(p.createdAt)}</td>
-            <td>
-              <button class="btn btn-sm btn-d" onclick={() => confirmDeleteProvider(p)}>Delete</button>
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  {/if}
-</div>
-
-<div class="card" style="margin-top:1rem">
-  <div class="card-head">
-    <h3 style="margin:0">Roles</h3>
-    <button class="btn btn-p btn-sm" onclick={openRole}>Create role</button>
-  </div>
-  {#if loading}
-    <div class="empty">Loading…</div>
-  {:else if roles.length === 0}
-    <div class="empty">No roles defined.</div>
-  {:else}
-    <table class="table">
-      <thead>
-        <tr><th>Role</th><th>Trust</th><th>Conditions</th><th>Max session</th><th></th></tr>
-      </thead>
-      <tbody>
-        {#each roles as role}
-          <tr>
-            <td>
-              <div class="mono">{role.roleName}</div>
-              {#if role.description}<div class="muted">{role.description}</div>{/if}
-              <div class="muted mono" style="font-size:0.75rem">{role.roleArn}</div>
-            </td>
-            <td><span class="badge">{role.trust.type}</span></td>
-            <td class="mono" style="font-size:0.8rem">
-              {#if role.trust.type === 'oidc'}
-                <div>{role.trust.providerUrl}</div>
-                {#each role.trust.subjects ?? [] as s}<span class="badge">{s}</span> {/each}
-              {:else}
-                {#each role.trust.principals ?? [] as pr}<span class="badge">{pr}</span> {/each}
-              {/if}
-            </td>
-            <td class="muted">{Math.round(role.maxSessionSeconds / 60)} min</td>
-            <td>
-              <button class="btn btn-sm btn-d" onclick={() => confirmDeleteRole(role)}>Delete</button>
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  {/if}
-</div>
-
-{#if confirmOpen}
-  <div class="modal-back" role="presentation" onclick={() => (confirmOpen = false)}></div>
-  <div class="modal">
-    <h3 style="margin-top:0">{confirmTitle}</h3>
-    <p>{confirmBody}</p>
-    <div class="modal-actions">
-      <button class="btn" onclick={() => (confirmOpen = false)}>Cancel</button>
-      <button class="btn btn-d" onclick={runConfirm}>{confirmLabel}</button>
-    </div>
-  </div>
-{/if}
-
-{#if providerOpen}
-  <div class="modal-back" role="presentation" onclick={() => (providerOpen = false)}></div>
-  <div class="modal">
-    <h3 style="margin-top:0">Add identity provider</h3>
-    <p class="muted" style="margin-top:0">
-      Register an OIDC issuer (e.g. a Kubernetes cluster) whose tokens may be exchanged for
-      credentials.
-    </p>
-    <div class="field">
-      <label for="p-url">Issuer URL</label>
-      <input id="p-url" class="mono" placeholder="https://oidc.my-cluster.example" bind:value={pUrl} />
-    </div>
-    <div class="field">
-      <label for="p-aud">Audiences (comma-separated)</label>
-      <input id="p-aud" class="mono" placeholder="sts.citadel.local" bind:value={pAudiences} />
-    </div>
-    <div class="modal-actions">
-      <button class="btn" onclick={() => (providerOpen = false)}>Cancel</button>
-      <button class="btn btn-p" onclick={addProvider}>Add provider</button>
-    </div>
-  </div>
-{/if}
-
-{#if roleOpen}
-  <div class="modal-back" role="presentation" onclick={() => (roleOpen = false)}></div>
-  <div class="modal modal-lg">
-    <h3 style="margin-top:0">Create role</h3>
-    <div class="field">
-      <label for="r-name">Role name</label>
-      <input id="r-name" class="mono" placeholder="varaperformance-secrets" bind:value={rName} />
-    </div>
-    <div class="field">
-      <label for="r-desc">Description</label>
-      <input id="r-desc" bind:value={rDescription} />
-    </div>
-    <div class="field">
-      <label for="r-type">Trust type</label>
-      <select id="r-type" bind:value={rType}>
-        <option value="oidc">Web identity (OIDC)</option>
-        <option value="account">Account principal</option>
-      </select>
-    </div>
-    {#if rType === 'oidc'}
-      <div class="field">
-        <label for="r-prov">Identity provider</label>
-        <select id="r-prov" bind:value={rProvider}>
-          {#each providers as p}
-            <option value={p.url}>{p.url}</option>
-          {/each}
-        </select>
-      </div>
-      <div class="field">
-        <label for="r-aud">Audiences (comma-separated)</label>
-        <input id="r-aud" class="mono" bind:value={rAudiences} />
-      </div>
-      <div class="field">
-        <label for="r-sub">Subjects (comma-separated, trailing * allowed)</label>
-        <input
-          id="r-sub"
-          class="mono"
-          placeholder="system:serviceaccount:app:secrets"
-          bind:value={rSubjects}
-        />
-      </div>
-    {:else}
-      <div class="field">
-        <label for="r-prin">Principal account IDs (comma-separated)</label>
-        <input id="r-prin" class="mono" placeholder="123456789012" bind:value={rPrincipals} />
-      </div>
+<PageHeader
+  title="Identity federation"
+  description="OIDC identity providers and roles for Citadel STS. Workloads trade a token they already have for short-lived credentials, so they need no static access keys."
+>
+  {#snippet actions()}
+    {#if canEdit}
+      <button type="button" class="btn btn-secondary" onclick={addProvider}><Icon name="plus" size={16} />Add provider</button>
+      <button type="button" class="btn btn-primary" onclick={createRole}><Icon name="plus" size={16} />Create role</button>
     {/if}
-    <div class="field">
-      <label for="r-max">Max session (seconds)</label>
-      <input id="r-max" class="mono" type="number" min="900" max="43200" bind:value={rMaxSession} />
-    </div>
-    <div class="modal-actions">
-      <button class="btn" onclick={() => (roleOpen = false)}>Cancel</button>
-      <button class="btn btn-p" onclick={addRole}>Create role</button>
-    </div>
+  {/snippet}
+</PageHeader>
+
+<div class="tabs-row">
+  <Tabs
+    label="Identity federation sections"
+    tabs={[
+      { id: 'roles', label: 'Roles', count: loading ? undefined : roles.length },
+      { id: 'providers', label: 'Identity providers', count: loading ? undefined : providers.length }
+    ]}
+    bind:active={tabValue}
+    onchange={(t) => setParams({ tab: t === 'roles' ? null : t, q: null })}
+  />
+</div>
+
+{#if loadError}
+  <div class="callout callout-danger err" role="alert">
+    <Icon name="alert-circle" size={16} /><span>{loadError}</span>
+    <button type="button" class="btn btn-ghost btn-sm push" onclick={load}>Retry</button>
   </div>
 {/if}
+
+{#if tab === 'providers'}
+  <DataTable
+    caption="Identity providers"
+    rows={providers}
+    columns={provCols}
+    key={(p) => p.providerArn}
+    {loading}
+    searchable={(p) => `${p.url} ${p.clientIds.join(' ')}`}
+    searchPlaceholder="Search issuers and audiences"
+    bind:query
+  >
+    {#snippet row(p)}
+      {@const n = rolesUsing(p).length}
+      <td><span class="mono strong">{p.url}</span><span class="mono subtle sub">{p.providerArn}</span></td>
+      <td><span class="chips">{#each p.clientIds as c (c)}<span class="badge mono">{c}</span>{/each}</span></td>
+      <td class="hide-sm">
+        {#if n}
+          <button type="button" class="row-link" onclick={() => setParams({ tab: null, q: p.url })}>{n} role{n > 1 ? 's' : ''}</button>
+        {:else}<span class="subtle">None</span>{/if}
+      </td>
+      <td class="subtle hide-sm">{fmtDate(p.createdAt)}</td>
+      <td class="end">
+        {#if canEdit}
+          <span class="cell-actions">
+            <button type="button" class="btn-icon" aria-label="Edit {p.url}" title="Edit" onclick={() => editProvider(p)}><Icon name="edit" size={14} /></button>
+            <button type="button" class="btn-icon danger" aria-label="Delete {p.url}" title="Delete" onclick={() => deleteProvider(p)}><Icon name="trash" size={14} /></button>
+          </span>
+        {/if}
+      </td>
+    {/snippet}
+    {#snippet empty()}
+      <EmptyState icon="shield" title="No identity providers" description="Register the OIDC issuer of a Kubernetes cluster, CI system or IdP, then create roles that trust it.">
+        {#if canEdit}<button type="button" class="btn btn-primary btn-sm" onclick={addProvider}><Icon name="plus" size={14} />Add provider</button>{/if}
+      </EmptyState>
+    {/snippet}
+  </DataTable>
+{:else}
+  <DataTable
+    caption="Roles"
+    rows={roles}
+    columns={roleCols}
+    key={(r) => r.roleName}
+    {loading}
+    searchable={(r) => `${r.roleName} ${r.description} ${r.trust.providerUrl ?? ''} ${(r.trust.subjects ?? []).join(' ')} ${(r.trust.principals ?? []).join(' ')}`}
+    searchPlaceholder="Search roles, issuers, subjects"
+    bind:query
+  >
+    {#snippet row(r)}
+      <td>
+        <button type="button" class="row-link mono" onclick={() => setParams({ role: r.roleName }, { push: true })}>{r.roleName}</button>
+        {#if r.description}<span class="muted sub">{r.description}</span>{/if}
+      </td>
+      <td>
+        {#if r.trust.type === 'oidc'}
+          <Badge tone="info" dot={false}>OIDC</Badge> <span class="mono small">{r.trust.providerUrl?.replace(/^https:\/\//, '')}</span>
+        {:else}
+          <Badge dot={false}>Accounts</Badge>
+        {/if}
+      </td>
+      <td class="hide-sm">
+        <span class="chips">
+          {#each (r.trust.type === 'oidc' ? r.trust.subjects : r.trust.principals)?.slice(0, 2) ?? [] as s (s)}<span class="badge mono">{s}</span>{/each}
+          {#if ((r.trust.type === 'oidc' ? r.trust.subjects : r.trust.principals)?.length ?? 0) > 2}
+            <span class="subtle small">+{((r.trust.type === 'oidc' ? r.trust.subjects : r.trust.principals)?.length ?? 0) - 2}</span>
+          {/if}
+        </span>
+      </td>
+      <td class="num hide-sm">{sessionLabel(r.maxSessionSeconds)}</td>
+      <td class="subtle hide-sm">{fmtDate(r.updatedAt)}</td>
+      <td class="end">
+        {#if canEdit}
+          <span class="cell-actions">
+            <button type="button" class="btn-icon" aria-label="Edit {r.roleName}" title="Edit" onclick={() => editRole(r)}><Icon name="edit" size={14} /></button>
+            <button type="button" class="btn-icon danger" aria-label="Delete {r.roleName}" title="Delete" onclick={() => deleteRole(r)}><Icon name="trash" size={14} /></button>
+          </span>
+        {/if}
+      </td>
+    {/snippet}
+    {#snippet empty()}
+      <EmptyState icon="users" title="No roles yet" description="A role says which tokens may be exchanged for credentials, and for how long.">
+        {#if canEdit}<button type="button" class="btn btn-primary btn-sm" onclick={createRole}><Icon name="plus" size={14} />Create role</button>{/if}
+      </EmptyState>
+    {/snippet}
+  </DataTable>
+{/if}
+
+<RoleDrawer
+  bind:open={drawerOpen}
+  role={selected}
+  {canEdit}
+  onclose={() => setParams({ role: null })}
+  onedit={editRole}
+  ondelete={deleteRole}
+/>
+<RoleEditor bind:open={editorOpen} role={editing} {providers} onsaved={(name) => load().then(() => setParams({ role: name, tab: null }))} />
+<ProviderModal bind:open={providerOpen} provider={editingProvider} onsaved={load} />
 
 <style>
-  .card-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.75rem;
+  .tabs-row {
+    margin: calc(-1 * var(--space-2)) 0 var(--space-5);
   }
-  .field :global(input),
-  .field :global(select) {
-    width: 100%;
-    min-width: 0;
+  .err {
+    margin-bottom: var(--space-4);
+    align-items: center;
+  }
+  .push {
+    margin-left: auto;
+  }
+  .strong {
+    font-weight: 500;
+  }
+  .sub {
+    display: block;
+    font-size: 11.5px;
+    max-width: 48ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+  }
+  .chips .badge {
+    font-size: 11.5px;
+  }
+  .danger:hover:not(:disabled) {
+    color: var(--danger);
+    background: var(--danger-soft);
+  }
+  @media (max-width: 720px) {
+    .hide-sm {
+      display: none;
+    }
   }
 </style>

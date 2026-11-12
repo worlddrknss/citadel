@@ -1,0 +1,51 @@
+name: Bug report
+description: Something in Citadel doesn't work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Security issues don't belong here**: report them privately as described in SECURITY.md.
+        Don't paste secrets, access keys, tokens or real hostnames.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start Citadel with ...
+        2. Call ... / click ...
+        3. See error ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Image tag or commit SHA.
+    validations:
+      required: true
+  - type: dropdown
+    id: storage
+    attributes:
+      label: Storage backend
+      options: [PostgreSQL, In-memory]
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Web console, Native API (/v1), KMS API, Secrets Manager API, SSM API, ACM / Private CA, STS, ACME, Workload identity, Deployment / image, Other]
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Redact anything sensitive.
+      render: text
