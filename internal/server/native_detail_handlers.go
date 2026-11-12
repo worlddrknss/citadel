@@ -358,7 +358,7 @@ func (s *Server) handleV1CertificateDetail(w http.ResponseWriter, r *http.Reques
 			Serial:           cert.Serial,
 			NotBefore:        fmtTime(cert.NotBefore),
 			NotAfter:         fmtTime(cert.NotAfter),
-			Template:         cert.Template,
+			Template:         consoleTemplate(cert.Template),
 			RevocationReason: cert.RevocationReason,
 		}
 		if cert.RevokedAt != nil {

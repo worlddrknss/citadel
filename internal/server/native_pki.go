@@ -180,7 +180,7 @@ func (s *Server) handleV1ListCertificates(w http.ResponseWriter, r *http.Request
 			row := nativeCertificate{
 				Source: "pca-cert", ID: c.CertID, Subject: cn, CommonName: cn, Serial: c.Serial, KeyAlgorithm: alg,
 				Status: displayStatus(c.Status, c.NotAfter, now), NotBefore: fmtTime(c.NotBefore), NotAfter: fmtTime(c.NotAfter),
-				IssuerCAID: ca.CAID, Template: c.Template, ExpiringSoon: expiringSoon(c.Status, c.NotAfter, now),
+				IssuerCAID: ca.CAID, Template: consoleTemplate(c.Template), ExpiringSoon: expiringSoon(c.Status, c.NotAfter, now),
 			}
 			if row.Subject == "" {
 				row.Subject = c.Serial
@@ -901,6 +901,7 @@ func (s *Server) handleV1RequestLECert(w http.ResponseWriter, r *http.Request) {
 	if !s.decodePKIBody(w, r, &req) {
 		return
 	}
+	var issued store.ACMELECertificate
 	err := func() error {
 		domains := normalizeDomains([]string{req.Domains})
 		if len(domains) == 0 {
@@ -909,15 +910,16 @@ func (s *Server) handleV1RequestLECert(w http.ResponseWriter, r *http.Request) {
 		if s.storeDB() == nil {
 			return &pkiError{status: http.StatusNotImplemented, code: "unsupported", msg: "Let's Encrypt issuance requires a database-backed store"}
 		}
-		_, err := s.issueLetsEncryptCertificate(ctx, domains)
+		cert, err := s.issueLetsEncryptCertificate(ctx, domains)
+		issued = cert
 		return err
 	}()
 	if err != nil {
 		s.writePKIError(w, r, ctx, action, req.Domains, leFailure("Let's Encrypt request", err))
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: action, KeyID: req.Domains, Result: "ok", AuditOrigin: s.auditOrigin(r)})
-	writeNativeJSON(w, http.StatusOK, map[string]any{"requested": true})
+	s.recordAudit(ctx, store.AuditEvent{Action: action, KeyID: issued.CertID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
+	writeNativeJSON(w, http.StatusOK, map[string]any{"requested": true, "issued": true, "certId": issued.CertID, "domains": issued.Domains})
 }
 
 // handleV1BeginLEDNSOrder starts a manual DNS-01 Let's Encrypt order and

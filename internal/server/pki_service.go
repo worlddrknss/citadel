@@ -516,6 +516,15 @@ func awsTemplateName(t string) string {
 	return "EndEntityServerAuthCertificate/V1"
 }
 
+// consoleTemplate is the template name the console shows for a stored AWS
+// template name: server, client, or "" when none was recorded.
+func consoleTemplate(name string) string {
+	if name == "" {
+		return ""
+	}
+	return templateFromAWSName(name)
+}
+
 func templateFromAWSName(name string) string {
 	if strings.Contains(name, "ClientAuth") {
 		return templateClient
