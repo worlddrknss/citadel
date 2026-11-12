@@ -82,7 +82,9 @@ func parseJWS(body []byte) (*parsedJWS, *Problem) {
 	if dec.More() {
 		return nil, malformed("trailing data after JWS")
 	}
-	if f.Protected == "" || f.Signature == "" || f.Payload == nil {
+	// An empty signature is syntactically allowed here so that alg "none"
+	// is reported as badSignatureAlgorithm; verification rejects it later.
+	if f.Protected == "" || f.Payload == nil {
 		return nil, malformed("JWS must have protected, payload and signature members")
 	}
 	rawHeader, err := b64.DecodeString(f.Protected)
