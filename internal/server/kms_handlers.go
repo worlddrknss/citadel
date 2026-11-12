@@ -228,6 +228,9 @@ func (s *Server) handleKMS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	target := r.Header.Get("X-Amz-Target")
+	if s.servePKITarget(w, r, target) {
+		return
+	}
 	switch target {
 	case "TrentService.Encrypt":
 		s.handleEncrypt(w, r)
@@ -271,28 +274,6 @@ func (s *Server) handleKMS(w http.ResponseWriter, r *http.Request) {
 		s.handleVerify(w, r)
 	case "TrentService.GetPublicKey":
 		s.handleGetPublicKey(w, r)
-	case "acm-pca.CreateCertificateAuthority":
-		s.handleCreateCertificateAuthority(w, r)
-	case "acm-pca.DescribeCertificateAuthority":
-		s.handleDescribeCertificateAuthority(w, r)
-	case "acm-pca.IssueCertificate":
-		s.handleIssueCertificate(w, r)
-	case "acm-pca.GetCertificate":
-		s.handleGetCertificate(w, r)
-	case "acm-pca.RevokeCertificate":
-		s.handleRevokeCertificate(w, r)
-	case "acm-pca.GetCRL":
-		s.handleGetCRL(w, r)
-	case "acm.RequestCertificate":
-		s.handleACMRequestCertificate(w, r)
-	case "acm.DescribeCertificate":
-		s.handleACMDescribeCertificate(w, r)
-	case "acm.ListCertificates":
-		s.handleACMListCertificates(w, r)
-	case "acm.GetCertificate":
-		s.handleACMGetCertificate(w, r)
-	case "acm.DeleteCertificate":
-		s.handleACMDeleteCertificate(w, r)
 	case "secretsmanager.CreateSecret":
 		s.handleCreateSecret(w, r)
 	case "secretsmanager.DescribeSecret":

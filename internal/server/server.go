@@ -38,6 +38,8 @@ type Server struct {
 	// allows trusting a private or test ACME CA (e.g. Pebble). When nil the
 	// default HTTP client (public trust store) is used.
 	acmeHTTPClient *http.Client
+	// pki holds the ACME server and its state, built on first use.
+	pki pkiRuntime
 	// webFS is the built web console served under /app/; nil when absent.
 	webFS fs.FS
 
@@ -249,20 +251,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/app/", http.HandlerFunc(s.handleApp))
 	mux.Handle("/app", http.RedirectHandler("/app/", http.StatusMovedPermanently))
 
-	// ACME endpoints (RFC 8555)
-	mux.HandleFunc("GET /acme/directory", s.handleACMEDirectory)
-	mux.HandleFunc("GET /acme/new-nonce", s.handleACMENewNonce)
-	mux.HandleFunc("POST /acme/new-nonce", s.handleACMENewNonce)
-	mux.HandleFunc("POST /acme/new-account", s.handleACMENewAccount)
-	mux.HandleFunc("POST /acme/new-order", s.handleACMENewOrder)
-	mux.HandleFunc("GET /acme/order/{order_id}", s.handleACMEOrder)
-	mux.HandleFunc("POST /acme/order/{order_id}", s.handleACMEOrder)
-	mux.HandleFunc("POST /acme/order/{order_id}/finalize", s.handleACMEFinalize)
-	mux.HandleFunc("GET /acme/authz/{authz_id}", s.handleACMEAuthorization)
-	mux.HandleFunc("POST /acme/authz/{authz_id}", s.handleACMEAuthorization)
-	mux.HandleFunc("POST /acme/challenge/{challenge_id}", s.handleACMEChallenge)
-	mux.HandleFunc("GET /acme/cert/{cert_id}", s.handleACMECertificate)
-	mux.HandleFunc("POST /acme/revoke-cert", s.handleACMERevokeCert)
+	// PKI: ACME server (RFC 8555), ACME settings and EAB keys, generated-key issuance.
+	s.registerPKIRoutes(mux)
 
 	// Public HTTP-01 validation endpoint for the Let's Encrypt ACME *client*.
 	// Must be reachable unauthenticated so the ACME CA can verify domain control.
