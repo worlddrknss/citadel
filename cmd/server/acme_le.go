@@ -141,7 +141,7 @@ func (s *server) acmeLEContactEmail(ctx context.Context) string {
 // storeDB exposes the underlying *sql.DB when the store is database-backed.
 func (s *server) storeDB() *sql.DB {
 	if db, ok := s.store.(*dbStore); ok {
-		return db.db
+		return db.DB()
 	}
 	return nil
 }

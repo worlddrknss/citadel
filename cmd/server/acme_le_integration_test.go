@@ -101,7 +101,7 @@ func TestLetsEncryptIssue93rdAvenue(t *testing.T) {
 	if err := ensureSchema(ctx, db); err != nil {
 		t.Fatalf("ensureSchema: %v", err)
 	}
-	store := &dbStore{db: db, wrappingKey: bytes.Repeat([]byte{0x42}, 32)}
+	store := newDBStore(db, pgOptions{WrappingKey: bytes.Repeat([]byte{0x42}, 32)})
 	if err := putSetting(ctx, db, settingACMELEDirectoryURL, itestPebbleDir); err != nil {
 		t.Fatalf("putSetting directory: %v", err)
 	}

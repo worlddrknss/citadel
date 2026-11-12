@@ -151,9 +151,15 @@ func ensureManagedDefaultKeys(ctx context.Context, store store.Store) error {
 	if !ok {
 		return nil
 	}
+	return db.EnsureManagedDefaultKeys(ctx)
+}
 
+// EnsureManagedDefaultKeys provisions the immutable per-account default key
+// for every account in ui_accounts plus the deployment account. It is
+// idempotent.
+func (s *dbStore) EnsureManagedDefaultKeys(ctx context.Context) error {
 	ids := map[string]struct{}{}
-	rows, err := db.db.QueryContext(ctx, `SELECT account_id FROM ui_accounts`)
+	rows, err := s.db.QueryContext(ctx, `SELECT account_id FROM ui_accounts`)
 	if err != nil {
 		return err
 	}
@@ -175,13 +181,13 @@ func ensureManagedDefaultKeys(ctx context.Context, store store.Store) error {
 
 	// Always include the deployment/root account so single-tenant deployments
 	// get a managed default even before any ui_accounts rows exist.
-	if _, dep := db.DeploymentIdentity(); arn.IsValidAccountID(dep) && dep != arn.PlaceholderAccountID {
+	if _, dep := s.DeploymentIdentity(); arn.IsValidAccountID(dep) && dep != arn.PlaceholderAccountID {
 		ids[dep] = struct{}{}
 	}
 
 	var firstErr error
 	for id := range ids {
-		if _, e := db.EnsureAccountDefaultKey(ctx, id); e != nil {
+		if _, e := s.EnsureAccountDefaultKey(ctx, id); e != nil {
 			log.Printf("warning: ensure default key for account %s: %v", id, e)
 			if firstErr == nil {
 				firstErr = e

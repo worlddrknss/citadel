@@ -8,7 +8,7 @@ import (
 func TestWrapUnwrapKeyMaterialRoundTrip(t *testing.T) {
 	key := make([]byte, 32)
 	rand.Read(key)
-	s := &dbStore{wrappingKey: key}
+	s := newDBStore(nil, pgOptions{WrappingKey: key})
 	wrapped, nonce, err := s.wrapKeyMaterial("key-1", []byte("material"))
 	if err != nil {
 		t.Fatal(err)

@@ -60,6 +60,7 @@ func (s *server) secretsSvc() *secretsService {
 	return s.secretsSvcV
 }
 
+// dbStore is the PostgreSQL store backend.
 type dbStore struct {
 	db                *sql.DB
 	wrappingKey       []byte
@@ -68,6 +69,52 @@ type dbStore struct {
 	region            string
 	accountID         string
 }
+
+// pgOptions configures a dbStore.
+type pgOptions struct {
+	// WrappingKey wraps per-key material at rest (32 bytes).
+	WrappingKey []byte
+	// LegacyWrappingKey unwraps material wrapped before the HKDF upgrade.
+	LegacyWrappingKey []byte
+	// AuditHMACKey, when set, makes the audit chain an HMAC chain.
+	AuditHMACKey []byte
+	// Region and AccountID are the configured deployment identity, used only
+	// when the database has not recorded one yet.
+	Region    string
+	AccountID string
+}
+
+// newDBStore wraps an already-migrated database. It runs no migrations and
+// does not resolve the deployment identity; use openDBStore for that.
+func newDBStore(db *sql.DB, opts pgOptions) *dbStore {
+	return &dbStore{db: db, wrappingKey: opts.WrappingKey, legacyWrappingKey: opts.LegacyWrappingKey, auditHMACKey: opts.AuditHMACKey}
+}
+
+// openDBStore brings the schema up to date, resolves the persisted deployment
+// identity (region and account ID) and runs the data migrations, returning a
+// ready store.
+func openDBStore(ctx context.Context, db *sql.DB, opts pgOptions) (*dbStore, error) {
+	if err := ensureSchema(ctx, db); err != nil {
+		return nil, err
+	}
+	store := newDBStore(db, opts)
+	region, accountID, err := resolveDeploymentIdentity(ctx, db, opts.Region, opts.AccountID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve deployment identity: %w", err)
+	}
+	store.region = region
+	store.accountID = accountID
+	if err := store.migrateLegacyKeyMaterial(ctx); err != nil {
+		return nil, fmt.Errorf("migrate legacy key material: %w", err)
+	}
+	if err := store.migrateResourceARNs(ctx); err != nil {
+		return nil, fmt.Errorf("migrate resource ARNs: %w", err)
+	}
+	return store, nil
+}
+
+// DB returns the underlying database handle.
+func (s *dbStore) DB() *sql.DB { return s.db }
 
 type awsError struct {
 	Type    string `json:"__type"`
@@ -694,25 +741,16 @@ func buildStore(cfg config.Config) (store.Store, func(), error) {
 		cleanup()
 		return nil, nil, fmt.Errorf("ping postgres: %w", err)
 	}
-	if err := ensureSchema(context.Background(), db); err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	store := &dbStore{db: db, wrappingKey: cfg.WrappingKey, legacyWrappingKey: cfg.LegacyWrappingKey, auditHMACKey: cfg.AuditHMACKey}
-	region, accountID, err := resolveDeploymentIdentity(context.Background(), db, cfg)
+	store, err := openDBStore(context.Background(), db, pgOptions{
+		WrappingKey:       cfg.WrappingKey,
+		LegacyWrappingKey: cfg.LegacyWrappingKey,
+		AuditHMACKey:      cfg.AuditHMACKey,
+		Region:            cfg.AWSRegion,
+		AccountID:         cfg.AWSAccountID,
+	})
 	if err != nil {
 		cleanup()
-		return nil, nil, fmt.Errorf("resolve deployment identity: %w", err)
-	}
-	store.region = region
-	store.accountID = accountID
-	if err := store.migrateLegacyKeyMaterial(context.Background()); err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("migrate legacy key material: %w", err)
-	}
-	if err := store.migrateResourceARNs(context.Background()); err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("migrate resource ARNs: %w", err)
+		return nil, nil, err
 	}
 	return store, cleanup, nil
 }
