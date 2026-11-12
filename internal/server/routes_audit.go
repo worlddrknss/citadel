@@ -248,13 +248,13 @@ func (s *Server) handleV1AuditVerify(w http.ResponseWriter, r *http.Request) {
 	account := s.auditAccount(ctx)
 	v, err := s.store.VerifyAuditChain(ctx, account, full)
 	if err != nil {
-		log.Printf("audit verification failed request_id=%s: %v", requestIDFromContext(ctx), err)
+		log.Printf("audit verification failed: %v", err)
 		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.VerifyAuditChain", Result: "error", ErrorType: "InternalFailure", AuditOrigin: s.auditOrigin(r)})
 		writeNativeError(w, http.StatusInternalServerError, "verify_failed", "failed to verify the audit chain")
 		return
 	}
 	if v.Status == store.AuditChainBroken {
-		log.Printf("AUDIT CHAIN BROKEN request_id=%s event=%d seq=%d", requestIDFromContext(ctx), v.BrokenID, v.BrokenSeq)
+		log.Printf("AUDIT CHAIN BROKEN event=%d seq=%d", v.BrokenID, v.BrokenSeq)
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.VerifyAuditChain", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, toChainStatusJSON(v))

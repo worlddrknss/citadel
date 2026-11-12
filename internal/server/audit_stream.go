@@ -500,7 +500,7 @@ func (s *Server) handleV1TestAuditStream(w http.ResponseWriter, r *http.Request)
 	delivered := err == nil
 	result, errType := "ok", ""
 	if !delivered {
-		log.Printf("audit stream test failed request_id=%s: %v", requestIDFromContext(ctx), err)
+		log.Printf("audit stream test failed: %v", err)
 		result, errType = "error", "DeliveryFailed"
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: action, Result: result, ErrorType: errType, AuditOrigin: origin})
