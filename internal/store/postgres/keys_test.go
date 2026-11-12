@@ -1,4 +1,4 @@
-package main
+package postgres
 
 import (
 	"crypto/rand"
@@ -8,7 +8,7 @@ import (
 func TestWrapUnwrapKeyMaterialRoundTrip(t *testing.T) {
 	key := make([]byte, 32)
 	rand.Read(key)
-	s := newDBStore(nil, pgOptions{WrappingKey: key})
+	s := New(nil, Options{WrappingKey: key})
 	wrapped, nonce, err := s.wrapKeyMaterial("key-1", []byte("material"))
 	if err != nil {
 		t.Fatal(err)

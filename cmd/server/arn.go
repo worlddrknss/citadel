@@ -2,21 +2,6 @@ package main
 
 import "github.com/worlddrknss/citadel/internal/arn"
 
-// DeploymentIdentity returns the region and account ID embedded in resource ARNs.
-func (s *dbStore) DeploymentIdentity() (string, string) {
-	return arn.EffectiveRegion(s.region), arn.EffectiveAccountID(s.accountID)
-}
-
-func (s *dbStore) keyARN(id string) string {
-	r, a := s.DeploymentIdentity()
-	return arn.Build("kms", r, a, "key/"+id)
-}
-
-func (s *dbStore) secretARNFor(name string) string {
-	r, a := s.DeploymentIdentity()
-	return arn.Build("secretsmanager", r, a, "secret:"+name)
-}
-
 // serverARN builds an ARN for the given service and resource using the active
 // store's deployment identity.
 func (s *server) serverARN(service, resource string) string {

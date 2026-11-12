@@ -18,6 +18,7 @@ import (
 
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
 	"github.com/worlddrknss/citadel/internal/store"
+	"github.com/worlddrknss/citadel/internal/store/postgres"
 	"golang.org/x/crypto/acme"
 )
 
@@ -121,7 +122,7 @@ func (s *server) acmeLEDirectoryURL(ctx context.Context) string {
 	if db == nil {
 		return leStagingDirectoryURL
 	}
-	v, err := getSetting(ctx, db, settingACMELEDirectoryURL)
+	v, err := postgres.GetSetting(ctx, db, settingACMELEDirectoryURL)
 	if err != nil || strings.TrimSpace(v) == "" {
 		return leStagingDirectoryURL
 	}
@@ -134,13 +135,13 @@ func (s *server) acmeLEContactEmail(ctx context.Context) string {
 	if db == nil {
 		return ""
 	}
-	v, _ := getSetting(ctx, db, settingACMELEContactEmail)
+	v, _ := postgres.GetSetting(ctx, db, settingACMELEContactEmail)
 	return strings.TrimSpace(v)
 }
 
 // storeDB exposes the underlying *sql.DB when the store is database-backed.
 func (s *server) storeDB() *sql.DB {
-	if db, ok := s.store.(*dbStore); ok {
+	if db, ok := s.store.(*postgres.Store); ok {
 		return db.DB()
 	}
 	return nil

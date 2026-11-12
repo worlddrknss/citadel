@@ -1,4 +1,4 @@
-package main
+package postgres
 
 import (
 	"context"
@@ -7,17 +7,8 @@ import (
 	"github.com/worlddrknss/citadel/internal/store"
 )
 
-// This file implements the hierarchyStore interface (see secrets_service.go) on
-// both backends. Hierarchy STRUCTURE — projects, environments, and empty
-// folders — is stored independently of secret VALUES so the native UI can model
-// containers that do not yet hold any item. Item values continue to live in the
-// AWS-compatible secrets store, keeping External Secrets Operator and the AWS
-// SDK working unchanged.
-
-// ---- dbStore (Postgres) implementation ----
-
 // ListHierarchy returns structure-only projects/environments for the caller.
-func (s *dbStore) ListHierarchy(ctx context.Context) ([]store.HierarchyProject, error) {
+func (s *Store) ListHierarchy(ctx context.Context) ([]store.HierarchyProject, error) {
 	account := s.accountForContext(ctx)
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT slug, name FROM sm_projects WHERE account_id=$1 ORDER BY slug`, account)
@@ -69,7 +60,7 @@ func (s *dbStore) ListHierarchy(ctx context.Context) ([]store.HierarchyProject, 
 }
 
 // ListFolders returns immediate registered subfolders under the given path.
-func (s *dbStore) ListFolders(ctx context.Context, project, env string, folder []string) ([]string, error) {
+func (s *Store) ListFolders(ctx context.Context, project, env string, folder []string) ([]string, error) {
 	account := s.accountForContext(ctx)
 	prefix := store.FolderPath(folder)
 	rows, err := s.db.QueryContext(ctx,
@@ -101,7 +92,7 @@ func (s *dbStore) ListFolders(ctx context.Context, project, env string, folder [
 }
 
 // CreateProject registers a structure-only project for the caller's account.
-func (s *dbStore) CreateProject(ctx context.Context, slug, name string) error {
+func (s *Store) CreateProject(ctx context.Context, slug, name string) error {
 	account := s.accountForContext(ctx)
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO sm_projects (account_id, slug, name) VALUES ($1,$2,$3)
@@ -111,7 +102,7 @@ func (s *dbStore) CreateProject(ctx context.Context, slug, name string) error {
 }
 
 // CreateEnvironment registers a structure-only environment under a project.
-func (s *dbStore) CreateEnvironment(ctx context.Context, project, slug, name string) error {
+func (s *Store) CreateEnvironment(ctx context.Context, project, slug, name string) error {
 	account := s.accountForContext(ctx)
 	if err := s.CreateProject(ctx, project, ""); err != nil {
 		return err
@@ -124,7 +115,7 @@ func (s *dbStore) CreateEnvironment(ctx context.Context, project, slug, name str
 }
 
 // CreateFolder registers a structure-only folder (and all of its parents).
-func (s *dbStore) CreateFolder(ctx context.Context, project, env string, folder []string) error {
+func (s *Store) CreateFolder(ctx context.Context, project, env string, folder []string) error {
 	account := s.accountForContext(ctx)
 	if err := s.CreateEnvironment(ctx, project, env, ""); err != nil {
 		return err
@@ -141,7 +132,7 @@ func (s *dbStore) CreateFolder(ctx context.Context, project, env string, folder 
 }
 
 // RenameProject updates a project's display name.
-func (s *dbStore) RenameProject(ctx context.Context, slug, newName string) error {
+func (s *Store) RenameProject(ctx context.Context, slug, newName string) error {
 	account := s.accountForContext(ctx)
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE sm_projects SET name=$3 WHERE account_id=$1 AND slug=$2`,
@@ -150,7 +141,7 @@ func (s *dbStore) RenameProject(ctx context.Context, slug, newName string) error
 }
 
 // RenameEnvironment updates an environment's display name.
-func (s *dbStore) RenameEnvironment(ctx context.Context, project, slug, newName string) error {
+func (s *Store) RenameEnvironment(ctx context.Context, project, slug, newName string) error {
 	account := s.accountForContext(ctx)
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE sm_environments SET name=$4 WHERE account_id=$1 AND project_slug=$2 AND slug=$3`,
@@ -159,7 +150,7 @@ func (s *dbStore) RenameEnvironment(ctx context.Context, project, slug, newName 
 }
 
 // DeleteProject removes a structure-only project and its environments/folders.
-func (s *dbStore) DeleteProject(ctx context.Context, slug string) error {
+func (s *Store) DeleteProject(ctx context.Context, slug string) error {
 	account := s.accountForContext(ctx)
 	if _, err := s.db.ExecContext(ctx,
 		`DELETE FROM sm_folders WHERE account_id=$1 AND project_slug=$2`, account, slug); err != nil {
@@ -175,7 +166,7 @@ func (s *dbStore) DeleteProject(ctx context.Context, slug string) error {
 }
 
 // DeleteEnvironment removes a structure-only environment and its folders.
-func (s *dbStore) DeleteEnvironment(ctx context.Context, project, slug string) error {
+func (s *Store) DeleteEnvironment(ctx context.Context, project, slug string) error {
 	account := s.accountForContext(ctx)
 	if _, err := s.db.ExecContext(ctx,
 		`DELETE FROM sm_folders WHERE account_id=$1 AND project_slug=$2 AND env_slug=$3`,
@@ -189,7 +180,7 @@ func (s *dbStore) DeleteEnvironment(ctx context.Context, project, slug string) e
 }
 
 // DeleteFolder removes a structure-only folder and any nested folders.
-func (s *dbStore) DeleteFolder(ctx context.Context, project, env string, folder []string) error {
+func (s *Store) DeleteFolder(ctx context.Context, project, env string, folder []string) error {
 	account := s.accountForContext(ctx)
 	prefix := store.FolderPath(folder)
 	_, err := s.db.ExecContext(ctx,

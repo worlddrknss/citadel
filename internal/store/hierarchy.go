@@ -1,5 +1,11 @@
 package store
 
+// Hierarchy STRUCTURE (projects, environments, and empty folders) is stored
+// independently of secret VALUES so the native UI can model containers that do
+// not yet hold any item. Item values continue to live in the AWS-compatible
+// secrets store, keeping External Secrets Operator and the AWS SDK working
+// unchanged.
+
 import (
 	"context"
 	"strings"

@@ -1,4 +1,4 @@
-package main
+package postgres
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 )
 
 // CreateCertificateAuthority inserts a new CA record into the database
-func (s *dbStore) CreateCertificateAuthority(ctx context.Context, ca store.PCACertificateAuthority) error {
+func (s *Store) CreateCertificateAuthority(ctx context.Context, ca store.PCACertificateAuthority) error {
 	query := `
 		INSERT INTO pca_certificate_authorities (
 			ca_id, urn, type, kms_key_id, subject_dn, state, ca_cert_b64,
@@ -30,7 +30,7 @@ func (s *dbStore) CreateCertificateAuthority(ctx context.Context, ca store.PCACe
 }
 
 // DescribeCertificateAuthority retrieves a CA by its ARN
-func (s *dbStore) DescribeCertificateAuthority(ctx context.Context, arn string) (store.PCACertificateAuthority, error) {
+func (s *Store) DescribeCertificateAuthority(ctx context.Context, arn string) (store.PCACertificateAuthority, error) {
 	query := `
 		SELECT ca_id, urn, type, kms_key_id, subject_dn, state, ca_cert_b64,
 		       path_length, not_before, not_after, description, account, created_at, updated_at
@@ -58,7 +58,7 @@ func (s *dbStore) DescribeCertificateAuthority(ctx context.Context, arn string) 
 }
 
 // ListCertificateAuthorities returns all CAs for the current account
-func (s *dbStore) ListCertificateAuthorities(ctx context.Context) ([]store.PCACertificateAuthority, error) {
+func (s *Store) ListCertificateAuthorities(ctx context.Context) ([]store.PCACertificateAuthority, error) {
 	query := `
 		SELECT ca_id, urn, type, kms_key_id, subject_dn, state, ca_cert_b64,
 		       path_length, not_before, not_after, description, account, created_at, updated_at
@@ -92,7 +92,7 @@ func (s *dbStore) ListCertificateAuthorities(ctx context.Context) ([]store.PCACe
 }
 
 // CreateCertificate inserts a new certificate record into the database
-func (s *dbStore) CreateCertificate(ctx context.Context, cert store.PCACertificate) error {
+func (s *Store) CreateCertificate(ctx context.Context, cert store.PCACertificate) error {
 	query := `
 		INSERT INTO pca_certificates (
 			cert_id, ca_id, serial, csr_b64, cert_b64, status,
@@ -113,7 +113,7 @@ func (s *dbStore) CreateCertificate(ctx context.Context, cert store.PCACertifica
 }
 
 // GetCertificate retrieves a certificate by its ID
-func (s *dbStore) GetCertificate(ctx context.Context, certID string) (store.PCACertificate, error) {
+func (s *Store) GetCertificate(ctx context.Context, certID string) (store.PCACertificate, error) {
 	query := `
 		SELECT cert_id, ca_id, serial, csr_b64, cert_b64, status,
 		       not_before, not_after, revoked_at, revocation_reason, template, created_at, updated_at
@@ -144,7 +144,7 @@ func (s *dbStore) GetCertificate(ctx context.Context, certID string) (store.PCAC
 }
 
 // ListCertificates returns all certificates issued by a CA
-func (s *dbStore) ListCertificates(ctx context.Context, caID string) ([]store.PCACertificate, error) {
+func (s *Store) ListCertificates(ctx context.Context, caID string) ([]store.PCACertificate, error) {
 	query := `
 		SELECT cert_id, ca_id, serial, csr_b64, cert_b64, status,
 		       not_before, not_after, revoked_at, revocation_reason, template, created_at, updated_at
@@ -182,7 +182,7 @@ func (s *dbStore) ListCertificates(ctx context.Context, caID string) ([]store.PC
 }
 
 // RevokeCertificate marks a certificate as revoked
-func (s *dbStore) RevokeCertificate(ctx context.Context, certID, reason string) error {
+func (s *Store) RevokeCertificate(ctx context.Context, certID, reason string) error {
 	query := `
 		UPDATE pca_certificates
 		SET status = 'REVOKED', revoked_at = NOW(), revocation_reason = $1, updated_at = NOW()

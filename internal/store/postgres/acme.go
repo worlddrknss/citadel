@@ -1,4 +1,4 @@
-package main
+package postgres
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 )
 
 // CreateACMELEOrder persists a pending manual DNS-01 order scoped to the caller.
-func (s *dbStore) CreateACMELEOrder(ctx context.Context, order store.ACMELEOrder) error {
+func (s *Store) CreateACMELEOrder(ctx context.Context, order store.ACMELEOrder) error {
 	if order.OrderID == "" {
 		order.OrderID = cryptoutil.RandomHex(12)
 	}
@@ -32,7 +32,7 @@ INSERT INTO acme_le_orders (
 }
 
 // GetACMELEOrder loads a pending order owned by the caller's account.
-func (s *dbStore) GetACMELEOrder(ctx context.Context, orderID string) (store.ACMELEOrder, error) {
+func (s *Store) GetACMELEOrder(ctx context.Context, orderID string) (store.ACMELEOrder, error) {
 	const q = `
 SELECT order_id, order_url, directory_url, domains, status, created_at, expires_at
 FROM acme_le_orders
@@ -52,7 +52,7 @@ WHERE order_id = $1 AND account_id = $2
 }
 
 // DeleteACMELEOrder removes a pending order owned by the caller's account.
-func (s *dbStore) DeleteACMELEOrder(ctx context.Context, orderID string) error {
+func (s *Store) DeleteACMELEOrder(ctx context.Context, orderID string) error {
 	const q = `DELETE FROM acme_le_orders WHERE order_id = $1 AND account_id = $2`
 	if _, err := s.db.ExecContext(ctx, q, orderID, s.accountForContext(ctx)); err != nil {
 		return fmt.Errorf("delete acme order: %w", err)
@@ -62,7 +62,7 @@ func (s *dbStore) DeleteACMELEOrder(ctx context.Context, orderID string) error {
 
 // GetACMELEAccount loads the ACME account for a directory URL. It returns
 // sql.ErrNoRows-wrapped error semantics via a not-found message when absent.
-func (s *dbStore) GetACMELEAccount(ctx context.Context, directoryURL string) (store.ACMELEAccount, error) {
+func (s *Store) GetACMELEAccount(ctx context.Context, directoryURL string) (store.ACMELEAccount, error) {
 	const q = `
 SELECT id, directory_url, account_uri, contact_email,
        account_key_wrapped_b64, account_key_nonce_b64, created_at, updated_at
@@ -94,7 +94,7 @@ WHERE directory_url = $1
 }
 
 // UpsertACMELEAccount inserts or updates the ACME account for its directory URL.
-func (s *dbStore) UpsertACMELEAccount(ctx context.Context, account store.ACMELEAccount) error {
+func (s *Store) UpsertACMELEAccount(ctx context.Context, account store.ACMELEAccount) error {
 	if account.ID == "" {
 		account.ID = cryptoutil.RandomHex(12)
 	}
@@ -126,7 +126,7 @@ ON CONFLICT (directory_url) DO UPDATE SET
 
 // CreateACMELECertificate persists a Let's Encrypt certificate and its wrapped
 // private key.
-func (s *dbStore) CreateACMELECertificate(ctx context.Context, cert store.ACMELECertificate) error {
+func (s *Store) CreateACMELECertificate(ctx context.Context, cert store.ACMELECertificate) error {
 	if cert.CertID == "" {
 		cert.CertID = cryptoutil.RandomHex(12)
 	}
@@ -150,7 +150,7 @@ INSERT INTO acme_le_certificates (
 }
 
 // GetACMELECertificate loads a Let's Encrypt certificate, unwrapping its key.
-func (s *dbStore) GetACMELECertificate(ctx context.Context, certID string) (store.ACMELECertificate, error) {
+func (s *Store) GetACMELECertificate(ctx context.Context, certID string) (store.ACMELECertificate, error) {
 	const q = `
 SELECT cert_id, directory_url, domains, serial, cert_b64, chain_b64,
        key_wrapped_b64, key_nonce_b64, status, not_before, not_after, created_at, updated_at
@@ -183,7 +183,7 @@ WHERE cert_id = $1
 
 // ListACMELECertificates returns all Let's Encrypt certificates (without key
 // material) newest first.
-func (s *dbStore) ListACMELECertificates(ctx context.Context) ([]store.ACMELECertificate, error) {
+func (s *Store) ListACMELECertificates(ctx context.Context) ([]store.ACMELECertificate, error) {
 	const q = `
 SELECT cert_id, directory_url, domains, serial, cert_b64, chain_b64,
        status, not_before, not_after, created_at, updated_at

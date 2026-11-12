@@ -14,6 +14,7 @@ import (
 
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
 	"github.com/worlddrknss/citadel/internal/store"
+	"github.com/worlddrknss/citadel/internal/store/postgres"
 )
 
 // Certificate-authority business logic shared by the native Citadel /v1
@@ -465,9 +466,9 @@ func (s *server) adminSaveLESettings(r *http.Request) error {
 	default:
 		return fmt.Errorf("unsupported environment")
 	}
-	if err := putSetting(r.Context(), db, settingACMELEDirectoryURL, directoryURL); err != nil {
+	if err := postgres.PutSetting(r.Context(), db, settingACMELEDirectoryURL, directoryURL); err != nil {
 		return err
 	}
 	email := strings.TrimSpace(r.FormValue("le_contact_email"))
-	return putSetting(r.Context(), db, settingACMELEContactEmail, email)
+	return postgres.PutSetting(r.Context(), db, settingACMELEContactEmail, email)
 }
