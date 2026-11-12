@@ -1,0 +1,85 @@
+# Every optional feature on: per-value Secret references, Ingress with TLS,
+# TLS in the pod, NetworkPolicy, HPA, ServiceMonitor, TokenReview.
+image:
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+secrets:
+  databaseUrl:
+    existingSecret: citadel-db
+    existingSecretKey: uri
+  wrappingKey:
+    existingSecret: citadel-keys
+    existingSecretKey: wrapping-key
+  previousWrappingKeys:
+    existingSecret: citadel-keys
+    existingSecretKey: previous-wrapping-keys
+  auditHmacKey:
+    existingSecret: citadel-keys
+    existingSecretKey: audit-hmac-key
+  bootstrapToken:
+    existingSecret: citadel-bootstrap
+    existingSecretKey: token
+config:
+  publicUrl: https://citadel.example.com
+  trustedProxies:
+    - 10.244.0.0/16
+  awsRegion: eu-west-1
+  policyDefaultDeny: true
+  sessionIdleTTL: 15m
+tls:
+  enabled: true
+  existingSecret: citadel-pod-tls
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+  hosts:
+    - host: citadel.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: citadel-tls
+      hosts:
+        - citadel.example.com
+workloadIdentity:
+  kubernetes:
+    tokenReview: true
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 8
+  targetMemoryUtilizationPercentage: 80
+podDisruptionBudget:
+  minAvailable: 2
+networkPolicy:
+  enabled: true
+  ingress:
+    extra:
+      - from:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: monitoring
+        ports:
+          - port: http
+            protocol: TCP
+  egress:
+    database:
+      cidrs:
+        - 10.0.20.0/24
+    https:
+      except:
+        - 169.254.169.254/32
+    kubeApiServer:
+      cidrs:
+        - 10.0.0.1/32
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+preStopSleepSeconds: 10
+terminationGracePeriodSeconds: 40
+podAntiAffinity: hard

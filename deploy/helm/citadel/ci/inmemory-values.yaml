@@ -1,0 +1,6 @@
+# Single-replica development mode without PostgreSQL.
+devMode:
+  inMemory: true
+replicaCount: 1
+secrets:
+  existingSecret: citadel-dev

@@ -1,0 +1,29 @@
+# Gateway API instead of Ingress, in-cluster PostgreSQL behind a NetworkPolicy.
+secrets:
+  existingSecret: citadel-secrets
+config:
+  publicUrl: https://citadel.example.com
+  trustedProxies:
+    - 10.244.0.0/16
+httpRoute:
+  enabled: true
+  parentRefs:
+    - name: public-gateway
+      namespace: gateway-system
+      sectionName: https
+  hostnames:
+    - citadel.example.com
+networkPolicy:
+  enabled: true
+  ingress:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: gateway-system
+  egress:
+    database:
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: postgresql
+probes:
+  readinessPath: /readyz
+replicaCount: 3
