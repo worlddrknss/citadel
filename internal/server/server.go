@@ -110,6 +110,7 @@ func New(ctx context.Context, cfg config.Config, st store.Store, webFS fs.FS) (*
 	}
 	s.jobs.Every("console-session-purge", 10*time.Minute, s.purgeExpiredSessions)
 	s.jobs.Every("sts-session-purge", 15*time.Minute, s.purgeExpiredSTSSessions)
+	s.jobs.Every("secrets-purge", secretsPurgeInterval, s.purgeExpiredSecretsJob)
 	s.startAuditStreamJob()
 	return s, nil
 }
@@ -214,6 +215,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/change-requests", s.handleV1CreateChangeRequest)
 	mux.HandleFunc("POST /v1/change-requests/approve", s.handleV1ApproveChangeRequest)
 	mux.HandleFunc("POST /v1/change-requests/reject", s.handleV1RejectChangeRequest)
+	s.registerSecretsRoutes(mux)
 
 	// Native session + self-service + master-admin actions (replace the legacy
 	// html/template admin pages).

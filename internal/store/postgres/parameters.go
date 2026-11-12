@@ -84,13 +84,11 @@ func (s *Store) GetParameter(ctx context.Context, name string) (store.ParameterR
 }
 
 func (s *Store) ListParameters(ctx context.Context) ([]store.ParameterRecord, error) {
-	cond, args := store.AccountFilter(ctx, "account_id", 1)
-	query := `SELECT name, param_type, param_value, is_encrypted, kms_key_id, tier, version, description, created_at, updated_at FROM ps_parameters`
-	if cond != "" {
-		query += " WHERE " + cond
-	}
-	query += " ORDER BY name"
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	// Scoped like every other parameter query: without a caller account the
+	// deployment account applies (an unscoped list leaked every account's
+	// parameter names and plaintext String values).
+	const query = `SELECT name, param_type, param_value, is_encrypted, kms_key_id, tier, version, description, created_at, updated_at FROM ps_parameters WHERE account_id = $1 ORDER BY name`
+	rows, err := s.db.QueryContext(ctx, query, s.accountForContext(ctx))
 	if err != nil {
 		return nil, err
 	}

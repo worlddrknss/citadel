@@ -10,9 +10,22 @@ import (
 
 // memParameter is the in-memory representation including history and tags.
 type memParameter struct {
+	account string
 	rec     store.ParameterRecord
 	history []store.ParameterHistoryEntry
 	tags    []store.ParamTag
+}
+
+// memParamKey scopes a parameter name to its account, so two accounts can
+// hold the same name and never see each other's parameters.
+func memParamKey(account, name string) string {
+	return account + "\x00" + name
+}
+
+// paramLocked returns the caller account's parameter. The caller holds s.mu.
+func (s *Store) paramLocked(ctx context.Context, name string) (*memParameter, bool) {
+	p, ok := s.params[memParamKey(s.accountForContext(ctx), name)]
+	return p, ok
 }
 
 func (s *Store) PutParameter(ctx context.Context, rec store.ParameterRecord, overwrite bool) (store.ParameterRecord, error) {
@@ -22,7 +35,8 @@ func (s *Store) PutParameter(ctx context.Context, rec store.ParameterRecord, ove
 		s.params = map[string]*memParameter{}
 	}
 	now := time.Now().UTC()
-	existing, ok := s.params[rec.Name]
+	account := s.accountForContext(ctx)
+	existing, ok := s.params[memParamKey(account, rec.Name)]
 	if ok {
 		if !overwrite {
 			return store.ParameterRecord{}, store.ErrParameterExists
@@ -32,8 +46,8 @@ func (s *Store) PutParameter(ctx context.Context, rec store.ParameterRecord, ove
 	} else {
 		rec.Version = 1
 		rec.CreatedAt = now
-		existing = &memParameter{}
-		s.params[rec.Name] = existing
+		existing = &memParameter{account: account}
+		s.params[memParamKey(account, rec.Name)] = existing
 	}
 	rec.UpdatedAt = now
 	existing.rec = rec
@@ -54,7 +68,7 @@ func (s *Store) PutParameter(ctx context.Context, rec store.ParameterRecord, ove
 func (s *Store) GetParameter(ctx context.Context, name string) (store.ParameterRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.params[name]
+	p, ok := s.paramLocked(ctx, name)
 	if !ok {
 		return store.ParameterRecord{}, store.ErrParameterNotFound
 	}
@@ -64,9 +78,12 @@ func (s *Store) GetParameter(ctx context.Context, name string) (store.ParameterR
 func (s *Store) ListParameters(ctx context.Context) ([]store.ParameterRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	account := s.accountForContext(ctx)
 	var out []store.ParameterRecord
 	for _, p := range s.params {
-		out = append(out, p.rec)
+		if p.account == account {
+			out = append(out, p.rec)
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
@@ -75,17 +92,18 @@ func (s *Store) ListParameters(ctx context.Context) ([]store.ParameterRecord, er
 func (s *Store) DeleteParameter(ctx context.Context, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.params[name]; !ok {
+	key := memParamKey(s.accountForContext(ctx), name)
+	if _, ok := s.params[key]; !ok {
 		return store.ErrParameterNotFound
 	}
-	delete(s.params, name)
+	delete(s.params, key)
 	return nil
 }
 
 func (s *Store) GetParameterHistory(ctx context.Context, name string) ([]store.ParameterHistoryEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.params[name]
+	p, ok := s.paramLocked(ctx, name)
 	if !ok {
 		return nil, store.ErrParameterNotFound
 	}
@@ -97,7 +115,7 @@ func (s *Store) GetParameterHistory(ctx context.Context, name string) ([]store.P
 func (s *Store) LabelParameterVersion(ctx context.Context, name string, version int64, labels []string) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.params[name]
+	p, ok := s.paramLocked(ctx, name)
 	if !ok {
 		return nil, store.ErrParameterNotFound
 	}
@@ -128,7 +146,7 @@ func (s *Store) LabelParameterVersion(ctx context.Context, name string, version 
 func (s *Store) TagParameter(ctx context.Context, name string, tags []store.ParamTag) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.params[name]
+	p, ok := s.paramLocked(ctx, name)
 	if !ok {
 		return store.ErrParameterNotFound
 	}
@@ -151,7 +169,7 @@ func (s *Store) TagParameter(ctx context.Context, name string, tags []store.Para
 func (s *Store) UntagParameter(ctx context.Context, name string, keys []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.params[name]
+	p, ok := s.paramLocked(ctx, name)
 	if !ok {
 		return store.ErrParameterNotFound
 	}
@@ -170,7 +188,7 @@ func (s *Store) UntagParameter(ctx context.Context, name string, keys []string) 
 func (s *Store) ListParameterTags(ctx context.Context, name string) ([]store.ParamTag, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.params[name]
+	p, ok := s.paramLocked(ctx, name)
 	if !ok {
 		return nil, store.ErrParameterNotFound
 	}

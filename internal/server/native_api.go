@@ -246,6 +246,11 @@ type nativeMeResponse struct {
 type nativeProject struct {
 	Slug         string   `json:"slug"`
 	Environments []string `json:"environments"`
+	// Name is the display name set via /v1/projects/rename, when set.
+	Name string `json:"name,omitempty"`
+	// EnvironmentCounts is the number of live secrets in each environment
+	// (at any depth), keyed by environment slug.
+	EnvironmentCounts map[string]int `json:"environmentCounts"`
 }
 
 type nativeItem struct {
@@ -256,6 +261,14 @@ type nativeItem struct {
 	ARN          string `json:"arn"`
 	UpdatedAt    string `json:"updatedAt"`
 	DeletionDate string `json:"deletionDate,omitempty"`
+	// Version is the number of stored versions, i.e. the ordinal of the
+	// newest one.
+	Version   int         `json:"version,omitempty"`
+	UpdatedBy string      `json:"updatedBy,omitempty"`
+	Tags      []nativeTag `json:"tags"`
+	// RotationDue is set when a rotation schedule has come due (Citadel
+	// records schedules but cannot run rotation functions).
+	RotationDue bool `json:"rotationDue,omitempty"`
 }
 
 // ---- handlers --------------------------------------------------------------
@@ -271,18 +284,18 @@ func (s *Server) handleV1Me(w http.ResponseWriter, r *http.Request) {
 // handleV1Projects returns the distinct projects (and their environments)
 // visible to the caller's account, via the shared secrets service.
 func (s *Server) handleV1Projects(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "viewer")
+	_, ctx, ok := s.secretsSession(w, r, "viewer")
 	if !ok {
 		return
 	}
 	projects, err := s.secretsSvc().ListProjects(ctx)
 	if err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "list_failed", err.Error())
+		writeSecretsFailure(w, http.StatusInternalServerError, "list_failed", err)
 		return
 	}
 	out := make([]nativeProject, 0, len(projects))
 	for _, p := range projects {
-		out = append(out, nativeProject{Slug: p.Slug, Environments: p.Environments})
+		out = append(out, nativeProject{Slug: p.Slug, Environments: p.Environments, Name: p.Name, EnvironmentCounts: p.EnvCounts})
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{"projects": out})
 }
@@ -290,7 +303,7 @@ func (s *Server) handleV1Projects(w http.ResponseWriter, r *http.Request) {
 // handleV1ListSecrets lists the items at a given project/env/folder. Values are
 // never included; callers must use the reveal endpoint for a single item.
 func (s *Server) handleV1ListSecrets(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "viewer")
+	_, ctx, ok := s.secretsSession(w, r, "viewer")
 	if !ok {
 		return
 	}
@@ -306,11 +319,12 @@ func (s *Server) handleV1ListSecrets(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	folders, found, shadowing, err := s.secretsSvc().ListFolder(ctx, project, env, wantFolder)
+	listing, err := s.secretsSvc().listFolderDetailed(ctx, project, env, wantFolder)
 	if err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "invalid_request", err)
 		return
 	}
+	folders, found, shadowing := listing.Folders, listing.Items, listing.Shadowed
 	toNative := func(it itemSummary) nativeItem {
 		ni := nativeItem{
 			Project:   it.Project,
@@ -319,6 +333,14 @@ func (s *Server) handleV1ListSecrets(w http.ResponseWriter, r *http.Request) {
 			Key:       it.Key,
 			ARN:       it.ARN,
 			UpdatedAt: it.UpdatedAt.Format(time.RFC3339),
+			Version:   it.Version,
+			UpdatedBy: it.UpdatedBy,
+			Tags:      make([]nativeTag, 0, len(it.Tags)),
+
+			RotationDue: it.RotationDue,
+		}
+		for _, t := range it.Tags {
+			ni.Tags = append(ni.Tags, nativeTag{Key: t.Key, Value: t.Value})
 		}
 		if it.DeletionDate != nil {
 			ni.DeletionDate = it.DeletionDate.Format(time.RFC3339)
@@ -337,12 +359,13 @@ func (s *Server) handleV1ListSecrets(w http.ResponseWriter, r *http.Request) {
 		shadowed = append(shadowed, toNative(it))
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{
-		"project":  project,
-		"env":      env,
-		"path":     store.FolderPath(wantFolder),
-		"folders":  folders,
-		"items":    items,
-		"shadowed": shadowed,
+		"project":      project,
+		"env":          env,
+		"path":         store.FolderPath(wantFolder),
+		"folders":      folders,
+		"items":        items,
+		"shadowed":     shadowed,
+		"folderCounts": listing.FolderCounts,
 	})
 }
 
@@ -350,7 +373,7 @@ func (s *Server) handleV1ListSecrets(w http.ResponseWriter, r *http.Request) {
 // Separate from handleV1DeleteSecret, which requires a key: this object has none,
 // which is precisely why it could never be deleted from the console.
 func (s *Server) handleV1DeleteShadowing(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -380,7 +403,7 @@ func (s *Server) handleV1DeleteShadowing(w http.ResponseWriter, r *http.Request)
 			writeNativeError(w, http.StatusNotFound, "not_found", "no object is shadowing that folder")
 			return
 		}
-		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
+		writeSecretsFailure(w, http.StatusInternalServerError, "delete_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteShadowing", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -411,7 +434,7 @@ type nativePutSecretRequest struct {
 
 // handleV1PutSecret creates or updates a single item via the secrets service.
 func (s *Server) handleV1PutSecret(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -431,18 +454,28 @@ func (s *Server) handleV1PutSecret(w http.ResponseWriter, r *http.Request) {
 		Folder:  folder,
 		Key:     strings.TrimSpace(req.Key),
 	}
+	if err := coord.validate(); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if !s.requireNoApproval(w, r, ctx, coord.Project, coord.Env, "citadel.PutItem") {
+		return
+	}
 	created, err := s.secretsSvc().PutItem(ctx, coord, req.Value, req.KMSKeyID)
 	if err != nil {
-		writeNativeError(w, http.StatusBadRequest, "put_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "put_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PutItem", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"project": coord.Project, "env": coord.Env, "path": store.FolderPath(folder), "key": coord.Key, "created": created})
 }
 
-// handleV1RevealSecret returns the decrypted value of a single item.
+// handleV1RevealSecret returns the decrypted value of a single item (or of
+// one version with versionId). Viewers may call it only where the account's
+// viewersCanReveal setting allows; this also governs the console's version
+// values and .env export, which are built on it.
 func (s *Server) handleV1RevealSecret(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "viewer")
+	sess, ctx, ok := s.secretsSession(w, r, "viewer")
 	if !ok {
 		return
 	}
@@ -450,6 +483,9 @@ func (s *Server) handleV1RevealSecret(w http.ResponseWriter, r *http.Request) {
 	coord, err := coordFromQuery(q)
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if !s.requireReveal(w, r, ctx, sess, "citadel.RevealItem") {
 		return
 	}
 	resolve := strings.EqualFold(strings.TrimSpace(q.Get("resolve")), "true")
@@ -478,7 +514,7 @@ func (s *Server) handleV1RevealSecret(w http.ResponseWriter, r *http.Request) {
 // force=true to set the deletion date to now, or recoveryWindowDays=N to choose
 // the window. Use the restore endpoint to cancel a pending deletion.
 func (s *Server) handleV1DeleteSecret(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -498,7 +534,7 @@ func (s *Server) handleV1DeleteSecret(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.secretsSvc().DeleteItem(ctx, coord, windowDays, force); err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
+		writeSecretsFailure(w, http.StatusInternalServerError, "delete_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteItem", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -536,7 +572,7 @@ type nativeCreateProjectRequest struct {
 
 // handleV1CreateProject registers a structure-only project.
 func (s *Server) handleV1CreateProject(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -546,7 +582,7 @@ func (s *Server) handleV1CreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.secretsSvc().CreateProject(ctx, strings.TrimSpace(req.Slug), req.Name); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "create_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateProject", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -561,7 +597,7 @@ type nativeCreateEnvironmentRequest struct {
 
 // handleV1CreateEnvironment registers a structure-only environment.
 func (s *Server) handleV1CreateEnvironment(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -571,7 +607,7 @@ func (s *Server) handleV1CreateEnvironment(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := s.secretsSvc().CreateEnvironment(ctx, strings.TrimSpace(req.Project), strings.TrimSpace(req.Slug), req.Name); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "create_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateEnvironment", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -586,7 +622,7 @@ type nativeCreateFolderRequest struct {
 
 // handleV1CreateFolder registers a structure-only (possibly empty) folder.
 func (s *Server) handleV1CreateFolder(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -601,7 +637,7 @@ func (s *Server) handleV1CreateFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.secretsSvc().CreateFolder(ctx, strings.TrimSpace(req.Project), strings.TrimSpace(req.Env), folder); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "create_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateFolder", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -616,7 +652,7 @@ type nativeRenameRequest struct {
 
 // handleV1RenameProject updates a project's display name.
 func (s *Server) handleV1RenameProject(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -626,7 +662,7 @@ func (s *Server) handleV1RenameProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.secretsSvc().RenameProject(ctx, strings.TrimSpace(req.Slug), req.Name); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "rename_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "rename_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RenameProject", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -635,7 +671,7 @@ func (s *Server) handleV1RenameProject(w http.ResponseWriter, r *http.Request) {
 
 // handleV1RenameEnvironment updates an environment's display name.
 func (s *Server) handleV1RenameEnvironment(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -645,7 +681,7 @@ func (s *Server) handleV1RenameEnvironment(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := s.secretsSvc().RenameEnvironment(ctx, strings.TrimSpace(req.Project), strings.TrimSpace(req.Slug), req.Name); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "rename_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "rename_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RenameEnvironment", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -655,13 +691,13 @@ func (s *Server) handleV1RenameEnvironment(w http.ResponseWriter, r *http.Reques
 // handleV1DeleteProject removes a structure-only project (refuses if it still
 // holds secrets).
 func (s *Server) handleV1DeleteProject(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
 	slug := strings.TrimSpace(r.URL.Query().Get("project"))
 	if err := s.secretsSvc().DeleteProject(ctx, slug); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "delete_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "delete_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteProject", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -671,7 +707,7 @@ func (s *Server) handleV1DeleteProject(w http.ResponseWriter, r *http.Request) {
 // handleV1DeleteEnvironment removes a structure-only environment (refuses if it
 // still holds secrets).
 func (s *Server) handleV1DeleteEnvironment(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -679,7 +715,7 @@ func (s *Server) handleV1DeleteEnvironment(w http.ResponseWriter, r *http.Reques
 	project := strings.TrimSpace(q.Get("project"))
 	slug := strings.TrimSpace(q.Get("env"))
 	if err := s.secretsSvc().DeleteEnvironment(ctx, project, slug); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "delete_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "delete_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteEnvironment", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -689,7 +725,7 @@ func (s *Server) handleV1DeleteEnvironment(w http.ResponseWriter, r *http.Reques
 // handleV1DeleteFolder removes a structure-only folder (refuses if it still
 // holds secrets).
 func (s *Server) handleV1DeleteFolder(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
@@ -702,7 +738,7 @@ func (s *Server) handleV1DeleteFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.secretsSvc().DeleteFolder(ctx, project, env, folder); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "delete_failed", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "delete_failed", err)
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteFolder", Result: "ok", AuditOrigin: s.auditOrigin(r)})
@@ -710,7 +746,7 @@ func (s *Server) handleV1DeleteFolder(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleV1ListVersions(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "viewer")
+	_, ctx, ok := s.secretsSession(w, r, "viewer")
 	if !ok {
 		return
 	}
@@ -730,20 +766,27 @@ func (s *Server) handleV1ListVersions(w http.ResponseWriter, r *http.Request) {
 			"versionId": v.VersionID,
 			"stages":    v.Stages,
 			"createdAt": v.CreatedAt.Format(time.RFC3339),
+			"version":   v.Ordinal,
 		})
+		if v.CreatedBy != "" {
+			out[len(out)-1]["createdBy"] = v.CreatedBy
+		}
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{"key": coord.Key, "versions": out})
 }
 
 // handleV1RestoreSecret cancels a pending deletion (point-in-time recovery).
 func (s *Server) handleV1RestoreSecret(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "editor")
+	_, ctx, ok := s.secretsSession(w, r, "editor")
 	if !ok {
 		return
 	}
 	coord, err := coordFromQuery(r.URL.Query())
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if !s.requireNoApproval(w, r, ctx, coord.Project, coord.Env, "citadel.RestoreItem") {
 		return
 	}
 	if err := s.secretsSvc().RestoreItem(ctx, coord); err != nil {
@@ -763,113 +806,4 @@ func (s *Server) canAccessEnv(sess *uiSession, project, env, minRole string) boo
 		return false
 	}
 	return uiRoleAtLeast(sess.Role, minRole)
-}
-
-func changeRequestJSON(cr changeRequest) map[string]any {
-	out := map[string]any{
-		"id":        cr.ID,
-		"project":   cr.Coord.Project,
-		"env":       cr.Coord.Env,
-		"path":      store.FolderPath(cr.Coord.Folder),
-		"key":       cr.Coord.Key,
-		"requester": cr.Requester,
-		"status":    string(cr.Status),
-		"createdAt": cr.CreatedAt.Format(time.RFC3339),
-	}
-	if cr.DecidedBy != "" {
-		out["decidedBy"] = cr.DecidedBy
-		out["decidedAt"] = cr.DecidedAt.Format(time.RFC3339)
-	}
-	return out
-}
-
-type nativeChangeRequestBody struct {
-	Project string `json:"project"`
-	Env     string `json:"env"`
-	Path    string `json:"path"`
-	Key     string `json:"key"`
-	Value   string `json:"value"`
-	ID      string `json:"id"`
-}
-
-// handleV1CreateChangeRequest records a proposed write awaiting approval.
-func (s *Server) handleV1CreateChangeRequest(w http.ResponseWriter, r *http.Request) {
-	sess, ctx, ok := s.nativeSession(w, r, "editor")
-	if !ok {
-		return
-	}
-	var req nativeChangeRequestBody
-	if err := decodeJSONBody(r, &req); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	folder, err := normalizeFolder(req.Path)
-	if err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	coord := itemCoord{Project: strings.TrimSpace(req.Project), Env: strings.TrimSpace(req.Env), Folder: folder, Key: strings.TrimSpace(req.Key)}
-	if !s.canAccessEnv(sess, coord.Project, coord.Env, "editor") {
-		writeNativeError(w, http.StatusForbidden, "forbidden", "insufficient environment access")
-		return
-	}
-	cr, err := s.secretsSvc().CreateChangeRequest(ctx, coord, req.Value, "", sess.Username)
-	if err != nil {
-		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
-		return
-	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateChangeRequest", Result: "ok", AuditOrigin: s.auditOrigin(r)})
-	writeNativeJSON(w, http.StatusOK, changeRequestJSON(*cr))
-}
-
-// handleV1ListChangeRequests lists the caller account's change requests.
-func (s *Server) handleV1ListChangeRequests(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "viewer")
-	if !ok {
-		return
-	}
-	requests := s.secretsSvc().ListChangeRequests(ctx)
-	out := make([]map[string]any, 0, len(requests))
-	for _, cr := range requests {
-		out = append(out, changeRequestJSON(cr))
-	}
-	writeNativeJSON(w, http.StatusOK, map[string]any{"changeRequests": out})
-}
-
-// handleV1ApproveChangeRequest approves and applies a pending change request.
-func (s *Server) handleV1ApproveChangeRequest(w http.ResponseWriter, r *http.Request) {
-	sess, ctx, ok := s.nativeSession(w, r, "admin")
-	if !ok {
-		return
-	}
-	var req nativeChangeRequestBody
-	if err := decodeJSONBody(r, &req); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	if err := s.secretsSvc().ApproveChangeRequest(ctx, strings.TrimSpace(req.ID), sess.Username); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "approve_failed", err.Error())
-		return
-	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ApproveChangeRequest", Result: "ok", AuditOrigin: s.auditOrigin(r)})
-	writeNativeJSON(w, http.StatusOK, map[string]any{"approved": true, "id": strings.TrimSpace(req.ID)})
-}
-
-// handleV1RejectChangeRequest rejects a pending change request.
-func (s *Server) handleV1RejectChangeRequest(w http.ResponseWriter, r *http.Request) {
-	sess, ctx, ok := s.nativeSession(w, r, "admin")
-	if !ok {
-		return
-	}
-	var req nativeChangeRequestBody
-	if err := decodeJSONBody(r, &req); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	if err := s.secretsSvc().RejectChangeRequest(ctx, strings.TrimSpace(req.ID), sess.Username); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "reject_failed", err.Error())
-		return
-	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RejectChangeRequest", Result: "ok", AuditOrigin: s.auditOrigin(r)})
-	writeNativeJSON(w, http.StatusOK, map[string]any{"rejected": true, "id": strings.TrimSpace(req.ID)})
 }

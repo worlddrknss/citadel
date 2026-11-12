@@ -331,6 +331,11 @@ func (s *Server) handleUpdateSecretVersionStage(w http.ResponseWriter, r *http.R
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
+	if req.VersionStage == store.CurrentVersionStage && s.awsWriteNeedsApproval(r.Context(), meta.Name) {
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "denied", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
+		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", awsApprovalRequiredMessage)
+		return
+	}
 	meta, err = s.store.UpdateSecretVersionStage(r.Context(), req.SecretID, req.VersionStage, req.MoveToVersionID, req.RemoveFromVersionID)
 	if err != nil {
 		secretError(w, err)

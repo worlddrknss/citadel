@@ -68,6 +68,12 @@ type SecretMetadataRecord struct {
 	RotationLambdaARN string
 	RotationDays      int
 	NextRotationDate  *time.Time
+	// UpdatedBy is the identity that wrote the current version ("" when
+	// unknown, e.g. rows written before it was recorded).
+	UpdatedBy string
+	// VersionCount is the number of stored versions, when the backend
+	// reports it cheaply (0 means unknown).
+	VersionCount int
 }
 
 type SecretValueRecord struct {
@@ -214,6 +220,8 @@ type SecretVersionListEntry struct {
 	CreatedDate    AWSTimestamp  `json:"CreatedDate"`
 	KMSKeyIDs      []string      `json:"KmsKeyIds,omitempty"`
 	LastAccessedAt *AWSTimestamp `json:"LastAccessedDate,omitempty"`
+	// CreatedBy is who wrote this version; not part of the AWS shape.
+	CreatedBy string `json:"-"`
 }
 
 type SecretRotationResult struct {
