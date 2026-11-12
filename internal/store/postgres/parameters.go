@@ -1,0 +1,293 @@
+package postgres
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"time"
+
+	"github.com/worlddrknss/citadel/internal/store"
+)
+
+func (s *Store) PutParameter(ctx context.Context, rec store.ParameterRecord, overwrite bool) (store.ParameterRecord, error) {
+	acct := s.accountForContext(ctx)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return store.ParameterRecord{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var existingVersion int64
+	err = tx.QueryRowContext(ctx,
+		`SELECT version FROM ps_parameters WHERE account_id=$1 AND name=$2`,
+		acct, rec.Name).Scan(&existingVersion)
+	switch {
+	case err == sql.ErrNoRows:
+		existingVersion = 0
+	case err != nil:
+		return store.ParameterRecord{}, err
+	default:
+		if !overwrite {
+			return store.ParameterRecord{}, store.ErrParameterExists
+		}
+	}
+
+	now := time.Now().UTC()
+	rec.Version = existingVersion + 1
+	rec.UpdatedAt = now
+	if existingVersion == 0 {
+		rec.CreatedAt = now
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO ps_parameters (account_id, name, param_type, param_value, is_encrypted, kms_key_id, tier, version, description, created_at, updated_at)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			acct, rec.Name, rec.Type, rec.Value, rec.IsEncrypted, rec.KMSKeyID, rec.Tier, rec.Version, rec.Description, now, now); err != nil {
+			return store.ParameterRecord{}, err
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE ps_parameters SET param_type=$3, param_value=$4, is_encrypted=$5, kms_key_id=$6, tier=$7, version=$8, description=$9, updated_at=$10
+			 WHERE account_id=$1 AND name=$2`,
+			acct, rec.Name, rec.Type, rec.Value, rec.IsEncrypted, rec.KMSKeyID, rec.Tier, rec.Version, rec.Description, now); err != nil {
+			return store.ParameterRecord{}, err
+		}
+		// Preserve CreatedAt from the existing row for the returned record.
+		_ = tx.QueryRowContext(ctx, `SELECT created_at FROM ps_parameters WHERE account_id=$1 AND name=$2`, acct, rec.Name).Scan(&rec.CreatedAt)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO ps_parameter_history (account_id, name, version, param_type, param_value, is_encrypted, kms_key_id, tier, description, labels_json, modified_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'[]',$10)`,
+		acct, rec.Name, rec.Version, rec.Type, rec.Value, rec.IsEncrypted, rec.KMSKeyID, rec.Tier, rec.Description, now); err != nil {
+		return store.ParameterRecord{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return store.ParameterRecord{}, err
+	}
+	return rec, nil
+}
+
+func (s *Store) GetParameter(ctx context.Context, name string) (store.ParameterRecord, error) {
+	acct := s.accountForContext(ctx)
+	var rec store.ParameterRecord
+	err := s.db.QueryRowContext(ctx,
+		`SELECT name, param_type, param_value, is_encrypted, kms_key_id, tier, version, description, created_at, updated_at
+		 FROM ps_parameters WHERE account_id=$1 AND name=$2`,
+		acct, name).Scan(&rec.Name, &rec.Type, &rec.Value, &rec.IsEncrypted, &rec.KMSKeyID, &rec.Tier, &rec.Version, &rec.Description, &rec.CreatedAt, &rec.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return store.ParameterRecord{}, store.ErrParameterNotFound
+	}
+	if err != nil {
+		return store.ParameterRecord{}, err
+	}
+	return rec, nil
+}
+
+func (s *Store) ListParameters(ctx context.Context) ([]store.ParameterRecord, error) {
+	cond, args := store.AccountFilter(ctx, "account_id", 1)
+	query := `SELECT name, param_type, param_value, is_encrypted, kms_key_id, tier, version, description, created_at, updated_at FROM ps_parameters`
+	if cond != "" {
+		query += " WHERE " + cond
+	}
+	query += " ORDER BY name"
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.ParameterRecord
+	for rows.Next() {
+		var rec store.ParameterRecord
+		if err := rows.Scan(&rec.Name, &rec.Type, &rec.Value, &rec.IsEncrypted, &rec.KMSKeyID, &rec.Tier, &rec.Version, &rec.Description, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DeleteParameter(ctx context.Context, name string) error {
+	acct := s.accountForContext(ctx)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `DELETE FROM ps_parameters WHERE account_id=$1 AND name=$2`, acct, name)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return store.ErrParameterNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM ps_parameter_history WHERE account_id=$1 AND name=$2`, acct, name); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM ps_parameter_tags WHERE account_id=$1 AND name=$2`, acct, name); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) GetParameterHistory(ctx context.Context, name string) ([]store.ParameterHistoryEntry, error) {
+	acct := s.accountForContext(ctx)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT name, version, param_type, param_value, is_encrypted, kms_key_id, tier, description, labels_json, modified_at
+		 FROM ps_parameter_history WHERE account_id=$1 AND name=$2 ORDER BY version`,
+		acct, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.ParameterHistoryEntry
+	for rows.Next() {
+		var (
+			e         store.ParameterHistoryEntry
+			labelsRaw string
+		)
+		if err := rows.Scan(&e.Name, &e.Version, &e.Type, &e.Value, &e.IsEncrypted, &e.KMSKeyID, &e.Tier, &e.Description, &labelsRaw, &e.ModifiedAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(labelsRaw), &e.Labels)
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		// Distinguish "no such parameter" from "no history".
+		if _, err := s.GetParameter(ctx, name); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) LabelParameterVersion(ctx context.Context, name string, version int64, labels []string) ([]string, error) {
+	acct := s.accountForContext(ctx)
+	if version == 0 {
+		// Default to the latest version.
+		if err := s.db.QueryRowContext(ctx, `SELECT version FROM ps_parameters WHERE account_id=$1 AND name=$2`, acct, name).Scan(&version); err != nil {
+			if err == sql.ErrNoRows {
+				return nil, store.ErrParameterNotFound
+			}
+			return nil, err
+		}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Labels are unique per parameter; moving a label detaches it from any
+	// other version first.
+	for _, lbl := range labels {
+		rows, err := tx.QueryContext(ctx, `SELECT version, labels_json FROM ps_parameter_history WHERE account_id=$1 AND name=$2`, acct, name)
+		if err != nil {
+			return nil, err
+		}
+		type verLabels struct {
+			ver    int64
+			labels []string
+		}
+		var all []verLabels
+		for rows.Next() {
+			var v int64
+			var raw string
+			if err := rows.Scan(&v, &raw); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			var ls []string
+			_ = json.Unmarshal([]byte(raw), &ls)
+			all = append(all, verLabels{ver: v, labels: ls})
+		}
+		rows.Close()
+		for _, vl := range all {
+			if vl.ver == version {
+				continue
+			}
+			filtered := store.RemoveLabel(vl.labels, lbl)
+			if len(filtered) != len(vl.labels) {
+				raw, _ := json.Marshal(filtered)
+				if _, err := tx.ExecContext(ctx, `UPDATE ps_parameter_history SET labels_json=$3 WHERE account_id=$1 AND name=$2 AND version=$4`, acct, name, string(raw), vl.ver); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	var raw string
+	err = tx.QueryRowContext(ctx, `SELECT labels_json FROM ps_parameter_history WHERE account_id=$1 AND name=$2 AND version=$3`, acct, name, version).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil, store.ErrParameterNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	var current []string
+	_ = json.Unmarshal([]byte(raw), &current)
+	current = store.MergeLabels(current, labels)
+	merged, _ := json.Marshal(current)
+	if _, err := tx.ExecContext(ctx, `UPDATE ps_parameter_history SET labels_json=$3 WHERE account_id=$1 AND name=$2 AND version=$4`, acct, name, string(merged), version); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return current, nil
+}
+
+func (s *Store) TagParameter(ctx context.Context, name string, tags []store.ParamTag) error {
+	acct := s.accountForContext(ctx)
+	if _, err := s.GetParameter(ctx, name); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, t := range tags {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO ps_parameter_tags (account_id, name, tag_key, tag_value) VALUES ($1,$2,$3,$4)
+			 ON CONFLICT (account_id, name, tag_key) DO UPDATE SET tag_value=EXCLUDED.tag_value`,
+			acct, name, t.Key, t.Value); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) UntagParameter(ctx context.Context, name string, keys []string) error {
+	acct := s.accountForContext(ctx)
+	if _, err := s.GetParameter(ctx, name); err != nil {
+		return err
+	}
+	for _, k := range keys {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM ps_parameter_tags WHERE account_id=$1 AND name=$2 AND tag_key=$3`, acct, name, k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ListParameterTags(ctx context.Context, name string) ([]store.ParamTag, error) {
+	acct := s.accountForContext(ctx)
+	rows, err := s.db.QueryContext(ctx, `SELECT tag_key, tag_value FROM ps_parameter_tags WHERE account_id=$1 AND name=$2 ORDER BY tag_key`, acct, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.ParamTag
+	for rows.Next() {
+		var t store.ParamTag
+		if err := rows.Scan(&t.Key, &t.Value); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}

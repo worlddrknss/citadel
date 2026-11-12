@@ -1,0 +1,203 @@
+package postgres
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/worlddrknss/citadel/internal/store"
+)
+
+// CreateCertificateAuthority inserts a new CA record into the database
+func (s *Store) CreateCertificateAuthority(ctx context.Context, ca store.PCACertificateAuthority) error {
+	query := `
+		INSERT INTO pca_certificate_authorities (
+			ca_id, urn, type, kms_key_id, subject_dn, state, ca_cert_b64,
+			path_length, not_before, not_after, description, account, created_at, updated_at, account_id
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10, $11, $12, $13, $14, $15
+		)
+	`
+	_, err := s.db.ExecContext(ctx, query,
+		ca.CAID, ca.ARN, ca.Type, ca.KMSKeyID, ca.SubjectDN, ca.State, ca.CACertB64,
+		ca.PathLength, ca.NotBefore, ca.NotAfter, ca.Description, ca.Account, ca.CreatedAt, ca.UpdatedAt, s.accountForContext(ctx),
+	)
+	if err != nil {
+		return fmt.Errorf("insert CA: %w", err)
+	}
+	return nil
+}
+
+// DescribeCertificateAuthority retrieves a CA by its ARN
+func (s *Store) DescribeCertificateAuthority(ctx context.Context, arn string) (store.PCACertificateAuthority, error) {
+	query := `
+		SELECT ca_id, urn, type, kms_key_id, subject_dn, state, ca_cert_b64,
+		       path_length, not_before, not_after, description, account, created_at, updated_at
+		FROM pca_certificate_authorities
+		WHERE urn = $1
+	`
+	row := s.db.QueryRowContext(ctx, query, arn)
+	var ca store.PCACertificateAuthority
+	var pathLength sql.NullInt32
+	err := row.Scan(
+		&ca.CAID, &ca.ARN, &ca.Type, &ca.KMSKeyID, &ca.SubjectDN, &ca.State, &ca.CACertB64,
+		&pathLength, &ca.NotBefore, &ca.NotAfter, &ca.Description, &ca.Account, &ca.CreatedAt, &ca.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return store.PCACertificateAuthority{}, fmt.Errorf("certificate authority not found")
+		}
+		return store.PCACertificateAuthority{}, fmt.Errorf("query CA: %w", err)
+	}
+	if pathLength.Valid {
+		pl := int(pathLength.Int32)
+		ca.PathLength = &pl
+	}
+	return ca, nil
+}
+
+// ListCertificateAuthorities returns all CAs for the current account
+func (s *Store) ListCertificateAuthorities(ctx context.Context) ([]store.PCACertificateAuthority, error) {
+	query := `
+		SELECT ca_id, urn, type, kms_key_id, subject_dn, state, ca_cert_b64,
+		       path_length, not_before, not_after, description, account, created_at, updated_at
+		FROM pca_certificate_authorities
+		ORDER BY created_at DESC
+	`
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query CAs: %w", err)
+	}
+	defer rows.Close()
+
+	var cas []store.PCACertificateAuthority
+	for rows.Next() {
+		var ca store.PCACertificateAuthority
+		var pathLength sql.NullInt32
+		err := rows.Scan(
+			&ca.CAID, &ca.ARN, &ca.Type, &ca.KMSKeyID, &ca.SubjectDN, &ca.State, &ca.CACertB64,
+			&pathLength, &ca.NotBefore, &ca.NotAfter, &ca.Description, &ca.Account, &ca.CreatedAt, &ca.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan CA: %w", err)
+		}
+		if pathLength.Valid {
+			pl := int(pathLength.Int32)
+			ca.PathLength = &pl
+		}
+		cas = append(cas, ca)
+	}
+	return cas, rows.Err()
+}
+
+// CreateCertificate inserts a new certificate record into the database
+func (s *Store) CreateCertificate(ctx context.Context, cert store.PCACertificate) error {
+	query := `
+		INSERT INTO pca_certificates (
+			cert_id, ca_id, serial, csr_b64, cert_b64, status,
+			not_before, not_after, revoked_at, revocation_reason, template, created_at, updated_at, account_id
+		) VALUES (
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9, $10, $11, $12, $13, $14
+		)
+	`
+	_, err := s.db.ExecContext(ctx, query,
+		cert.CertID, cert.CAID, cert.Serial, cert.CSRB64, cert.CertB64, cert.Status,
+		cert.NotBefore, cert.NotAfter, cert.RevokedAt, cert.RevocationReason, cert.Template, cert.CreatedAt, cert.UpdatedAt, s.accountForContext(ctx),
+	)
+	if err != nil {
+		return fmt.Errorf("insert certificate: %w", err)
+	}
+	return nil
+}
+
+// GetCertificate retrieves a certificate by its ID
+func (s *Store) GetCertificate(ctx context.Context, certID string) (store.PCACertificate, error) {
+	query := `
+		SELECT cert_id, ca_id, serial, csr_b64, cert_b64, status,
+		       not_before, not_after, revoked_at, revocation_reason, template, created_at, updated_at
+		FROM pca_certificates
+		WHERE cert_id = $1
+	`
+	row := s.db.QueryRowContext(ctx, query, certID)
+	var cert store.PCACertificate
+	var revokedAt sql.NullTime
+	var revocationReason sql.NullString
+	err := row.Scan(
+		&cert.CertID, &cert.CAID, &cert.Serial, &cert.CSRB64, &cert.CertB64, &cert.Status,
+		&cert.NotBefore, &cert.NotAfter, &revokedAt, &revocationReason, &cert.Template, &cert.CreatedAt, &cert.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return store.PCACertificate{}, fmt.Errorf("certificate not found")
+		}
+		return store.PCACertificate{}, fmt.Errorf("query certificate: %w", err)
+	}
+	if revokedAt.Valid {
+		cert.RevokedAt = &revokedAt.Time
+	}
+	if revocationReason.Valid {
+		cert.RevocationReason = revocationReason.String
+	}
+	return cert, nil
+}
+
+// ListCertificates returns all certificates issued by a CA
+func (s *Store) ListCertificates(ctx context.Context, caID string) ([]store.PCACertificate, error) {
+	query := `
+		SELECT cert_id, ca_id, serial, csr_b64, cert_b64, status,
+		       not_before, not_after, revoked_at, revocation_reason, template, created_at, updated_at
+		FROM pca_certificates
+		WHERE ca_id = $1
+		ORDER BY created_at DESC
+	`
+	rows, err := s.db.QueryContext(ctx, query, caID)
+	if err != nil {
+		return nil, fmt.Errorf("query certificates: %w", err)
+	}
+	defer rows.Close()
+
+	var certs []store.PCACertificate
+	for rows.Next() {
+		var cert store.PCACertificate
+		var revokedAt sql.NullTime
+		var revocationReason sql.NullString
+		err := rows.Scan(
+			&cert.CertID, &cert.CAID, &cert.Serial, &cert.CSRB64, &cert.CertB64, &cert.Status,
+			&cert.NotBefore, &cert.NotAfter, &revokedAt, &revocationReason, &cert.Template, &cert.CreatedAt, &cert.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan certificate: %w", err)
+		}
+		if revokedAt.Valid {
+			cert.RevokedAt = &revokedAt.Time
+		}
+		if revocationReason.Valid {
+			cert.RevocationReason = revocationReason.String
+		}
+		certs = append(certs, cert)
+	}
+	return certs, rows.Err()
+}
+
+// RevokeCertificate marks a certificate as revoked
+func (s *Store) RevokeCertificate(ctx context.Context, certID, reason string) error {
+	query := `
+		UPDATE pca_certificates
+		SET status = 'REVOKED', revoked_at = NOW(), revocation_reason = $1, updated_at = NOW()
+		WHERE cert_id = $2
+	`
+	result, err := s.db.ExecContext(ctx, query, reason, certID)
+	if err != nil {
+		return fmt.Errorf("revoke certificate: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("certificate not found")
+	}
+	return nil
+}

@@ -71,7 +71,10 @@ seal "awskms" {
 
 ## Project layout
 
-- `cmd/server`: main Citadel service (AWS-compatible and native APIs)
+- `cmd/server`: the Citadel binary (config, store and server wiring)
+- `internal/server`: HTTP routing, middleware and handlers (AWS-compatible and native APIs)
+- `internal/store`: domain records and storage interfaces, with `postgres` (versioned SQL migrations) and `memory` backends
+- `internal/config`, `internal/sigv4`, `internal/cryptoutil`, `internal/arn`: configuration, SigV4 verification, crypto helpers and ARN helpers
 - `web`: Svelte frontend for the operator console
 - `sdk`: client libraries
 - `docs`: architecture and implementation notes
