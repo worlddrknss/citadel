@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/worlddrknss/citadel/internal/arn"
+	"github.com/worlddrknss/citadel/internal/cryptoutil"
 	"github.com/worlddrknss/citadel/internal/store"
 
 	// Registers the "postgres" database/sql driver this backend uses.
@@ -26,8 +27,10 @@ type Store struct {
 	// rotation (see kms_wrapping.go).
 	previousWrappingKeys [][]byte
 	auditHMACKey         []byte
-	region               string
-	accountID            string
+	// serviceRoot is the deployment root secret (see service_root.go).
+	serviceRoot []byte
+	region      string
+	accountID   string
 }
 
 // Options configures a Store.
@@ -40,7 +43,8 @@ type Options struct {
 	// has since been rotated out; nothing new is wrapped with them.
 	PreviousWrappingKeys [][]byte
 	// AuditHMACKey keys the audit chain MAC. When empty it is derived from
-	// WrappingKey; the chain is never unkeyed.
+	// the deployment root secret (initially the wrapping key); the chain is
+	// never unkeyed.
 	AuditHMACKey []byte
 	// Region and AccountID are the configured deployment identity, used only
 	// when the database has not recorded one yet.
@@ -70,6 +74,14 @@ func Open(ctx context.Context, db *sql.DB, opts Options) (*Store, error) {
 	store.accountID = accountID
 	if err := store.migrateLegacyKeyMaterial(ctx); err != nil {
 		return nil, fmt.Errorf("migrate legacy key material: %w", err)
+	}
+	root, err := store.loadServiceRoot(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load deployment root secret: %w", err)
+	}
+	store.serviceRoot = root
+	if len(opts.AuditHMACKey) == 0 {
+		store.auditHMACKey = cryptoutil.DeriveAuditHMACKey(root)
 	}
 	if err := store.migrateResourceARNs(ctx); err != nil {
 		return nil, fmt.Errorf("migrate resource ARNs: %w", err)

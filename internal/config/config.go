@@ -275,8 +275,10 @@ func Load() (Config, error) {
 		cfg.LegacyWrappingKey = cryptoutil.DeriveWrappingKey(cfg.LegacyMasterKey)
 	}
 
-	// The audit chain is never unkeyed: without an explicit key, derive one.
-	if len(cfg.AuditHMACKey) == 0 {
+	// The audit chain is never unkeyed. With PostgreSQL the store derives the
+	// key from its persisted root secret (stable across wrapping-key
+	// rotation); only the in-memory store derives it here.
+	if len(cfg.AuditHMACKey) == 0 && cfg.DBConnString == "" {
 		switch {
 		case len(cfg.WrappingKey) > 0:
 			cfg.AuditHMACKey = cryptoutil.DeriveAuditHMACKey(cfg.WrappingKey)

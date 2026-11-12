@@ -96,6 +96,7 @@ type RewrapReport struct {
 	AccessKeySecrets  int // IAM access-key secrets
 	STSSessionSecrets int // STS temporary-credential secrets
 	ACMEKeys          int // ACME account and certificate private keys
+	ServiceKeys       int // the deployment root secret derived keys come from
 }
 
 // KMSLifecycleStore is implemented by every backend. Methods taking a keyID

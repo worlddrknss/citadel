@@ -134,15 +134,12 @@ var (
 )
 
 // fingerprintKey is the per-deployment key for value fingerprints, derived
-// with HKDF from the KMS wrapping key (or, for the in-memory store, the
-// legacy master key). Without either it falls back to a random per-process
-// key, so fingerprints are still keyed, just not stable across restarts.
+// with HKDF from the deployment secret. Without one it falls back to a random
+// per-process key, so fingerprints are still keyed, just not stable across
+// restarts.
 func (s *Server) fingerprintKey() []byte {
-	switch {
-	case len(s.cfg.WrappingKey) > 0:
-		return cryptoutil.DeriveFingerprintKey(s.cfg.WrappingKey)
-	case len(s.cfg.LegacyMasterKey) > 0:
-		return cryptoutil.DeriveFingerprintKey(s.cfg.LegacyMasterKey)
+	if secret := s.deploymentSecret(); len(secret) > 0 {
+		return cryptoutil.DeriveFingerprintKey(secret)
 	}
 	ephemeralFingerprintOnce.Do(func() {
 		ephemeralFingerprintKey = cryptoutil.DeriveFingerprintKey([]byte(cryptoutil.RandomHex(32)))

@@ -633,6 +633,6 @@ func (s *Server) handleV1KMSRewrap(w http.ResponseWriter, r *http.Request) {
 	writeNativeJSON(w, http.StatusOK, map[string]any{
 		"scanned": report.Scanned, "rewrapped": report.Rewrapped, "failed": report.Failed,
 		"keyMaterial": report.KeyMaterial, "accessKeySecrets": report.AccessKeySecrets,
-		"stsSessionSecrets": report.STSSessionSecrets, "acmeKeys": report.ACMEKeys,
+		"stsSessionSecrets": report.STSSessionSecrets, "acmeKeys": report.ACMEKeys, "serviceKeys": report.ServiceKeys,
 	})
 }

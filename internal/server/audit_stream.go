@@ -289,10 +289,8 @@ func (s *Server) sendAuditEvent(ctx context.Context, cfg store.AuditStreamConfig
 
 func (s *Server) streamTokenKey() ([]byte, error) {
 	switch {
-	case len(s.cfg.WrappingKey) > 0:
-		return cryptoutil.DeriveAuditStreamKey(s.cfg.WrappingKey), nil
-	case len(s.cfg.LegacyMasterKey) > 0:
-		return cryptoutil.DeriveAuditStreamKey(s.cfg.LegacyMasterKey), nil
+	case len(s.deploymentSecret()) > 0:
+		return cryptoutil.DeriveAuditStreamKey(s.deploymentSecret()), nil
 	case len(s.cfg.AuditHMACKey) > 0:
 		return cryptoutil.DeriveAuditStreamKey(s.cfg.AuditHMACKey), nil
 	}

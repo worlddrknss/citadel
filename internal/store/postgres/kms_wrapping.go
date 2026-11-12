@@ -89,6 +89,7 @@ var rewrapTargets = []rewrapTarget{
 	{table: "sts_sessions", idCol: "access_key_id", aadExpr: "access_key_id", wrappedCol: "secret_wrapped_b64", nonceCol: "secret_nonce_b64"},
 	{table: "acme_le_accounts", idCol: "id", aadExpr: "id", wrappedCol: "account_key_wrapped_b64", nonceCol: "account_key_nonce_b64"},
 	{table: "acme_le_certificates", idCol: "cert_id", aadExpr: "cert_id", wrappedCol: "key_wrapped_b64", nonceCol: "key_nonce_b64"},
+	{table: "service_keys", idCol: "purpose", aadExpr: "'service-key:' || purpose", wrappedCol: "key_wrapped_b64", nonceCol: "key_nonce_b64"},
 }
 
 // RewrapAll re-wraps every stored value that is not yet wrapped with the
@@ -172,6 +173,8 @@ func (s *Store) rewrapTable(ctx context.Context, t rewrapTarget, report *store.R
 			report.AccessKeySecrets++
 		case "sts_sessions":
 			report.STSSessionSecrets++
+		case "service_keys":
+			report.ServiceKeys++
 		default:
 			report.ACMEKeys++
 		}
