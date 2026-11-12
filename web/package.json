@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:e2e:live": "playwright test -c e2e-live"
+    "test:e2e:live": "playwright test -c e2e-live",
+    "screenshots": "CITADEL_SCREENSHOTS=1 playwright test -c e2e-live"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
