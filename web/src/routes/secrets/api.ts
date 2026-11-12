@@ -46,13 +46,33 @@ export interface ProjectInfo extends Project {
 export interface VersionInfo extends ItemVersion {
   /** Who wrote this version. */
   createdBy?: string;
+  /** Server-assigned 1-based ordinal (oldest = 1). */
+  version?: number;
 }
 
 export interface SecretDetail extends ItemDetail {
   /** Character length of the current value, without revealing it. */
   valueLength?: number;
-  /** e.g. "sha256:3f9a…c41e" — a truncated hash of the current value. */
+  /**
+   * Keyed fingerprint of the current value, "hmac:<12 hex>" (HMAC under a
+   * per-deployment key, so it can't be brute-forced offline).
+   */
   fingerprint?: string;
+  updatedBy?: string;
+  /** 1-based ordinal of the current version. */
+  version?: number;
+}
+
+/**
+ * Per-account secrets settings:
+ *   GET  /v1/secrets/settings (viewer) → { viewersCanReveal, updatedAt?, updatedBy? }
+ *   POST /v1/secrets/settings (admin) { viewersCanReveal } → same
+ * While viewersCanReveal is off the server refuses value reads (reveal,
+ * versions' values, .env export) by viewers with 403 reveal_forbidden.
+ */
+export interface SecretSettings {
+  viewersCanReveal: boolean;
+  updatedAt?: string;
   updatedBy?: string;
 }
 
@@ -78,6 +98,12 @@ export interface EnvPolicy {
   requireApproval: boolean;
   minApprovals: number;
   approverRoles: string[];
+  /**
+   * "project": this project's own policy. "organization": the org-wide
+   * approval environments (Administration → Organization settings), which
+   * a project can tighten but not remove.
+   */
+  source?: 'project' | 'organization';
   /** From the environment's name (dev/staging/prod…), for its color. */
   tier: Tier;
 }
@@ -94,7 +120,8 @@ export const secretsApi = {
   detail: (project: string, env: string, path: string, key: string) =>
     api.secretDetail(project, env, path, key) as Promise<SecretDetail>,
   versions: async (project: string, env: string, path: string, key: string) =>
-    (await api.versions(project, env, path, key)).versions as VersionInfo[],
+    // The server sends `stages: null` for versions with no staging label.
+    ((await api.versions(project, env, path, key)).versions as VersionInfo[]).map((v) => ({ ...v, stages: v.stages ?? [] })),
 
   /** Current value as text (binary values are reported, not shown). */
   async revealValue(project: string, env: string, path: string, key: string): Promise<string> {
@@ -117,7 +144,9 @@ export const secretsApi = {
 
   /** Approval policies for a project's environments, keyed by env. Empty when the backend has none. */
   async envPolicies(project: string): Promise<Record<string, EnvPolicy>> {
-    let res: { policies?: { project: string; env: string; approvalsRequired: number; approverRoles?: string[] }[] };
+    let res: {
+      policies?: { project: string; env: string; approvalsRequired: number; approverRoles?: string[]; source?: 'project' | 'organization' }[];
+    };
     try {
       res = await req('/v1/change-requests/policies');
     } catch (e) {
@@ -133,14 +162,20 @@ export const secretsApi = {
         requireApproval: p.approvalsRequired > 0,
         minApprovals: p.approvalsRequired,
         approverRoles: p.approverRoles ?? [],
+        source: p.source,
         tier: envTier(p.env)
       };
     }
     return out;
   },
 
-  savePolicy: (body: { project: string; env: string; approvalsRequired: number }) =>
+  /** approvalsRequired 0 removes the project policy; always send the roles (the server replaces them). */
+  savePolicy: (body: { project: string; env: string; approvalsRequired: number; approverRoles: string[] }) =>
     req<{ saved: boolean }>('/v1/change-requests/policies', { method: 'POST', body: JSON.stringify(body) }),
+
+  settings: () => req<SecretSettings>('/v1/secrets/settings'),
+  saveSettings: (body: { viewersCanReveal: boolean }) =>
+    req<SecretSettings>('/v1/secrets/settings', { method: 'POST', body: JSON.stringify(body) }),
 
   /**
    * NEW CONTRACT — extends POST /v1/secrets/bulk (editor) with two actions:

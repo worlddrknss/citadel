@@ -10,8 +10,9 @@
   import { confirm } from '$lib/stores/confirm.svelte';
   import { session } from '$lib/stores/session.svelte';
   import { toast } from '$lib/stores/toast.svelte';
+  import { revealPolicy } from '$lib/stores/revealPolicy.svelte';
   import { param, setParams } from '$lib/url';
-  import { secretsApi, type ProjectInfo } from './api';
+  import { secretsApi, type ProjectInfo, type SecretSettings } from './api';
   import { envLabel, envTier, sortEnvs, tierTone } from './lib';
 
   let projects = $state<ProjectInfo[]>([]);
@@ -34,6 +35,38 @@
   const slugOk = $derived(/^[A-Za-z0-9_.-]+$/.test(formSlug.trim()));
 
   const canEdit = $derived(session.can('editor'));
+  const isAdmin = $derived(session.can('admin'));
+
+  // Account secrets settings (admin): whether viewers may read values.
+  let settingsOpen = $state(false);
+  let settings = $state<SecretSettings | null>(null);
+  let settingsReveal = $state(false);
+  let settingsBusy = $state(false);
+  let settingsError = $state('');
+  async function openSettings() {
+    settingsError = '';
+    settingsOpen = true;
+    try {
+      settings = await secretsApi.settings();
+      settingsReveal = settings.viewersCanReveal;
+    } catch (e) {
+      settingsError = e instanceof Error ? e.message : 'Could not load the settings';
+    }
+  }
+  async function saveSettings(e: SubmitEvent) {
+    e.preventDefault();
+    settingsBusy = true;
+    try {
+      settings = await secretsApi.saveSettings({ viewersCanReveal: settingsReveal });
+      revealPolicy.set(settings.viewersCanReveal);
+      toast.success(settings.viewersCanReveal ? 'Viewers can now reveal values' : 'Viewers can no longer reveal values');
+      settingsOpen = false;
+    } catch (err) {
+      toast.error(err, 'Could not save the settings');
+    } finally {
+      settingsBusy = false;
+    }
+  }
 
   const columns: Column<ProjectInfo>[] = [
     { id: 'project', label: 'Project', sort: (p) => p.name || p.slug },
@@ -130,6 +163,11 @@
   description="Projects group secrets by environment and folder. Every item stays readable through the AWS Secrets Manager API for External Secrets and SDK clients."
 >
   {#snippet actions()}
+    {#if isAdmin}
+      <button type="button" class="btn btn-secondary" onclick={openSettings}>
+        <Icon name="settings" size={16} />Settings
+      </button>
+    {/if}
     {#if canEdit}
       <button type="button" class="btn btn-primary" onclick={openCreate}>
         <Icon name="plus" size={16} />New project
@@ -274,7 +312,43 @@
   {/snippet}
 </Modal>
 
+<Modal bind:open={settingsOpen} title="Secrets settings" description="Applies to every project in this account." size="sm">
+  <form id="secrets-settings-form" class="form" onsubmit={saveSettings}>
+    {#if settingsError}
+      <div class="callout callout-danger" role="alert"><Icon name="alert-circle" size={16} /><span>{settingsError}</span></div>
+    {:else if !settings}
+      <span class="skeleton" style:width="100%" style:height="40px"></span>
+    {:else}
+      <label class="check-row">
+        <input type="checkbox" bind:checked={settingsReveal} />
+        <span>
+          <span class="field-label">Viewers can reveal values</span>
+          <span class="field-hint block">
+            When off, viewers see names, metadata and fingerprints only: revealing, version values and .env export need the
+            editor role. Every reveal is logged either way.
+          </span>
+        </span>
+      </label>
+      {#if settings.updatedBy}
+        <p class="subtle small">Last changed by {settings.updatedBy}{settings.updatedAt ? ` · ${new Date(settings.updatedAt).toLocaleString()}` : ''}</p>
+      {/if}
+    {/if}
+  </form>
+  {#snippet footer()}
+    <button type="button" class="btn btn-secondary" onclick={() => (settingsOpen = false)}>Cancel</button>
+    <button type="submit" form="secrets-settings-form" class="btn btn-primary" disabled={settingsBusy || !settings}>Save settings</button>
+  {/snippet}
+</Modal>
+
 <style>
+  .check-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .check-row input {
+    margin-top: 3px;
+  }
   .grow {
     flex: 1;
     display: flex;

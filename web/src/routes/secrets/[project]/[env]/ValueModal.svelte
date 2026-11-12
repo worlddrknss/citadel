@@ -3,7 +3,7 @@
   approval the same form opens a change request instead of writing.
 -->
 <script lang="ts">
-  import { api, type KMSKey } from '$lib/api';
+  import { api, ApiError, type KMSKey } from '$lib/api';
   import Icon from '$lib/components/Icon.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import { toast } from '$lib/stores/toast.svelte';
@@ -87,9 +87,19 @@
         toast.success(`Opened a change request for ${k}. It applies once approved.`);
         onsaved({ key: k, changeRequest: true, created: false });
       } else {
-        const res = await api.put({ project, env, path, key: k, value, kmsKeyId: kms || undefined });
-        toast.success(res.created ? `Created ${k}` : `Stored a new version of ${k}`);
-        onsaved({ key: k, changeRequest: false, created: res.created });
+        try {
+          const res = await api.put({ project, env, path, key: k, value, kmsKeyId: kms || undefined });
+          toast.success(res.created ? `Created ${k}` : `Stored a new version of ${k}`);
+          onsaved({ key: k, changeRequest: false, created: res.created });
+        } catch (err) {
+          // The environment needs approval although the console didn't know
+          // (policy added meanwhile, or the policy list failed to load):
+          // send the same value through a change request instead.
+          if (!(err instanceof ApiError && err.code === 'approval_required')) throw err;
+          await api.createChangeRequest({ project, env, path, key: k, value });
+          toast.success(`${env} needs approval, so this opened a change request for ${k}. It applies once approved.`);
+          onsaved({ key: k, changeRequest: true, created: false });
+        }
       }
       value = '';
       open = false;

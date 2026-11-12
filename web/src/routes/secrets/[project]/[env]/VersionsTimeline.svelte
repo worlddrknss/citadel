@@ -9,8 +9,15 @@
     ordinal: number;
   }
 
-  /** Newest first, numbered v1…vN by age. */
+  /**
+   * Newest first. Uses the server's 1-based `version` ordinal when present
+   * (timestamps have second resolution, so sorting by them can misorder
+   * quick successive writes); older servers are numbered v1…vN by age.
+   */
   export function numberVersions(vs: VersionInfo[]): NumberedVersion[] {
+    if (vs.length && vs.every((v) => typeof v.version === 'number' && v.version > 0)) {
+      return vs.map((v) => ({ ...v, ordinal: v.version as number })).sort((a, b) => b.ordinal - a.ordinal);
+    }
     return [...vs]
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
       .map((v, i) => ({ ...v, ordinal: i + 1 }))

@@ -8,7 +8,7 @@
   import Badge from '$lib/components/Badge.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import { isNotImplemented } from '../http';
-  import { approvalsApi, envTone, type ApprovalPolicy } from './api';
+  import { approvalsApi, envTone, MAX_APPROVALS, type ApprovalPolicy } from './api';
 
   let { open = $bindable(false), onclose }: { open?: boolean; onclose?: () => void } = $props();
 
@@ -21,7 +21,9 @@
   let project = $state('');
   let env = $state('');
   let required = $state(1);
+  let editorsMayApprove = $state(false);
   let saving = $state(false);
+  const rolesFor = (editors: boolean) => (editors ? ['admin', 'editor'] : ['admin']);
 
   const envs = $derived(projects.find((p) => p.slug === project)?.environments ?? []);
 
@@ -47,11 +49,12 @@
     if (!project || !env) return;
     saving = true;
     try {
-      await approvalsApi.savePolicy({ project, env, approvalsRequired: required });
+      await approvalsApi.savePolicy({ project, env, approvalsRequired: required, approverRoles: rolesFor(editorsMayApprove) });
       toast.success(`${project} / ${env} now needs ${required} approval${required === 1 ? '' : 's'}`);
       project = '';
       env = '';
       required = 1;
+      editorsMayApprove = false;
       await load();
     } catch (err) {
       toast.error(err, 'Could not save the policy');
@@ -69,7 +72,7 @@
     });
     if (!ok) return;
     try {
-      await approvalsApi.savePolicy({ project: p.project, env: p.env, approvalsRequired: 0 });
+      await approvalsApi.savePolicy({ project: p.project, env: p.env, approvalsRequired: 0, approverRoles: p.approverRoles });
       toast.success('Policy removed');
       await load();
     } catch (err) {
@@ -95,15 +98,28 @@
       {#if policies.length}
         <div class="scroll">
           <table class="table">
-            <thead><tr><th scope="col">Environment</th><th scope="col">Approvals</th><th scope="col">Who can approve</th>{#if canEdit}<th scope="col"><span class="sr-only">Actions</span></th>{/if}</tr></thead>
+            <thead><tr><th scope="col">Environment</th><th scope="col">Approvals</th><th scope="col">Who can approve</th><th scope="col">Source</th>{#if canEdit}<th scope="col"><span class="sr-only">Actions</span></th>{/if}</tr></thead>
             <tbody>
               {#each policies as p (p.project + '/' + p.env)}
                 <tr>
                   <td><span class="mono">{p.project}</span> / <Badge tone={envTone(p.env)} dot={false}>{p.env}</Badge></td>
                   <td class="num">{p.approvalsRequired}</td>
                   <td class="muted">{p.approverRoles.join(' or ')}, not the requester</td>
+                  <td>
+                    {#if p.source === 'organization'}
+                      <Badge tone="neutral" dot={false}>Organization</Badge>
+                    {:else}
+                      <Badge tone="info" dot={false}>Project</Badge>
+                    {/if}
+                  </td>
                   {#if canEdit}
-                    <td class="end"><button type="button" class="btn btn-danger-ghost btn-sm" onclick={() => remove(p)}>Remove</button></td>
+                    <td class="end">
+                      {#if p.source === 'organization'}
+                        <span class="subtle small" title="Set in Administration → Organization settings">Org-wide</span>
+                      {:else}
+                        <button type="button" class="btn btn-danger-ghost btn-sm" onclick={() => remove(p)} aria-label="Remove policy for {p.project} / {p.env}">Remove</button>
+                      {/if}
+                    </td>
                   {/if}
                 </tr>
               {/each}
@@ -112,6 +128,9 @@
         </div>
       {:else}
         <p class="muted">No environment needs approval yet. Changes apply as soon as an editor saves them.</p>
+      {/if}
+      {#if policies.some((p) => p.source === 'organization')}
+        <p class="subtle small">Organization policies come from the approval environments in Administration → Organization settings. A project policy for the same environment overrides them.</p>
       {/if}
 
       {#if canEdit}
@@ -132,7 +151,11 @@
           </label>
           <label class="field narrow">
             <span class="field-label">Approvals</span>
-            <input class="input" type="number" min="1" max="5" bind:value={required} required />
+            <input class="input" type="number" min="1" max={MAX_APPROVALS} bind:value={required} required />
+          </label>
+          <label class="check">
+            <input type="checkbox" bind:checked={editorsMayApprove} />
+            <span>Editors can approve</span>
           </label>
           <button type="submit" class="btn btn-primary" disabled={saving || !project || !env}>{saving ? 'Saving…' : 'Add policy'}</button>
         </form>
@@ -166,5 +189,11 @@
   }
   .add .narrow {
     flex: 0 1 100px;
+  }
+  .check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 36px;
   }
 </style>

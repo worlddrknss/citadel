@@ -136,7 +136,9 @@
       : []
   );
   const pendingCrs = $derived(crs.state === 'ok' ? crs.data.filter((c) => c.status === 'pending') : []);
-  const waitingOnMe = $derived(isAdmin ? pendingCrs.filter((c) => c.requester !== me?.username).length : 0);
+  const waitingOnMe = $derived(
+    pendingCrs.filter((c) => c.requester !== me?.username && (c.canApprove ?? isAdmin)).length
+  );
 
   // ---- checklist ----------------------------------------------------------
   const dismissKey = $derived(`citadel-setup-dismissed:${me?.accountId ?? ''}`);
@@ -327,7 +329,7 @@
       'git-pull-request',
       'Pending approvals',
       String(pendingCrs.length),
-      isAdmin ? (waitingOnMe ? `${waitingOnMe} ${waitingOnMe === 1 ? 'is' : 'are'} waiting on you` : 'None waiting on you') : 'Admins review change requests',
+      session.can('editor') ? (waitingOnMe ? `${waitingOnMe} ${waitingOnMe === 1 ? 'is' : 'are'} waiting on you` : 'None waiting on you') : 'Approvers review change requests',
       waitingOnMe ? { text: 'Your review', tone: 'accent' } : null
     )}
   {:else}

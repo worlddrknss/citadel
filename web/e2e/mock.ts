@@ -187,8 +187,8 @@ const auditRows = Array.from({ length: 12 }, (_, i) => ({
 }));
 
 const changeRequests = [
-  { id: '1042', project: 'payments', env: 'prod', path: '/', key: 'STRIPE_KEY', requester: 'bob', status: 'pending', createdAt: ago(2 * 3_600_000) },
-  { id: '1041', project: 'payments', env: 'prod', path: '/db', key: 'DB_PASSWORD', requester: 'alice', status: 'approved', createdAt: ago(3 * DAY), decidedBy: 'carol', decidedAt: ago(2 * DAY) }
+  { id: 'cr-1a2b3c4d5e6f', project: 'payments', env: 'prod', path: '/', key: 'STRIPE_KEY', requester: 'bob', status: 'pending', createdAt: ago(2 * 3_600_000), approvals: 0, approvalsRequired: 1, approverRoles: ['admin'], canApprove: true },
+  { id: 'cr-0f9e8d7c6b5a', project: 'payments', env: 'prod', path: '/db', key: 'DB_PASSWORD', requester: 'alice', status: 'approved', createdAt: ago(3 * DAY), decidedBy: 'carol', decidedAt: ago(2 * DAY) }
 ];
 
 const roles = [
@@ -284,20 +284,27 @@ const GET: Record<string, Handler> = {
       policyDocument: '',
       rotation: { enabled: false },
       valueLength: 24,
-      fingerprint: 'sha256:3f9a…c41e'
+      fingerprint: 'hmac:3f9a0b1c2d4e',
+      version: 2
     };
   },
   '/v1/secrets/versions': (q) => ({
     key: q.get('key'),
     versions: [
-      { versionId: 'v-current', stages: ['AWSCURRENT'], createdAt: ago(3_600_000), createdBy: 'alice' },
-      { versionId: 'v-prev', stages: ['AWSPREVIOUS'], createdAt: ago(5 * DAY), createdBy: 'svc/rotation' }
+      { versionId: 'v-current', version: 2, stages: ['AWSCURRENT'], createdAt: ago(3_600_000), createdBy: 'alice' },
+      { versionId: 'v-prev', version: 1, stages: ['AWSPREVIOUS'], createdAt: ago(5 * DAY), createdBy: 'svc/rotation' }
     ]
   }),
   '/v1/secrets/policy': (q) => ({ key: q.get('key'), policyDocument: '' }),
+  '/v1/secrets/settings': () => ({ viewersCanReveal: false, updatedAt: ago(DAY), updatedBy: 'alice' }),
   '/v1/change-requests': () => ({ changeRequests }),
+  // Real shape: project policies plus organization approval environments
+  // (Administration → settings) listed per project with source "organization".
   '/v1/change-requests/policies': () => ({
-    policies: [{ project: 'payments', env: 'prod', approvalsRequired: 1, approverRoles: ['admin'] }]
+    policies: [
+      { project: 'payments', env: 'prod', approvalsRequired: 1, approverRoles: ['admin'], source: 'project' },
+      { project: 'web', env: 'prod', approvalsRequired: 1, approverRoles: ['admin'], source: 'organization' }
+    ]
   }),
   '/v1/change-requests/detail': (q) => {
     const cr = changeRequests.find((c) => c.id === q.get('id')) ?? changeRequests[0];
@@ -309,13 +316,21 @@ const GET: Record<string, Handler> = {
           key: cr.key,
           path: cr.path,
           change: 'modified',
-          previous: { sha256: 'a'.repeat(64), length: 20, version: 'v7' },
-          proposed: { sha256: 'b'.repeat(64), length: 24, version: 'v8' }
+          // Keyed HMAC fingerprints (12 hex), not hashes of the value.
+          previous: { fingerprint: 'hmac:aaaaaaaaaaaa', sha256: 'aaaaaaaaaaaa', length: 20, version: 'v7' },
+          proposed: { fingerprint: 'hmac:bbbbbbbbbbbb', sha256: 'bbbbbbbbbbbb', length: 24, version: 'v8' }
         }
       ],
-      policy: { name: 'payments/prod', approvalsRequired: 1, approverRoles: ['admin'] },
+      policy: { name: `${cr.project}/${cr.env} approval`, approvalsRequired: 1, approverRoles: ['admin'] },
       approvals: [],
-      canApprove: cr.requester !== me.username && cr.status === 'pending'
+      requesterRole: 'editor',
+      canApprove: cr.requester !== me.username && cr.status === 'pending',
+      ...(cr.requester === me.username && cr.status === 'pending'
+        ? { cannotApproveReason: "You can't approve your own change request." }
+        : cr.status !== 'pending'
+          ? { cannotApproveReason: `This request has already been ${cr.status}.` }
+          : {}),
+      canReject: cr.status === 'pending'
     };
   },
   '/v1/kms/keys': () => ({ keys: keyList }),
