@@ -19,6 +19,7 @@ export interface KeyExtras {
   /** True for the immutable per-account default key (alias/default). */
   managed?: boolean;
   rotation?: { enabled: boolean; rotationPeriodDays?: number };
+  /** Detail response only: how many secrets and parameters use this key. */
   usedBy?: { secrets: number; parameters: number };
   origin?: string;
 }
@@ -60,6 +61,8 @@ export const kms = {
   rotation: (keyId: string) => req<RotationStatus>(`/v1/kms/keys/rotation?${qs({ keyId })}`),
   setRotation: (keyId: string, enabled: boolean, rotationPeriodDays?: number) =>
     post<RotationStatus>('/v1/kms/keys/rotation', { keyId, enabled, rotationPeriodDays }),
+  /** Rotates a symmetric key's material now; returns the new rotation status. */
+  rotateNow: (keyId: string) => post<RotationStatus>('/v1/kms/keys/rotate', { keyId }),
 
   tags: (keyId: string) => req<{ keyId: string; tags: Tag[] }>(`/v1/kms/keys/tags?${qs({ keyId })}`),
   tag: (keyId: string, tags: Tag[]) => post<{ tagged: boolean }>('/v1/kms/keys/tags', { keyId, tags }),
@@ -138,12 +141,30 @@ export function signingAlgorithms(d: KMSKeyDetail): string[] {
   return APPROVED_SIGNING.filter((a) => a.startsWith('RSASSA'));
 }
 
-/** Grant operations that make sense for a key's usage. */
-export function grantOperations(usage: string): string[] {
+/**
+ * Grant operations the server accepts for a key's type (kms_grants.go):
+ * data keys only come from symmetric keys, and RSA encryption keys can hand
+ * out their public key.
+ */
+export function grantOperations(usage: string, spec: string): string[] {
   const common = ['DescribeKey', 'CreateGrant', 'RetireGrant'];
-  return usage === 'SIGN_VERIFY'
-    ? ['Sign', 'Verify', 'GetPublicKey', ...common]
-    : ['Encrypt', 'Decrypt', 'GenerateDataKey', 'GenerateDataKeyWithoutPlaintext', 'ReEncryptFrom', 'ReEncryptTo', ...common];
+  if (usage === 'SIGN_VERIFY') return ['Sign', 'Verify', 'GetPublicKey', ...common];
+  if (spec !== SYMMETRIC) return ['Encrypt', 'Decrypt', 'ReEncryptFrom', 'ReEncryptTo', 'GetPublicKey', ...common];
+  return ['Encrypt', 'Decrypt', 'GenerateDataKey', 'GenerateDataKeyWithoutPlaintext', 'ReEncryptFrom', 'ReEncryptTo', ...common];
+}
+
+/** Human label for a key's origin as the server reports it. */
+export function originLabel(origin?: string): string {
+  switch (origin) {
+    case undefined:
+    case '':
+    case 'AWS_KMS':
+      return 'Citadel, FIPS 140 module';
+    case 'EXTERNAL':
+      return 'Imported key material';
+    default:
+      return origin;
+  }
 }
 
 // ---- Display helpers ------------------------------------------------------

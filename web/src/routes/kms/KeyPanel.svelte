@@ -5,6 +5,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { api, errorMessage } from '$lib/api';
+  import { session } from '$lib/stores/session.svelte';
   import Icon from '$lib/components/Icon.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import Tabs from '$lib/components/Tabs.svelte';
@@ -23,6 +24,7 @@
     primaryAlias,
     fmtDate,
     rotationLabel,
+    originLabel,
     encryptionAlgorithms,
     signingAlgorithms,
     USAGE_LABEL,
@@ -54,6 +56,8 @@
     oncancel: (k: Key) => void;
   } = $props();
 
+  // Scheduling and cancelling deletion are admin-only on the server.
+  const canAdmin = $derived(session.can('admin'));
   let detail = $state<KeyDetail | null>(null);
   let loading = $state(true);
   let error = $state('');
@@ -205,7 +209,7 @@
           <dt>Algorithms</dt>
           <dd class="mono id">{(detail.keyUsage === 'SIGN_VERIFY' ? signingAlgorithms(detail) : encryptionAlgorithms(detail)).join(', ')}</dd>
           <dt>Origin</dt>
-          <dd>{detail.origin ?? 'Citadel, FIPS 140 module'}</dd>
+          <dd>{originLabel(detail.origin)}</dd>
           <dt>Rotation</dt>
           <dd>
             {asKey ? rotationLabel(asKey) : '—'}
@@ -268,14 +272,20 @@
   {#if canEdit && asKey && detail}
     <div class="foot">
       {#if detail.deletionDate}
-        <button type="button" class="btn btn-secondary btn-sm" onclick={() => oncancel(asKey)}><Icon name="rotate" size={14} />Cancel deletion</button>
+        {#if canAdmin}
+          <button type="button" class="btn btn-secondary btn-sm" onclick={() => oncancel(asKey)}><Icon name="rotate" size={14} />Cancel deletion</button>
+        {:else}
+          <span class="subtle small">An admin can cancel the deletion.</span>
+        {/if}
       {:else}
         <button type="button" class="btn btn-secondary btn-sm" onclick={addAlias}><Icon name="plus" size={14} />Add alias</button>
         {#if managed}
           <span class="subtle small managed-note"><Icon name="lock" size={12} />Managed keys can't be disabled or deleted</span>
         {:else}
           <button type="button" class="btn btn-secondary btn-sm" onclick={() => ontoggle(asKey)}>{detail.enabled ? 'Disable' : 'Enable'}</button>
-          <button type="button" class="btn btn-danger-ghost btn-sm push" onclick={() => onschedule(asKey)}><Icon name="trash" size={14} />Schedule deletion</button>
+          {#if canAdmin}
+            <button type="button" class="btn btn-danger-ghost btn-sm push" onclick={() => onschedule(asKey)}><Icon name="trash" size={14} />Schedule deletion</button>
+          {/if}
         {/if}
       {/if}
     </div>
