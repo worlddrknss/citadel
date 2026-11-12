@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/worlddrknss/citadel/internal/sigv4"
 )
 
 // sigV4Sign signs req with SigV4 the way an AWS SDK does for JSON-protocol
@@ -36,7 +38,7 @@ func sigV4Sign(t *testing.T, req *http.Request, body []byte, accessKey, secret s
 	hc := sha256.Sum256([]byte(canonical))
 	scope := date + "/us-east-1/kms/aws4_request"
 	sts := strings.Join([]string{"AWS4-HMAC-SHA256", amzDate, scope, hex.EncodeToString(hc[:])}, "\n")
-	sig := hex.EncodeToString(hmacSHA256(deriveSigningKey(secret, date, "us-east-1", "kms"), []byte(sts)))
+	sig := hex.EncodeToString(sigv4.HMACSHA256(sigv4.DeriveSigningKey(secret, date, "us-east-1", "kms"), []byte(sts)))
 	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+accessKey+"/"+scope+
 		", SignedHeaders="+strings.Join(signed, ";")+", Signature="+sig)
 }
@@ -106,27 +108,6 @@ func TestAWSAuthCallerReachesPolicyPrincipal(t *testing.T) {
 	r2.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAX/20260101/us-east-1/kms/aws4_request")
 	if _, ok := callerAccountFromContext(r2.Context()); ok {
 		t.Fatal("unverified header produced a caller account")
-	}
-}
-
-func TestCheckAmzDate(t *testing.T) {
-	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
-	cases := []struct {
-		name, amz, scope string
-		ok               bool
-	}{
-		{"current", "20261112T120000Z", "20261112", true},
-		{"within skew", "20261112T115000Z", "20261112", true},
-		{"too old", "20261112T113000Z", "20261112", false},
-		{"future", "20261112T123000Z", "20261112", false},
-		{"scope mismatch", "20261112T120000Z", "20261111", false},
-		{"malformed", "yesterday", "20261112", false},
-		{"missing", "", "20261112", false},
-	}
-	for _, c := range cases {
-		if err := checkAmzDate(c.amz, c.scope, now); (err == nil) != c.ok {
-			t.Errorf("%s: err=%v, want ok=%v", c.name, err, c.ok)
-		}
 	}
 }
 

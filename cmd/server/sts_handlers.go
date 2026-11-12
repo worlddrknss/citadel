@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/arn"
+	"github.com/worlddrknss/citadel/internal/sigv4"
 )
 
 // AWS-compatible Security Token Service (STS).
@@ -42,7 +43,7 @@ func (s *server) handleSTS(w http.ResponseWriter, r *http.Request) {
 	// Read the body once: we need its SHA-256 for SigV4 verification AND the
 	// parsed form for the action parameters. drainAndHashBody restores r.Body so
 	// ParseForm can read it again.
-	bodyHash, err := drainAndHashBody(r, stsMaxBody)
+	bodyHash, err := sigv4.DrainAndHashBody(r, stsMaxBody)
 	if err != nil {
 		writeSTSError(w, http.StatusBadRequest, "InvalidAction", "unable to read request body")
 		return

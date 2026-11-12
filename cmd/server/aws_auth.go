@@ -4,13 +4,13 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/arn"
+	"github.com/worlddrknss/citadel/internal/sigv4"
 )
 
 // AWS API authentication.
@@ -20,11 +20,6 @@ import (
 // signature that verifies against a known secret. The only exception is
 // KMS_INSECURE_DEV, which skips verification entirely for local development
 // and must never be set on a shared deployment.
-
-// sigV4MaxClockSkew bounds how far X-Amz-Date may drift from server time. AWS
-// uses the same 15-minute window; it is what stops a captured request from
-// being replayed indefinitely.
-const sigV4MaxClockSkew = 15 * time.Minute
 
 // awsCaller is the identity a verified SigV4 request resolves to.
 type awsCaller struct {
@@ -68,11 +63,11 @@ func (s *server) verifyAWSRequest(r *http.Request, bodyHash string) (awsCaller, 
 	if auth == "" {
 		return awsCaller{}, errAWSUnsigned
 	}
-	comp, err := parseAuthorizationHeader(auth)
+	comp, err := sigv4.ParseAuthorizationHeader(auth)
 	if err != nil {
 		return awsCaller{}, err
 	}
-	if err := checkAmzDate(r.Header.Get("X-Amz-Date"), comp.date, time.Now().UTC()); err != nil {
+	if err := sigv4.CheckAmzDate(r.Header.Get("X-Amz-Date"), comp.Date, time.Now().UTC()); err != nil {
 		return awsCaller{}, err
 	}
 
@@ -82,18 +77,18 @@ func (s *server) verifyAWSRequest(r *http.Request, bodyHash string) (awsCaller, 
 	)
 	switch {
 	case s.cfg.expectedAccessKey != "" && s.cfg.secretAccessKey != "" &&
-		subtle.ConstantTimeCompare([]byte(comp.accessKey), []byte(s.cfg.expectedAccessKey)) == 1:
+		subtle.ConstantTimeCompare([]byte(comp.AccessKey), []byte(s.cfg.expectedAccessKey)) == 1:
 		// The statically configured deployment credential (KMS_ACCESS_KEY_ID /
 		// KMS_SECRET_ACCESS_KEY) acts in the deployment account.
 		_, acct := s.store.DeploymentIdentity()
-		caller = awsCaller{AccessKeyID: comp.accessKey, Username: comp.accessKey, AccountID: acct}
+		caller = awsCaller{AccessKeyID: comp.AccessKey, Username: comp.AccessKey, AccountID: acct}
 		secret = s.cfg.secretAccessKey
-	case isTempAccessKeyID(comp.accessKey):
+	case isTempAccessKeyID(comp.AccessKey):
 		resolver, ok := s.store.(stsSessionResolver)
 		if !ok {
 			return awsCaller{}, errors.New("temporary credentials are not supported by this store")
 		}
-		acct, sec, token, _, err := resolver.getSTSSessionSecret(r.Context(), comp.accessKey)
+		acct, sec, token, _, err := resolver.getSTSSessionSecret(r.Context(), comp.AccessKey)
 		if err != nil {
 			return awsCaller{}, err
 		}
@@ -103,21 +98,21 @@ func (s *server) verifyAWSRequest(r *http.Request, bodyHash string) (awsCaller, 
 		if presented == "" || subtle.ConstantTimeCompare([]byte(presented), []byte(token)) != 1 {
 			return awsCaller{}, errors.New("missing or invalid security token")
 		}
-		caller = awsCaller{AccessKeyID: comp.accessKey, Username: comp.accessKey, AccountID: acct, Temporary: true}
+		caller = awsCaller{AccessKeyID: comp.AccessKey, Username: comp.AccessKey, AccountID: acct, Temporary: true}
 		secret = sec
 	default:
-		username, acct, sec, status, err := s.store.GetAccessKeyByID(r.Context(), comp.accessKey)
+		username, acct, sec, status, err := s.store.GetAccessKeyByID(r.Context(), comp.AccessKey)
 		if err != nil {
 			return awsCaller{}, err
 		}
 		if !strings.EqualFold(status, "active") {
 			return awsCaller{}, errors.New("access key is not active")
 		}
-		caller = awsCaller{AccessKeyID: comp.accessKey, Username: username, AccountID: acct}
+		caller = awsCaller{AccessKeyID: comp.AccessKey, Username: username, AccountID: acct}
 		secret = sec
 	}
 
-	if err := verifyAWSV4Signature(r, bodyHash, secret); err != nil {
+	if err := sigv4.VerifySignature(r, bodyHash, secret); err != nil {
 		return awsCaller{}, err
 	}
 	if !caller.Temporary && caller.AccessKeyID != s.cfg.expectedAccessKey {
@@ -128,26 +123,6 @@ func (s *server) verifyAWSRequest(r *http.Request, bodyHash string) (awsCaller, 
 	return caller, nil
 }
 
-// checkAmzDate validates X-Amz-Date: it must parse, agree with the credential
-// scope's date, and fall within sigV4MaxClockSkew of now.
-func checkAmzDate(amzDate, scopeDate string, now time.Time) error {
-	amzDate = strings.TrimSpace(amzDate)
-	if amzDate == "" {
-		return errors.New("missing X-Amz-Date header")
-	}
-	t, err := time.Parse("20060102T150405Z", amzDate)
-	if err != nil {
-		return errors.New("malformed X-Amz-Date header")
-	}
-	if scopeDate != "" && !strings.HasPrefix(amzDate, scopeDate) {
-		return errors.New("X-Amz-Date does not match credential scope date")
-	}
-	if d := now.Sub(t); d > sigV4MaxClockSkew || d < -sigV4MaxClockSkew {
-		return fmt.Errorf("request time %s is outside the allowed clock skew", amzDate)
-	}
-	return nil
-}
-
 // authenticateAWSJSON authenticates an AWS JSON-protocol request. On success
 // it returns the request with the caller attached to its context. On failure
 // it has already written the AWS-style error response.
@@ -155,7 +130,7 @@ func (s *server) authenticateAWSJSON(w http.ResponseWriter, r *http.Request) (*h
 	if s.cfg.insecureDev {
 		return r, true
 	}
-	bodyHash, err := drainAndHashBody(r, 1<<20)
+	bodyHash, err := sigv4.DrainAndHashBody(r, 1<<20)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidSignatureException", "request signature is invalid")
 		return nil, false
