@@ -39,6 +39,26 @@
     if (supported) load(keyId);
   });
 
+  async function rotateNow() {
+    if (busy) return;
+    const ok = await confirm({
+      title: 'Rotate key material now?',
+      message: 'New data is encrypted with fresh key material right away. Earlier key material is kept, so existing ciphertext still decrypts.',
+      confirmLabel: 'Rotate now'
+    });
+    if (!ok) return;
+    busy = true;
+    try {
+      status = await kms.rotateNow(detail.keyId);
+      toast.success('Key material rotated');
+      onchanged();
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function apply(enabled: boolean) {
     if (busy) return;
     if (enabled && !periodValid) return;
@@ -126,6 +146,7 @@
               <Icon name="rotate" size={14} />Turn on rotation
             </button>
           {/if}
+          <button type="button" class="btn btn-ghost btn-sm" disabled={busy || !detail.enabled} onclick={rotateNow}>Rotate now</button>
         </div>
       </div>
     {/if}

@@ -19,7 +19,7 @@
   let formError = $state('');
   let token = $state<{ grantId: string; grantToken: string } | null>(null);
 
-  const available = $derived(grantOperations(detail.keyUsage));
+  const available = $derived(grantOperations(detail.keyUsage, detail.keySpec));
 
   function startCreate() {
     grantee = '';

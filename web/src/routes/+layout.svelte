@@ -349,7 +349,8 @@
             {/snippet}
           </Menu>
 
-          <Menu label="Notifications, {notifCount} {notifCount === 1 ? 'item' : 'items'}" triggerClass="btn btn-ghost btn-icon tool bell" align="end" width={340}>
+          <!-- A menu must hold menu items; with nothing to list it is a small dialog. -->
+          <Menu label="Notifications, {notifCount} {notifCount === 1 ? 'item' : 'items'}" role={notifCount ? 'menu' : 'dialog'} triggerClass="btn btn-ghost btn-icon tool bell" align="end" width={340}>
             {#snippet trigger()}
               <Icon name="alert-circle" />
               {#if notifCount}<span class="dot" aria-hidden="true"></span>{/if}

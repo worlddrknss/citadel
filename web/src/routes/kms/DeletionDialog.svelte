@@ -3,7 +3,7 @@
   alias (or ID) to confirm. Irreversible once the period ends.
 -->
 <script lang="ts">
-  import { errorMessage } from '$lib/api';
+  import { api, errorMessage } from '$lib/api';
   import Modal from '$lib/components/Modal.svelte';
   import Icon from '$lib/components/Icon.svelte';
   import { primaryAlias, fmtDate, type Key } from './api';
@@ -30,11 +30,31 @@
   const when = $derived(fmtDate(new Date(Date.now() + days * 86_400_000).toISOString()));
   const matches = $derived(typed.trim() === phrase || (!!target && typed.trim() === target.keyId));
 
+  // usedBy is only on the detail response, so fetch it when the dialog opens.
+  let usedBy = $state<{ secrets: number; parameters: number } | null>(null);
+  let usageLoading = $state(false);
+
   $effect(() => {
     if (open) {
       days = 30;
       typed = '';
       error = '';
+      usedBy = null;
+      const id = target?.keyId;
+      if (id) {
+        usageLoading = true;
+        api
+          .kmsKeyDetail(id)
+          .then((d) => {
+            if (target?.keyId === id) usedBy = (d as { usedBy?: { secrets: number; parameters: number } }).usedBy ?? null;
+          })
+          .catch(() => {
+            /* the warning is best-effort; the server still schedules deletion */
+          })
+          .finally(() => {
+            if (target?.keyId === id) usageLoading = false;
+          });
+      }
     }
   });
 
@@ -62,8 +82,12 @@
         <p class="muted">
           After the {days}-day waiting period, data encrypted with
           <span class="mono strong">{alias ?? target.keyId}</span> can never be decrypted.
-          {#if target.usedBy && target.usedBy.secrets + target.usedBy.parameters > 0}
-            <strong class="danger">{target.usedBy.secrets} secret{target.usedBy.secrets === 1 ? '' : 's'} and {target.usedBy.parameters} parameter{target.usedBy.parameters === 1 ? '' : 's'} still use it.</strong>
+          {#if usedBy && usedBy.secrets + usedBy.parameters > 0}
+            <strong class="danger" data-testid="key-usage">{usedBy.secrets} secret{usedBy.secrets === 1 ? '' : 's'} and {usedBy.parameters} parameter{usedBy.parameters === 1 ? '' : 's'} still use it.</strong>
+          {:else if usedBy}
+            <span data-testid="key-usage">No secrets or parameters use it.</span>
+          {:else if usageLoading}
+            <span class="subtle">Checking what uses this key…</span>
           {/if}
           The key is disabled while it waits, and you can cancel any time before then.
         </p>

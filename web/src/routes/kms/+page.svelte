@@ -30,6 +30,8 @@
   } from './api';
 
   const canEdit = $derived(session.can('editor'));
+  // The server only lets admins schedule or cancel key deletion.
+  const canAdmin = $derived(session.can('admin'));
 
   let keys = $state<Key[]>([]);
   let loading = $state(true);
@@ -56,9 +58,11 @@
     if (selectedId) setParams({ tab: tab === 'overview' ? null : tab });
   });
 
-  function openKey(id: string, nextTab = 'overview') {
+  async function openKey(id: string, nextTab = 'overview') {
+    // Navigate first: changing `tab` before the URL holds the new key would
+    // let the tab effect above write the old key back into the URL.
+    await setParams({ key: id, tab: nextTab === 'overview' ? null : nextTab });
     tab = nextTab;
-    setParams({ key: id, tab: nextTab === 'overview' ? null : nextTab });
   }
   function closeKey() {
     const id = selectedId;
@@ -178,13 +182,13 @@
     ];
     if (!canEdit) return items;
     if (k.deletionDate) {
-      items.push({ label: 'Cancel deletion', icon: 'rotate', onselect: () => cancelDeletion(k) });
+      if (canAdmin) items.push({ label: 'Cancel deletion', icon: 'rotate', onselect: () => cancelDeletion(k) });
       return items;
     }
     items.push({ label: 'Add alias', icon: 'plus', onselect: () => openKey(k.keyId, 'aliases') });
     if (!isManaged(k)) {
       items.push({ label: k.enabled ? 'Disable' : 'Enable', icon: k.enabled ? 'eye-off' : 'check-circle', onselect: () => toggle(k) });
-      items.push({ label: 'Schedule deletion', icon: 'trash', danger: true, onselect: () => askDelete(k) });
+      if (canAdmin) items.push({ label: 'Schedule deletion', icon: 'trash', danger: true, onselect: () => askDelete(k) });
     }
     return items;
   }

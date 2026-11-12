@@ -121,6 +121,8 @@ export async function open(page: Page, path: string) {
 
 /** Fails on serious or critical axe violations on the current page. */
 export async function checkA11y(page: Page) {
+  // Fading toasts and sliding panels read as low contrast mid-animation.
+  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'));
   const results = await new AxeBuilder({ page }).analyze();
   const bad = results.violations
     .filter((v) => v.impact === 'serious' || v.impact === 'critical')
