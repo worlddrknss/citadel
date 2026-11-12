@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -48,6 +49,43 @@ type Config struct {
 
 	// PprofAddr enables the loopback pprof listener (KMS_PPROF_ADDR).
 	PprofAddr string
+
+	// TrustedProxies are the reverse proxies (KMS_TRUSTED_PROXIES, comma
+	// separated CIDRs or IPs) whose X-Forwarded-For / X-Real-IP headers are
+	// believed when recording a request's source IP. AuditHMACKey (above,
+	// KMS_AUDIT_HMAC_KEY_B64, at least 16 bytes) keys the audit hash chain;
+	// when unset Load derives it from the wrapping key with HKDF.
+	TrustedProxies []netip.Prefix
+}
+
+// MinAuditHMACKeyLen is the shortest KMS_AUDIT_HMAC_KEY_B64 accepted (128
+// bits; FIPS 140-3 requires HMAC keys of at least 112 bits).
+const MinAuditHMACKeyLen = 16
+
+// ParseTrustedProxies parses a comma-separated list of CIDRs or bare IPs.
+func ParseTrustedProxies(raw string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if strings.Contains(item, "/") {
+			p, err := netip.ParsePrefix(item)
+			if err != nil {
+				return nil, fmt.Errorf("KMS_TRUSTED_PROXIES: invalid CIDR %q", item)
+			}
+			out = append(out, p.Masked())
+			continue
+		}
+		a, err := netip.ParseAddr(item)
+		if err != nil {
+			return nil, fmt.Errorf("KMS_TRUSTED_PROXIES: invalid address %q", item)
+		}
+		a = a.Unmap()
+		out = append(out, netip.PrefixFrom(a, a.BitLen()))
+	}
+	return out, nil
 }
 
 // MinSecretAccessKeyLen is the shortest static secret accepted. See Load.
@@ -113,8 +151,16 @@ func Load() (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("decode KMS_AUDIT_HMAC_KEY_B64: %w", err)
 		}
+		if len(hmacKey) < MinAuditHMACKeyLen {
+			return Config{}, fmt.Errorf("KMS_AUDIT_HMAC_KEY_B64 must decode to at least %d bytes", MinAuditHMACKeyLen)
+		}
 		cfg.AuditHMACKey = hmacKey
 	}
+	proxies, err := ParseTrustedProxies(os.Getenv("KMS_TRUSTED_PROXIES"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.TrustedProxies = proxies
 
 	masterKeyB64 := os.Getenv("KMS_MASTER_KEY_B64")
 	if masterKeyB64 != "" {
@@ -146,6 +192,16 @@ func Load() (Config, error) {
 		// Retain the previous (v1) derivation so key material wrapped before the
 		// HKDF upgrade can still be unwrapped.
 		cfg.LegacyWrappingKey = cryptoutil.DeriveWrappingKey(cfg.LegacyMasterKey)
+	}
+
+	// The audit chain is never unkeyed: without an explicit key, derive one.
+	if len(cfg.AuditHMACKey) == 0 {
+		switch {
+		case len(cfg.WrappingKey) > 0:
+			cfg.AuditHMACKey = cryptoutil.DeriveAuditHMACKey(cfg.WrappingKey)
+		case len(cfg.LegacyMasterKey) > 0:
+			cfg.AuditHMACKey = cryptoutil.DeriveAuditHMACKey(cfg.LegacyMasterKey)
+		}
 	}
 
 	if cfg.DBConnString == "" && len(cfg.LegacyMasterKey) == 0 {
