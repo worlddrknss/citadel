@@ -1,0 +1,117 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "citadel.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "citadel.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "citadel.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Ingress controller / gateway.
+    - from:
+        - namespaceSelector:
+            {{- toYaml $np.ingress.namespaceSelector | nindent 12 }}
+          {{- with $np.ingress.podSelector }}
+          podSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- if $np.ingress.allowSameNamespace }}
+        - podSelector: {}
+        {{- end }}
+      ports:
+        - port: http
+          protocol: TCP
+    {{- with $np.ingress.extra }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  egress:
+    {{- if $np.egress.dns.enabled }}
+    # DNS.
+    - to:
+        - namespaceSelector:
+            {{- toYaml $np.egress.dns.namespaceSelector | nindent 12 }}
+          podSelector:
+            {{- toYaml $np.egress.dns.podSelector | nindent 12 }}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- end }}
+    {{- $db := $np.egress.database }}
+    {{- if or $db.cidrs $db.namespaceSelector $db.podSelector }}
+    # PostgreSQL.
+    - to:
+        {{- range $db.cidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+        {{- if or $db.namespaceSelector $db.podSelector }}
+        - {{- with $db.namespaceSelector }}
+          namespaceSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $db.podSelector }}
+          podSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
+      ports:
+        - port: {{ $db.port }}
+          protocol: TCP
+    {{- end }}
+    {{- if $np.egress.https.enabled }}
+    # HTTPS: OIDC providers, Let's Encrypt, ACME validation.
+    - to:
+        {{- range $np.egress.https.cidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+            {{- with $np.egress.https.except }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+        {{- end }}
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
+    {{- if $np.egress.http.enabled }}
+    # HTTP: ACME HTTP-01 challenge validation.
+    - to:
+        {{- range $np.egress.http.cidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+            {{- with $np.egress.http.except }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+        {{- end }}
+      ports:
+        - port: 80
+          protocol: TCP
+    {{- end }}
+    {{- if and .Values.workloadIdentity.kubernetes.tokenReview $np.egress.kubeApiServer.cidrs }}
+    # Kubernetes API server (TokenReview).
+    - to:
+        {{- range $np.egress.kubeApiServer.cidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        {{- range $np.egress.kubeApiServer.ports }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    {{- with $np.egress.extra }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

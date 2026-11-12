@@ -1,0 +1,479 @@
+# Default values for the Citadel chart.
+#
+# Production checklist (see docs/deployment.md for the full guide):
+#   1. Create a Kubernetes Secret holding KMS_DB_URL and KMS_WRAPPING_KEY_B64
+#      (and preferably KMS_AUDIT_HMAC_KEY_B64), with External Secrets Operator,
+#      Sealed Secrets or your own tooling, and point secrets.existingSecret at it.
+#   2. Set config.publicUrl to the externally visible https:// URL.
+#   3. Set config.trustedProxies to the address range of your ingress
+#      controller or load balancer.
+#   4. Enable ingress (or httpRoute) and networkPolicy.
+#   5. Back up the database AND the wrapping key, separately.
+
+# -- Override the chart name used in resource names.
+nameOverride: ""
+# -- Override the full resource name prefix.
+fullnameOverride: ""
+
+image:
+  # -- Container image. Release images are signed with Sigstore cosign;
+  # verify them before use (docs/deployment.md, "Verifying the image").
+  repository: ghcr.io/worlddrknss/citadel
+  # -- Image tag. Defaults to the chart's appVersion.
+  tag: ""
+  # -- Image digest (sha256:...). When set it is used instead of the tag,
+  # which pins exactly the image you verified.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# -- Secrets for pulling the image from a private registry mirror.
+imagePullSecrets: []
+
+# -- Number of replicas. Citadel replicas are stateless: console sessions,
+# approvals and the audit chain live in PostgreSQL, and schema
+# migrations take an advisory lock, so several replicas may start at once.
+# Ignored when autoscaling.enabled is true.
+replicaCount: 2
+
+# -- Deployment update strategy. With maxUnavailable 0 a new pod must be ready
+# before an old one is removed.
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+# -- Number of old ReplicaSets kept for `kubectl rollout undo`.
+revisionHistoryLimit: 5
+
+# Development only. In-memory mode keeps all data in the process: it is lost
+# on every restart and cannot be shared between replicas.
+devMode:
+  # -- Run without PostgreSQL. Requires secrets.masterKey (KMS_MASTER_KEY_B64),
+  # a static access key pair and console users. The chart refuses to render
+  # it with more than one replica or with autoscaling.
+  inMemory: false
+
+# ---------------------------------------------------------------------------
+# Non-sensitive configuration, rendered as plain environment variables.
+# ---------------------------------------------------------------------------
+config:
+  # -- KMS_PUBLIC_URL: the externally visible base URL, e.g.
+  # https://citadel.example.com. Required for the ACME server (JWS URLs must
+  # match exactly), console SSO redirects, workload identity token issuers
+  # and CRL distribution points. Empty disables the ACME server.
+  publicUrl: ""
+  # -- KMS_TRUSTED_PROXIES: CIDRs or IPs of reverse proxies whose
+  # X-Forwarded-For / X-Real-IP headers are believed. Set this to the pod CIDR
+  # of your ingress controller (or the load balancer's address range). Leave
+  # empty when clients connect directly; never set 0.0.0.0/0, which lets any
+  # client forge its source address in audit logs and rate limits.
+  trustedProxies: []
+  # -- KMS_AWS_REGION reported in ARNs and SigV4 scope. Empty uses the
+  # server default.
+  awsRegion: ""
+  # -- KMS_AWS_ACCOUNT_ID (12 digits) used for ARNs of the default account.
+  # Empty lets the server generate and persist one.
+  awsAccountId: ""
+  # -- KMS_POLICY_DEFAULT_DENY: deny requests no policy allows.
+  policyDefaultDeny: false
+  # -- KMS_UI_SECURE_COOKIES: mark console session cookies Secure. Keep true
+  # whenever the console is served over HTTPS (always, in production).
+  uiSecureCookies: true
+  # -- KMS_UI_SESSION_IDLE_TTL (Go duration). Empty uses the default (30m).
+  sessionIdleTTL: ""
+  # -- KMS_UI_SESSION_MAX_TTL (Go duration). Empty uses the default (12h).
+  sessionMaxTTL: ""
+  # -- KMS_PPROF_ADDR: loopback profiling listener, e.g. 127.0.0.1:6060.
+  # Reach it only with `kubectl port-forward`. Empty disables it.
+  pprofAddr: ""
+
+# -- Additional environment variables (list of EnvVar objects).
+extraEnv: []
+# -- Additional envFrom sources (ConfigMapEnvSource / SecretEnvSource).
+extraEnvFrom: []
+
+# ---------------------------------------------------------------------------
+# Sensitive configuration.
+#
+# Every sensitive value can come from an existing Kubernetes Secret. Resolution
+# order for each entry below:
+#   1. <entry>.existingSecret / <entry>.existingSecretKey, if set;
+#   2. secrets.existingSecret, using <entry>.existingSecretKey (defaults to the
+#      environment variable name, e.g. KMS_DB_URL);
+#   3. <entry>.value, rendered into a chart-managed Secret, which the chart
+#      only does when secrets.create is true.
+#
+# Inline values end up in your values files, in Helm release history (stored
+# as Secrets in the release namespace) and often in Git. The chart therefore
+# refuses to render when any <entry>.value is set while secrets.create is
+# false. For production, manage the Secret outside Helm: External Secrets
+# Operator (ExternalSecret -> Secret), Sealed Secrets, SOPS, or your cloud's
+# secret store CSI driver, and reference it with secrets.existingSecret.
+# ---------------------------------------------------------------------------
+secrets:
+  # -- Render a chart-managed Secret from the <entry>.value fields below.
+  # Intended for evaluation and for pipelines that inject values at deploy
+  # time from a secret store. Off by default.
+  create: false
+  # -- Keep the chart-managed Secret when the release is uninstalled
+  # (helm.sh/resource-policy: keep). Deleting it deletes the wrapping key;
+  # without the wrapping key the database cannot be decrypted.
+  keep: true
+  # -- Name of one existing Secret that holds any of the keys below under
+  # their default key names (KMS_DB_URL, KMS_WRAPPING_KEY_B64, ...). Optional
+  # keys missing from it are simply not set.
+  existingSecret: ""
+
+  # -- KMS_DB_URL: PostgreSQL connection URL, e.g.
+  # postgres://citadel:<password>@db:5432/citadel?sslmode=verify-full.
+  # Required unless devMode.inMemory. The password must be at least 14
+  # characters: FIPS 140-3 mode rejects shorter SCRAM passwords.
+  databaseUrl:
+    value: ""
+    existingSecret: ""
+    existingSecretKey: KMS_DB_URL
+  # -- KMS_WRAPPING_KEY_B64: 32 random bytes, base64 (`openssl rand -base64 32`).
+  # Encrypts every key and secret stored in PostgreSQL. Required unless
+  # devMode.inMemory. LOSING IT LOSES ALL DATA: back it up apart from the
+  # database backups.
+  wrappingKey:
+    value: ""
+    existingSecret: ""
+    existingSecretKey: KMS_WRAPPING_KEY_B64
+  # -- KMS_PREVIOUS_WRAPPING_KEYS_B64: comma-separated retired wrapping keys,
+  # still accepted for unwrapping during a rotation. See docs/deployment.md.
+  previousWrappingKeys:
+    value: ""
+    existingSecret: ""
+    existingSecretKey: KMS_PREVIOUS_WRAPPING_KEYS_B64
+  # -- KMS_AUDIT_HMAC_KEY_B64: at least 16 random bytes, base64. Keys the audit
+  # hash chain. When unset it is derived from the wrapping key; set it
+  # explicitly so audit verification does not depend on the wrapping key.
+  auditHmacKey:
+    value: ""
+    existingSecret: ""
+    existingSecretKey: KMS_AUDIT_HMAC_KEY_B64
+  # -- KMS_ACCESS_KEY_ID: optional static AWS-style access key ID. Must be set
+  # together with secretAccessKey. With PostgreSQL, prefer per-user access
+  # keys created in the console.
+  accessKeyId:
+    value: ""
+    existingSecret: ""
+    existingSecretKey: KMS_ACCESS_KEY_ID
+  # -- KMS_SECRET_ACCESS_KEY: the static secret, at least 20 characters.
+  secretAccessKey:
+    value: ""
+    existingSecret: ""
+    existingSecretKey: KMS_SECRET_ACCESS_KEY
+  # -- KMS_BOOTSTRAP_TOKEN: one-time token required to run first-run setup
+  # while no console user exists. When unset the server generates one and
+  # prints it in its log.
+  bootstrapToken:
+    value: ""
+    existingSecret: ""
+    existingSecretKey: KMS_BOOTSTRAP_TOKEN
+  # -- KMS_UI_USERS_JSON: console users managed by configuration, a JSON list
+  # of {"username","passwordHash","role","displayName","accounts"} objects.
+  # Leave unset to create users in the console after bootstrap.
+  uiUsersJson:
+    value: ""
+    existingSecret: ""
+    existingSecretKey: KMS_UI_USERS_JSON
+  # -- KMS_MASTER_KEY_B64: legacy master key (32 bytes, base64). Required only
+  # for devMode.inMemory or for deployments that still derive the wrapping key
+  # from it.
+  masterKey:
+    value: ""
+    existingSecret: ""
+    existingSecretKey: KMS_MASTER_KEY_B64
+
+# ---------------------------------------------------------------------------
+# TLS inside the pod. Most deployments terminate TLS at the ingress or
+# gateway instead (see ingress.tls). Enable this for end-to-end TLS, or when
+# exposing the Service directly through a LoadBalancer.
+# ---------------------------------------------------------------------------
+tls:
+  # -- Serve HTTPS from the pod (KMS_TLS_CERT_FILE / KMS_TLS_KEY_FILE).
+  enabled: false
+  # -- Existing kubernetes.io/tls Secret (tls.crt / tls.key), for example one
+  # managed by cert-manager. Required when tls.enabled.
+  existingSecret: ""
+
+# ---------------------------------------------------------------------------
+# Workload identity for Kubernetes workloads.
+# ---------------------------------------------------------------------------
+workloadIdentity:
+  kubernetes:
+    # -- Let Citadel verify Kubernetes service account tokens with the
+    # TokenReview API. This mounts Citadel's own service account token and
+    # binds it to the system:auth-delegator ClusterRole. Leave off unless you
+    # federate in-cluster workloads; otherwise no API token is mounted.
+    tokenReview: false
+
+# -- Pod port the server listens on (KMS_LISTEN_ADDR=":<port>").
+containerPort: 8080
+
+service:
+  type: ClusterIP
+  # -- Service port.
+  port: 80
+  # -- Extra Service annotations (e.g. for cloud load balancers).
+  annotations: {}
+  # -- Pins the node port when type is NodePort or LoadBalancer.
+  nodePort: null
+  # -- Local keeps client source IPs for LoadBalancer Services; then list the
+  # load balancer range in config.trustedProxies only if it adds headers.
+  externalTrafficPolicy: ""
+
+# ---------------------------------------------------------------------------
+# Ingress. Route the whole host to Citadel ("/" with pathType Prefix): the
+# console (/app/), the AWS-protocol APIs (/ and /api), the ACME server
+# (/acme/), CRLs (/crl/), HTTP-01 challenges (/.well-known/acme-challenge/)
+# and workload identity discovery (/oidc) all live on one origin.
+#
+# TLS: terminate at the ingress with a certificate for every host and redirect
+# HTTP to HTTPS, except /.well-known/acme-challenge/ if you use Citadel's
+# Let's Encrypt client with HTTP-01.
+#
+# Client IPs: the controller must send X-Forwarded-For (ingress-nginx does by
+# default) and config.trustedProxies must contain the controller's pod CIDR,
+# otherwise every request is attributed to the controller.
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # cert-manager.io/cluster-issuer: letsencrypt
+    # nginx.ingress.kubernetes.io/proxy-body-size: "8m"
+    # With tls.enabled (HTTPS to the pod) on ingress-nginx:
+    # nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+  hosts:
+    - host: citadel.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: citadel-tls
+  #    hosts:
+  #      - citadel.example.com
+
+# ---------------------------------------------------------------------------
+# Gateway API HTTPRoute (gateway.networking.k8s.io/v1), an alternative to
+# Ingress. TLS terminates at the Gateway listener.
+# ---------------------------------------------------------------------------
+httpRoute:
+  enabled: false
+  annotations: {}
+  # -- Gateways this route attaches to.
+  parentRefs: []
+  #  - name: public-gateway
+  #    namespace: gateway-system
+  #    sectionName: https
+  hostnames: []
+  #  - citadel.example.com
+  # -- Path matches. The default routes every path on the hostnames.
+  matches:
+    - path:
+        type: PathPrefix
+        value: /
+
+serviceAccount:
+  # -- Create a ServiceAccount for the pods.
+  create: true
+  # -- Name of the ServiceAccount; generated from the release name when empty.
+  name: ""
+  annotations: {}
+
+# -- Pod security context. The image runs as the distroless nonroot user.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container security context.
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Resource requests and limits. Citadel is CPU-light; memory is dominated
+# by the PostgreSQL connection pool (20 connections per replica) and request
+# buffers. Raise CPU for heavy RSA key generation or signing workloads.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+# Health probes. /healthz answers 200 when the HTTP server is up; the server
+# only starts listening after the database is reachable and migrations ran.
+probes:
+  # -- Liveness probe path.
+  livenessPath: /healthz
+  # -- Readiness probe path. Point it at /readyz on releases that provide a
+  # readiness endpoint that also checks the database.
+  readinessPath: /healthz
+  startup:
+    # -- Allows failureThreshold x periodSeconds for first start, which
+    # includes waiting for the migration advisory lock.
+    periodSeconds: 5
+    failureThreshold: 60
+    timeoutSeconds: 3
+  liveness:
+    periodSeconds: 10
+    failureThreshold: 3
+    timeoutSeconds: 3
+  readiness:
+    periodSeconds: 5
+    failureThreshold: 2
+    timeoutSeconds: 3
+
+# -- Seconds Kubernetes waits after SIGTERM before killing the pod. The server
+# drains in-flight requests for up to 15 seconds, after the optional preStop
+# sleep below; keep this at least preStopSleepSeconds + 15.
+terminationGracePeriodSeconds: 30
+
+# -- Sleep before SIGTERM so load balancers stop routing to the pod first.
+# Uses the native preStop sleep action (Kubernetes 1.30+, the image has no
+# shell); skipped automatically on older clusters. 0 disables it.
+preStopSleepSeconds: 5
+
+# -- Prefer spreading replicas across nodes (podAntiAffinity, preferred).
+# Set to "hard" to require it, or "" to disable.
+podAntiAffinity: soft
+# -- Topology key for podAntiAffinity.
+podAntiAffinityTopologyKey: kubernetes.io/hostname
+
+# -- Topology spread constraints. The chart adds the pod label selector when
+# labelSelector is omitted.
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+
+# -- Raw affinity; replaces the generated podAntiAffinity when set.
+affinity: {}
+nodeSelector: {}
+tolerations: []
+priorityClassName: ""
+
+podAnnotations: {}
+podLabels: {}
+# -- Labels added to every resource.
+commonLabels: {}
+
+# -- Extra volumes and mounts (e.g. a CA bundle for an OIDC provider).
+extraVolumes: []
+extraVolumeMounts: []
+
+podDisruptionBudget:
+  # -- Create a PodDisruptionBudget (only rendered with more than one replica
+  # or with autoscaling).
+  enabled: true
+  # -- Use either maxUnavailable or minAvailable.
+  maxUnavailable: 1
+  minAvailable: null
+
+autoscaling:
+  # -- Create a HorizontalPodAutoscaler (autoscaling/v2).
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: null
+
+# ---------------------------------------------------------------------------
+# NetworkPolicy. Off by default because selectors depend on your cluster;
+# strongly recommended in production.
+# ---------------------------------------------------------------------------
+networkPolicy:
+  enabled: false
+  ingress:
+    # -- Namespaces allowed to reach Citadel's port, typically the ingress
+    # controller's or gateway's namespace.
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: ingress-nginx
+    # -- Optional pod selector within those namespaces.
+    podSelector: {}
+    # -- Allow every pod in the release namespace (in-cluster API clients).
+    allowSameNamespace: false
+    # -- Additional NetworkPolicyIngressRule objects.
+    extra: []
+  egress:
+    # -- Allow DNS to kube-dns / CoreDNS.
+    dns:
+      enabled: true
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    # -- PostgreSQL destination. Give CIDRs for a managed database, or
+    # selectors for an in-cluster one.
+    database:
+      port: 5432
+      cidrs: []
+      namespaceSelector: {}
+      podSelector: {}
+    # -- HTTPS egress: external OIDC providers (console SSO, workload identity
+    # issuers), Let's Encrypt, ACME tls-alpn-01 validation.
+    https:
+      enabled: true
+      cidrs:
+        - 0.0.0.0/0
+      # Cloud instance metadata is never a legitimate destination.
+      except:
+        - 169.254.169.254/32
+    # -- HTTP egress on port 80: required for the ACME server's HTTP-01
+    # validation of client domains.
+    http:
+      enabled: true
+      cidrs:
+        - 0.0.0.0/0
+      # Cloud instance metadata is never a legitimate destination.
+      except:
+        - 169.254.169.254/32
+    # -- Kubernetes API server address range, used when
+    # workloadIdentity.kubernetes.tokenReview is enabled. Find it with
+    # `kubectl get endpoints kubernetes -n default`.
+    kubeApiServer:
+      cidrs: []
+      ports: [443, 6443]
+    # -- Additional NetworkPolicyEgressRule objects.
+    extra: []
+
+# ---------------------------------------------------------------------------
+# Metrics. Only enable when your Citadel release serves Prometheus metrics.
+# ---------------------------------------------------------------------------
+metrics:
+  # -- Declare that the pods serve metrics on metrics.path. Required for the
+  # ServiceMonitor below.
+  enabled: false
+  # -- HTTP path of the metrics endpoint.
+  path: /metrics
+  serviceMonitor:
+    # -- Create a prometheus-operator ServiceMonitor.
+    enabled: false
+    namespace: ""
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    relabelings: []
+    metricRelabelings: []
