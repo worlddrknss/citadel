@@ -107,13 +107,21 @@ const keys = [
     keySpec: 'SYMMETRIC_DEFAULT',
     createdAt: ago(400 * DAY),
     deletionDate: ahead(5 * DAY),
-    aliases: ['alias/legacy']
+    aliases: ['alias/legacy'],
+    rotation: { enabled: false }
   }
 ].map((k) => ({ ...k, arn: `arn:aws:kms:us-east-1:${ACCOUNT}:key/${k.keyId}` }));
+
+// The real list has managed/origin/rotation (rotation on symmetric keys
+// only) but not usedBy, which only the detail response carries.
+const keyList = keys.map(({ usedBy: _usedBy, ...k }) => ({ managed: false, origin: 'AWS_KMS', ...k }));
 
 function keyDetail(keyId: string) {
   const k = keys.find((x) => x.keyId === keyId || x.aliases.includes(keyId)) ?? keys[1];
   return {
+    managed: false,
+    origin: 'AWS_KMS',
+    usedBy: { secrets: 0, parameters: 0 },
     ...k,
     keyState: k.deletionDate ? 'PendingDeletion' : k.enabled ? 'Enabled' : 'Disabled',
     encryptionAlgorithms: k.keyUsage === 'ENCRYPT_DECRYPT' ? ['SYMMETRIC_DEFAULT'] : undefined,
@@ -283,7 +291,7 @@ const GET: Record<string, Handler> = {
       canApprove: cr.requester !== me.username && cr.status === 'pending'
     };
   },
-  '/v1/kms/keys': () => ({ keys }),
+  '/v1/kms/keys': () => ({ keys: keyList }),
   '/v1/kms/keys/detail': (q) => keyDetail(q.get('keyId') ?? ''),
   '/v1/kms/keys/rotation': (q) => ({
     keyId: q.get('keyId'),
@@ -293,7 +301,6 @@ const GET: Record<string, Handler> = {
     history: []
   }),
   '/v1/kms/keys/tags': (q) => ({ keyId: q.get('keyId'), tags: [{ key: 'team', value: 'payments' }] }),
-  '/v1/kms/grants': () => ({ grants: [] }),
   '/v1/parameters': () => ({ parameters }),
   '/v1/parameters/value': (q) => ({ parameter: parameters.find((p) => p.name === q.get('name')) ?? parameters[0], value: 'decrypted' }),
   '/v1/parameters/history': (q) => ({
@@ -369,6 +376,33 @@ const WRITE: Record<string, Handler> = {
   'POST /v1/login': () => me,
   'POST /v1/logout': () => ({ loggedOut: true }),
   'POST /v1/kms/keys/schedule-deletion': (_, b) => ({ keyId: b.keyId, deletionDate: ahead(Number(b.windowDays ?? 30) * DAY) }),
+  'POST /v1/kms/keys/cancel-deletion': (_, b) => ({ keyId: b.keyId, restored: true }),
+  'POST /v1/kms/keys': () => ({ keyId: '5555eeee-0000-4000-8000-000000000005', arn: `arn:aws:kms:us-east-1:${ACCOUNT}:key/5555eeee-0000-4000-8000-000000000005`, created: true }),
+  'POST /v1/kms/keys/enabled': (_, b) => ({ keyId: b.keyId, enabled: b.enabled }),
+  'POST /v1/kms/keys/rotation': (_, b) => ({
+    keyId: b.keyId,
+    supported: true,
+    enabled: !!b.enabled,
+    rotationPeriodDays: Number(b.rotationPeriodDays ?? 365),
+    nextRotationAt: b.enabled ? ahead(Number(b.rotationPeriodDays ?? 365) * DAY) : undefined,
+    history: []
+  }),
+  'POST /v1/kms/keys/rotate': (_, b) => ({
+    keyId: b.keyId,
+    supported: true,
+    enabled: false,
+    rotationPeriodDays: 365,
+    lastRotatedAt: ago(0),
+    history: [{ rotatedAt: ago(0), kind: 'on-demand', keyMaterialId: 'km-2' }]
+  }),
+  'POST /v1/kms/grants': () => ({ grantId: 'grant-1', grantToken: 'grant-token-1' }),
+  'DELETE /v1/kms/grants': () => ({ revoked: true }),
+  'POST /v1/kms/keys/tags': () => ({ tagged: true }),
+  'DELETE /v1/kms/keys/tags': () => ({ untagged: true }),
+  'POST /v1/kms/encrypt': (_, b) => ({ keyId: b.keyId, ciphertextBlob: 'Y2lwaGVydGV4dA==', encryptionAlgorithm: b.encryptionAlgorithm }),
+  'POST /v1/kms/decrypt': (_, b) => ({ keyId: b.keyId, plaintext: 'aGVsbG8=', encryptionAlgorithm: b.encryptionAlgorithm }),
+  'POST /v1/kms/sign': (_, b) => ({ keyId: b.keyId, signature: 'c2lnbmF0dXJl', signingAlgorithm: b.signingAlgorithm }),
+  'POST /v1/kms/verify': (_, b) => ({ keyId: b.keyId, signatureValid: true, signingAlgorithm: b.signingAlgorithm }),
   'POST /v1/audit/verify': () => GET['/v1/audit/verify'](new URLSearchParams(), {})
 };
 

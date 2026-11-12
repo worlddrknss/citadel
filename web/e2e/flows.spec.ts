@@ -145,6 +145,8 @@ test.describe('KMS', () => {
 
     const dialog = page.getByRole('dialog', { name: 'Schedule deletion of this key?' });
     await expect(dialog).toBeVisible();
+    // usedBy comes from the key detail, not the list.
+    await expect(dialog.getByTestId('key-usage')).toHaveText(/3 secrets and 0 parameters still use it/);
     const confirm = dialog.getByRole('button', { name: 'Schedule deletion' });
     await expect(confirm).toBeDisabled();
     const input = dialog.getByRole('textbox');
