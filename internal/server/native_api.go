@@ -246,6 +246,11 @@ type nativeMeResponse struct {
 type nativeProject struct {
 	Slug         string   `json:"slug"`
 	Environments []string `json:"environments"`
+	// Name is the display name set via /v1/projects/rename, when set.
+	Name string `json:"name,omitempty"`
+	// EnvironmentCounts is the number of live secrets in each environment
+	// (at any depth), keyed by environment slug.
+	EnvironmentCounts map[string]int `json:"environmentCounts"`
 }
 
 type nativeItem struct {
@@ -256,6 +261,14 @@ type nativeItem struct {
 	ARN          string `json:"arn"`
 	UpdatedAt    string `json:"updatedAt"`
 	DeletionDate string `json:"deletionDate,omitempty"`
+	// Version is the number of stored versions, i.e. the ordinal of the
+	// newest one.
+	Version   int         `json:"version,omitempty"`
+	UpdatedBy string      `json:"updatedBy,omitempty"`
+	Tags      []nativeTag `json:"tags"`
+	// RotationDue is set when a rotation schedule has come due (Citadel
+	// records schedules but cannot run rotation functions).
+	RotationDue bool `json:"rotationDue,omitempty"`
 }
 
 // ---- handlers --------------------------------------------------------------
@@ -282,7 +295,7 @@ func (s *Server) handleV1Projects(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]nativeProject, 0, len(projects))
 	for _, p := range projects {
-		out = append(out, nativeProject{Slug: p.Slug, Environments: p.Environments})
+		out = append(out, nativeProject{Slug: p.Slug, Environments: p.Environments, Name: p.Name, EnvironmentCounts: p.EnvCounts})
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{"projects": out})
 }
@@ -306,11 +319,12 @@ func (s *Server) handleV1ListSecrets(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	folders, found, shadowing, err := s.secretsSvc().ListFolder(ctx, project, env, wantFolder)
+	listing, err := s.secretsSvc().listFolderDetailed(ctx, project, env, wantFolder)
 	if err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		writeSecretsFailure(w, http.StatusBadRequest, "invalid_request", err)
 		return
 	}
+	folders, found, shadowing := listing.Folders, listing.Items, listing.Shadowed
 	toNative := func(it itemSummary) nativeItem {
 		ni := nativeItem{
 			Project:   it.Project,
@@ -319,6 +333,14 @@ func (s *Server) handleV1ListSecrets(w http.ResponseWriter, r *http.Request) {
 			Key:       it.Key,
 			ARN:       it.ARN,
 			UpdatedAt: it.UpdatedAt.Format(time.RFC3339),
+			Version:   it.Version,
+			UpdatedBy: it.UpdatedBy,
+			Tags:      make([]nativeTag, 0, len(it.Tags)),
+
+			RotationDue: it.RotationDue,
+		}
+		for _, t := range it.Tags {
+			ni.Tags = append(ni.Tags, nativeTag{Key: t.Key, Value: t.Value})
 		}
 		if it.DeletionDate != nil {
 			ni.DeletionDate = it.DeletionDate.Format(time.RFC3339)
@@ -337,12 +359,13 @@ func (s *Server) handleV1ListSecrets(w http.ResponseWriter, r *http.Request) {
 		shadowed = append(shadowed, toNative(it))
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{
-		"project":  project,
-		"env":      env,
-		"path":     store.FolderPath(wantFolder),
-		"folders":  folders,
-		"items":    items,
-		"shadowed": shadowed,
+		"project":      project,
+		"env":          env,
+		"path":         store.FolderPath(wantFolder),
+		"folders":      folders,
+		"items":        items,
+		"shadowed":     shadowed,
+		"folderCounts": listing.FolderCounts,
 	})
 }
 
@@ -431,6 +454,13 @@ func (s *Server) handleV1PutSecret(w http.ResponseWriter, r *http.Request) {
 		Folder:  folder,
 		Key:     strings.TrimSpace(req.Key),
 	}
+	if err := coord.validate(); err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if !s.requireNoApproval(w, r, ctx, coord.Project, coord.Env, "citadel.PutItem") {
+		return
+	}
 	created, err := s.secretsSvc().PutItem(ctx, coord, req.Value, req.KMSKeyID)
 	if err != nil {
 		writeSecretsFailure(w, http.StatusBadRequest, "put_failed", err)
@@ -440,9 +470,12 @@ func (s *Server) handleV1PutSecret(w http.ResponseWriter, r *http.Request) {
 	writeNativeJSON(w, http.StatusOK, map[string]any{"project": coord.Project, "env": coord.Env, "path": store.FolderPath(folder), "key": coord.Key, "created": created})
 }
 
-// handleV1RevealSecret returns the decrypted value of a single item.
+// handleV1RevealSecret returns the decrypted value of a single item (or of
+// one version with versionId). Viewers may call it only where the account's
+// viewersCanReveal setting allows; this also governs the console's version
+// values and .env export, which are built on it.
 func (s *Server) handleV1RevealSecret(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.secretsSession(w, r, "viewer")
+	sess, ctx, ok := s.secretsSession(w, r, "viewer")
 	if !ok {
 		return
 	}
@@ -450,6 +483,9 @@ func (s *Server) handleV1RevealSecret(w http.ResponseWriter, r *http.Request) {
 	coord, err := coordFromQuery(q)
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if !s.requireReveal(w, r, ctx, sess, "citadel.RevealItem") {
 		return
 	}
 	resolve := strings.EqualFold(strings.TrimSpace(q.Get("resolve")), "true")
@@ -730,7 +766,11 @@ func (s *Server) handleV1ListVersions(w http.ResponseWriter, r *http.Request) {
 			"versionId": v.VersionID,
 			"stages":    v.Stages,
 			"createdAt": v.CreatedAt.Format(time.RFC3339),
+			"version":   v.Ordinal,
 		})
+		if v.CreatedBy != "" {
+			out[len(out)-1]["createdBy"] = v.CreatedBy
+		}
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{"key": coord.Key, "versions": out})
 }
@@ -744,6 +784,9 @@ func (s *Server) handleV1RestoreSecret(w http.ResponseWriter, r *http.Request) {
 	coord, err := coordFromQuery(r.URL.Query())
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if !s.requireNoApproval(w, r, ctx, coord.Project, coord.Env, "citadel.RestoreItem") {
 		return
 	}
 	if err := s.secretsSvc().RestoreItem(ctx, coord); err != nil {

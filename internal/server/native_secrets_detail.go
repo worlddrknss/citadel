@@ -1,9 +1,11 @@
 package server
 
 import (
+	"encoding/base64"
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/worlddrknss/citadel/internal/store"
 )
@@ -33,6 +35,15 @@ type nativeItemDetail struct {
 	Tags              []nativeTag    `json:"tags"`
 	PolicyDocument    string         `json:"policyDocument"`
 	Rotation          nativeRotation `json:"rotation"`
+	// ValueLength is the current value's length in characters (bytes for a
+	// binary value); Fingerprint is its keyed fingerprint ("hmac:" + 12 hex,
+	// HMAC-SHA256 under a per-deployment key, never a plain hash). Both are
+	// omitted for a secret scheduled for deletion.
+	ValueLength *int   `json:"valueLength,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	UpdatedBy   string `json:"updatedBy,omitempty"`
+	// Version is the number of stored versions.
+	Version int `json:"version,omitempty"`
 }
 
 type nativeTag struct {
@@ -45,6 +56,10 @@ type nativeRotation struct {
 	LambdaARN        string `json:"lambdaArn,omitempty"`
 	AfterDays        int    `json:"afterDays,omitempty"`
 	NextRotationDate string `json:"nextRotationDate,omitempty"`
+	// Due is set when NextRotationDate has passed. Citadel records rotation
+	// schedules but cannot invoke rotation Lambdas, so a due rotation is a
+	// prompt for an operator, not something that happens by itself.
+	Due bool `json:"due,omitempty"`
 }
 
 // handleV1SecretDetail returns the full metadata projection for one item.
@@ -76,8 +91,9 @@ func (s *Server) handleV1SecretDetail(w http.ResponseWriter, r *http.Request) {
 	rot := nativeRotation{Enabled: d.RotationEnabled, LambdaARN: d.RotationLambdaARN, AfterDays: d.RotationDays}
 	if d.NextRotationDate != nil {
 		rot.NextRotationDate = d.NextRotationDate.Format(time.RFC3339)
+		rot.Due = d.RotationEnabled && d.DeletionDate == nil && !d.NextRotationDate.After(time.Now())
 	}
-	writeNativeJSON(w, http.StatusOK, nativeItemDetail{
+	out := nativeItemDetail{
 		Project:           d.Project,
 		Env:               d.Env,
 		Path:              d.Path,
@@ -94,7 +110,26 @@ func (s *Server) handleV1SecretDetail(w http.ResponseWriter, r *http.Request) {
 		Tags:              tags,
 		PolicyDocument:    d.PolicyDocument,
 		Rotation:          rot,
-	})
+		UpdatedBy:         d.UpdatedBy,
+		Version:           d.VersionCount,
+	}
+	if d.DeletionDate == nil {
+		if v, err := s.secretsSvc().RevealItem(ctx, coord, "", ""); err == nil {
+			var raw []byte
+			n := 0
+			if v.SecretString != nil {
+				raw = []byte(*v.SecretString)
+				n = utf8.RuneCount(raw)
+			} else if b, err := base64.StdEncoding.DecodeString(v.SecretBinary); err == nil {
+				raw, n = b, len(b)
+			}
+			if raw != nil {
+				out.ValueLength = &n
+				out.Fingerprint = "hmac:" + s.valueFingerprint(string(raw))
+			}
+		}
+	}
+	writeNativeJSON(w, http.StatusOK, out)
 }
 
 type nativeUpdateMetadataRequest struct {
@@ -205,6 +240,9 @@ func (s *Server) handleV1PromoteVersion(w http.ResponseWriter, r *http.Request) 
 	coord, err := coordFromParts(req.Project, req.Env, req.Path, req.Key)
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if !s.requireNoApproval(w, r, ctx, coord.Project, coord.Env, "citadel.PromoteItemVersion") {
 		return
 	}
 	if err := s.secretsSvc().PromoteItemVersion(ctx, coord, req.VersionID); err != nil {
@@ -398,55 +436,4 @@ func coordFromParts(project, env, path, key string) (itemCoord, error) {
 		return itemCoord{}, err
 	}
 	return coord, nil
-}
-
-// nativeBulkDeleteRequest deletes/restores several items in one call.
-type nativeBulkRequest struct {
-	Project            string   `json:"project"`
-	Env                string   `json:"env"`
-	Path               string   `json:"path"`
-	Keys               []string `json:"keys"`
-	Action             string   `json:"action"` // "delete" | "restore"
-	Force              bool     `json:"force"`
-	RecoveryWindowDays int      `json:"recoveryWindowDays"`
-}
-
-// handleV1BulkSecrets applies delete or restore to multiple items at once.
-func (s *Server) handleV1BulkSecrets(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.secretsSession(w, r, "editor")
-	if !ok {
-		return
-	}
-	var req nativeBulkRequest
-	if err := decodeJSONBody(r, &req); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	action := strings.ToLower(strings.TrimSpace(req.Action))
-	if action != "delete" && action != "restore" {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", "action must be delete or restore")
-		return
-	}
-	svc := s.secretsSvc()
-	applied := 0
-	failed := make([]string, 0)
-	for _, key := range req.Keys {
-		coord, err := coordFromParts(req.Project, req.Env, req.Path, key)
-		if err != nil {
-			failed = append(failed, strings.TrimSpace(key))
-			continue
-		}
-		if action == "delete" {
-			err = svc.DeleteItem(ctx, coord, req.RecoveryWindowDays, req.Force)
-		} else {
-			err = svc.RestoreItem(ctx, coord)
-		}
-		if err != nil {
-			failed = append(failed, coord.Key)
-			continue
-		}
-		applied++
-	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.Bulk:" + action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
-	writeNativeJSON(w, http.StatusOK, map[string]any{"applied": applied, "failed": failed})
 }

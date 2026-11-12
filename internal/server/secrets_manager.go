@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -177,7 +178,12 @@ func (s *Server) handleCreateSecret(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("%q names a folder that already holds secrets; a secret stored there would shadow the folder's JSON projection and be invisible in the UI", req.Name))
 		return
 	}
-	meta, value, err := s.store.CreateSecret(r.Context(), req)
+	if s.awsWriteNeedsApproval(r.Context(), req.Name) {
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "denied", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
+		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", awsApprovalRequiredMessage)
+		return
+	}
+	meta, value, err := s.store.CreateSecret(store.WithActor(r.Context(), requestPrincipal(r)), req)
 	if err != nil {
 		secretError(w, err)
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
@@ -322,7 +328,12 @@ func (s *Server) handlePutSecretValue(w http.ResponseWriter, r *http.Request) {
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
 		return
 	}
-	value, err := s.store.PutSecretValue(r.Context(), req)
+	if s.awsWriteNeedsApproval(r.Context(), meta.Name) {
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "denied", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
+		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", awsApprovalRequiredMessage)
+		return
+	}
+	value, err := s.store.PutSecretValue(store.WithActor(r.Context(), requestPrincipal(r)), req)
 	if err != nil {
 		secretError(w, err)
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
@@ -364,7 +375,12 @@ func (s *Server) handleUpdateSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var value *store.SecretValueRecord
-	meta, value, err = s.store.UpdateSecret(r.Context(), req)
+	if (req.SecretString != "" || req.SecretBinary != "" || strings.TrimSpace(req.KMSKeyID) != "") && s.awsWriteNeedsApproval(r.Context(), meta.Name) {
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "denied", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
+		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", awsApprovalRequiredMessage)
+		return
+	}
+	meta, value, err = s.store.UpdateSecret(store.WithActor(r.Context(), requestPrincipal(r)), req)
 	if err != nil {
 		secretError(w, err)
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
@@ -665,11 +681,22 @@ func classifySecretError(err error) string {
 func secretError(w http.ResponseWriter, err error) {
 	typ := classifySecretError(err)
 	status := http.StatusInternalServerError
+	msg := err.Error()
 	switch typ {
 	case "AccessDeniedException", "ResourceExistsException", "ResourceNotFoundException", "InvalidRequestException", "InvalidParameterException":
 		status = http.StatusBadRequest
+	default:
+		// Never hand storage or crypto internals to the client.
+		log.Printf("secrets manager: %v", err)
+		msg = "an internal error occurred"
 	}
-	writeAWSJSONError(w, status, typ, err.Error())
+	switch typ {
+	case "ResourceNotFoundException":
+		msg = "Secrets Manager can't find the specified secret."
+	case "ResourceExistsException":
+		msg = "a secret with this name already exists"
+	}
+	writeAWSJSONError(w, status, typ, msg)
 }
 
 func (s *Server) authorizeSecretAction(ctx context.Context, r *http.Request, meta store.SecretMetadataRecord, action string) error {

@@ -161,17 +161,27 @@ func (s *Server) handleV1CreateChangeRequest(w http.ResponseWriter, r *http.Requ
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "comment is longer than 2000 characters")
 		return
 	}
-	cipherB64, keyID, err := s.sealProposedValue(ctx, req.Value)
+	cr, err := s.newChangeRequest(ctx, sess, coord, req.Value, req.KMSKeyID, title, comment)
 	if err != nil {
-		log.Printf("change request: seal value: %v", err)
-		writeNativeError(w, http.StatusInternalServerError, "create_failed", "could not encrypt the proposed value")
+		log.Printf("change request: create: %v", err)
+		writeNativeError(w, http.StatusInternalServerError, "create_failed", "could not create the change request")
 		return
+	}
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateChangeRequest", KeyID: cr.ID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
+	writeNativeJSON(w, http.StatusOK, changeRequestSummaryJSON(cr))
+}
+
+// newChangeRequest seals value and stores a pending request for coord.
+func (s *Server) newChangeRequest(ctx context.Context, sess *uiSession, coord itemCoord, value, kmsKeyID, title, comment string) (store.ChangeRequestRecord, error) {
+	cipherB64, keyID, err := s.sealProposedValue(ctx, value)
+	if err != nil {
+		return store.ChangeRequestRecord{}, err
 	}
 	base := ""
 	if meta, err := s.store.DescribeSecret(ctx, coord.backingName()); err == nil {
 		base = meta.CurrentVersionID
 	}
-	cr, err := s.store.CreateChangeRequest(ctx, store.ChangeRequestRecord{
+	return s.store.CreateChangeRequest(ctx, store.ChangeRequestRecord{
 		ID:                 "cr-" + cryptoutil.RandomHex(6),
 		Project:            coord.Project,
 		Env:                coord.Env,
@@ -183,17 +193,10 @@ func (s *Server) handleV1CreateChangeRequest(w http.ResponseWriter, r *http.Requ
 		Comment:            comment,
 		ProposedCiphertext: cipherB64,
 		ProposedKMSKeyID:   keyID,
-		ProposedLength:     utf8.RuneCountInString(req.Value),
-		TargetKMSKeyID:     strings.TrimSpace(req.KMSKeyID),
+		ProposedLength:     utf8.RuneCountInString(value),
+		TargetKMSKeyID:     strings.TrimSpace(kmsKeyID),
 		BaseVersionID:      base,
 	})
-	if err != nil {
-		log.Printf("change request: create: %v", err)
-		writeNativeError(w, http.StatusInternalServerError, "create_failed", "could not create the change request")
-		return
-	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateChangeRequest", KeyID: cr.ID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
-	writeNativeJSON(w, http.StatusOK, changeRequestSummaryJSON(cr))
 }
 
 // handleV1ListChangeRequests lists the caller account's change requests.
