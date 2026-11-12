@@ -266,7 +266,7 @@ func auditFailClosed(action string) bool {
 func (s *Server) recordAudit(ctx context.Context, event store.AuditEvent) {
 	if err := s.writeAudit(ctx, event); err != nil {
 		closed := auditFailClosed(event.Action) && store.NormalizeAuditResult(event.Result, event.ErrorType) == store.AuditResultSuccess
-		log.Printf("AUDIT WRITE FAILED action=%s result=%s account=%s fail_closed=%t: %v", event.Action, event.Result, event.AccountID, closed, err)
+		log.Printf("AUDIT WRITE FAILED action=%s result=%s request_id=%s fail_closed=%t: %v", event.Action, event.Result, requestIDFromContext(ctx), closed, err)
 		if closed {
 			if info := auditInfoFrom(ctx); info != nil {
 				info.markFailed()
