@@ -138,9 +138,10 @@ const parameters = [
 ];
 
 const certificates = [
-  { source: 'pca', id: 'ca-root-1', subject: 'CN=Acme Root CA', commonName: 'Acme Root CA', status: 'ACTIVE', notBefore: ago(100 * DAY), notAfter: ahead(3000 * DAY), caType: 'ROOT', serial: '01' },
-  { source: 'pca', id: 'cert-api-1', subject: 'CN=api.acme.test', commonName: 'api.acme.test', status: 'ISSUED', notBefore: ago(80 * DAY), notAfter: ahead(10 * DAY), issuerCaId: 'ca-root-1', serial: '02' },
-  { source: 'acm', id: 'cert-www-1', subject: 'CN=www.acme.test', commonName: 'www.acme.test', status: 'ISSUED', notBefore: ago(20 * DAY), notAfter: ahead(70 * DAY), serial: '03' }
+  // Real list rows: source is pca-ca, pca-cert or lets-encrypt; template is server|client.
+  { source: 'pca-ca', id: 'ca-root-1', subject: 'CN=Acme Root CA', commonName: 'Acme Root CA', status: 'ACTIVE', notBefore: ago(100 * DAY), notAfter: ahead(3000 * DAY), caType: 'ROOT', serial: '01', keyAlgorithm: 'EC_secp384r1', expiringSoon: false },
+  { source: 'pca-cert', id: 'cert-api-1', subject: 'api.acme.test', commonName: 'api.acme.test', status: 'ISSUED', notBefore: ago(80 * DAY), notAfter: ahead(10 * DAY), issuerCaId: 'ca-root-1', serial: '02', keyAlgorithm: 'EC_prime256v1', template: 'server', expiringSoon: true },
+  { source: 'lets-encrypt', id: 'cert-www-1', subject: 'www.acme.test', commonName: 'www.acme.test', status: 'ISSUED', notBefore: ago(20 * DAY), notAfter: ahead(70 * DAY), serial: '03', keyAlgorithm: 'EC_prime256v1', expiringSoon: false }
 ];
 
 function certDetail(id: string) {
@@ -331,6 +332,15 @@ const GET: Record<string, Handler> = {
   '/v1/certificates/detail': (q) => certDetail(q.get('id') ?? ''),
   '/v1/certificates/letsencrypt/settings': () => ({ environment: 'staging', directoryUrl: '', contactEmail: 'ops@acme.test' }),
   '/v1/certificates/acme/eab': () => ({ keys: [] }),
+  '/v1/certificates/acme/settings': () => ({
+    enabled: true,
+    directoryUrl: 'https://citadel.acme.test/acme/directory',
+    issuingCaId: '',
+    effectiveIssuingCaId: 'ca-root-1',
+    allowedDomains: ['acme.test'],
+    allowedIpRanges: [],
+    validationAllowedCidrs: []
+  }),
   '/v1/audit': () => ({ events: auditRows.map(({ id, action, keyId, result, errorType, actor, createdAt }) => ({ id, action, keyId, result, errorType, actor, createdAt })) }),
   '/v1/audit/events': (q) => {
     const limit = Number(q.get('limit') ?? 50);

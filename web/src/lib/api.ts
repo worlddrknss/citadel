@@ -646,7 +646,7 @@ export const api = {
       body: JSON.stringify(body)
     }),
   requestLetsEncryptCert: (domains: string) =>
-    req<{ requested: boolean }>('/v1/certificates/letsencrypt/request', {
+    req<{ requested: boolean; certId?: string; domains?: string }>('/v1/certificates/letsencrypt/request', {
       method: 'POST',
       body: JSON.stringify({ domains })
     }),

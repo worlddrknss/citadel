@@ -31,7 +31,11 @@
   let error = $state('');
   let touched = $state(false);
 
-  const parents = $derived(cas.filter((c) => (c.status ?? '').toUpperCase() === 'ACTIVE' || !c.status));
+  // Subordinates are created with pathLen 0 and can't sign further CAs, so
+  // only active roots can be parents.
+  const parents = $derived(
+    cas.filter((c) => ((c.status ?? '').toUpperCase() === 'ACTIVE' || !c.status) && (c.caType ?? '').toUpperCase() !== 'SUBORDINATE')
+  );
 
   $effect(() => {
     if (open) untrack(reset);

@@ -18,6 +18,7 @@
     kmsKeys,
     tab = $bindable('overview'),
     canEdit,
+    canReveal = true,
     onclose,
     onedit,
     ondelete
@@ -26,6 +27,8 @@
     kmsKeys: KMSKey[];
     tab?: string;
     canEdit: boolean;
+    /** False hides SecureString reveals (viewers, unless the account allows it). */
+    canReveal?: boolean;
     onclose: () => void;
     onedit: () => void;
     ondelete: () => void;
@@ -178,7 +181,9 @@
         <span class="label">Current value</span>
         <div class="value-row">
           {#key `${param.name}:${param.version}`}
-            {#if secure}
+            {#if secure && !canReveal}
+              <span class="subtle small">Hidden. Viewers can't reveal values in this account.</span>
+            {:else if secure}
               <SecretValue load={async () => (await api.revealParameter(param.name)).value} />
             {:else}
               <InlineValue auto list={param.type === 'StringList'} initial={param.value} load={async () => (await api.revealParameter(param.name)).value} />
@@ -251,7 +256,9 @@
                 </div>
                 <span class="subtle small">{fmtDateTime(h.modifiedAt)}{h.description ? ` · ${h.description}` : ''}</span>
                 <div class="hist-val">
-                  {#if h.type === 'SecureString'}
+                  {#if h.type === 'SecureString' && !canReveal}
+                    <span class="subtle small">Hidden</span>
+                  {:else if h.type === 'SecureString'}
                     <SecretValue load={async () => (await params.revealVersion(name, h.version)).value} />
                   {:else}
                     <InlineValue list={h.type === 'StringList'} load={async () => (await params.revealVersion(name, h.version)).value} />

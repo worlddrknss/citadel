@@ -16,7 +16,7 @@
   import InlineValue from './InlineValue.svelte';
   import ParamPanel from './ParamPanel.svelte';
   import ParamForm from './ParamForm.svelte';
-  import { TYPES, TYPE_TONE, segments, prefixOf, leaf, fmtRelative, fmtDateTime, type Param } from './api';
+  import { params, TYPES, TYPE_TONE, segments, prefixOf, leaf, fmtRelative, fmtDateTime, type Param } from './api';
 
   const canEdit = $derived(session.can('editor'));
 
@@ -74,9 +74,21 @@
       kmsKeys = [];
     }
   }
+  // Viewers may decrypt SecureString values only when the account allows it
+  // (/v1/secrets/settings viewersCanReveal); the server answers 403 otherwise.
+  let viewersCanReveal = $state(false);
+  const canReveal = $derived(canEdit || viewersCanReveal);
+  async function loadRevealSetting() {
+    try {
+      viewersCanReveal = (await params.revealSettings()).viewersCanReveal;
+    } catch {
+      viewersCanReveal = false;
+    }
+  }
   onMount(() => {
     load();
     loadKeys();
+    if (!canEdit) loadRevealSetting();
   });
 
   const selected = $derived(all.find((p) => p.name === selectedName));
@@ -292,7 +304,9 @@
           </td>
           <td class="value">
             {#key `${p.name}:${p.version}`}
-              {#if p.type === 'SecureString'}
+              {#if p.type === 'SecureString' && !canReveal}
+                <span class="subtle small" title="Viewers can't reveal values in this account">Hidden</span>
+              {:else if p.type === 'SecureString'}
                 <SecretValue load={async () => (await api.revealParameter(p.name)).value} />
               {:else}
                 <InlineValue auto list={p.type === 'StringList'} initial={p.value} load={async () => (await api.revealParameter(p.name)).value} />
@@ -336,6 +350,7 @@
       {kmsKeys}
       bind:tab
       {canEdit}
+      {canReveal}
       onclose={closeParam}
       onedit={() => startEdit(selected)}
       ondelete={() => remove(selected)}

@@ -76,6 +76,10 @@ func (s *Server) handleV1UpdateParameter(w http.ResponseWriter, r *http.Request)
 	if strings.TrimSpace(req.Tier) != "" {
 		tier = normalizeParameterTier(req.Tier)
 	}
+	if current.Tier == parameterTierAdvanced && tier != parameterTierAdvanced {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "an Advanced parameter can't move back to the Standard tier")
+		return
+	}
 	description := current.Description
 	if req.Description != nil {
 		description = strings.TrimSpace(*req.Description)

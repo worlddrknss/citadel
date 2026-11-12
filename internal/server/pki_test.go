@@ -236,6 +236,12 @@ func TestPKISubordinateChainAndGeneratedKey(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "certId") || strings.Contains(rec.Body.String(), "BEGIN RSA") {
 		t.Fatal("unexpected response shape")
 	}
+	// The detail reports the console's template name, not the AWS one.
+	rec = e.do("viewer", "GET", "/v1/certificates/detail?source=pca-cert&id="+m["certId"].(string), nil)
+	wantStatus(t, rec, http.StatusOK)
+	if got := decode(t, rec)["template"]; got != "client" {
+		t.Fatalf("detail template = %v, want client", got)
+	}
 	if !e.audited("citadel.IssueCertificate") {
 		t.Fatal("issue not audited")
 	}
@@ -259,7 +265,7 @@ func TestPKIIssueFromCSRListAndRevoke(t *testing.T) {
 			row = &list.Certificates[i]
 		}
 	}
-	if row == nil || row.CommonName != "web.example.com" || row.Serial == "" || row.KeyAlgorithm != keyAlgP256 || !row.ExpiringSoon || row.Template != "EndEntityServerAuthCertificate/V1" {
+	if row == nil || row.CommonName != "web.example.com" || row.Serial == "" || row.KeyAlgorithm != keyAlgP256 || !row.ExpiringSoon || row.Template != "server" {
 		t.Fatalf("row = %+v", row)
 	}
 

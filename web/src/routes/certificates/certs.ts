@@ -116,7 +116,8 @@ export const REVOKE_REASONS: { value: string; label: string }[] = [
   { value: 'AffiliationChanged', label: 'Affiliation changed' },
   { value: 'Superseded', label: 'Superseded' },
   { value: 'CessationOfOperation', label: 'Cessation of operation' },
-  { value: 'PrivilegeWithdrawn', label: 'Privilege withdrawn' }
+  { value: 'PrivilegeWithdrawn', label: 'Privilege withdrawn' },
+  { value: 'AACompromise', label: 'Attribute authority compromise' }
 ];
 
 export const KEY_ALGORITHMS: { value: string; label: string }[] = [

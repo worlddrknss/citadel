@@ -97,11 +97,11 @@
     reqError = '';
     try {
       if (method === 'http') {
-        await api.requestLetsEncryptCert(domainList.join(','));
+        const r = await api.requestLetsEncryptCert(domainList.join(','));
         toast.success(`Issued a certificate for ${domainList[0]}`);
         domains = '';
         reqTouched = false;
-        onissued();
+        onissued(r.certId);
       } else {
         order = await api.beginLetsEncryptDns(domainList.join(','));
       }

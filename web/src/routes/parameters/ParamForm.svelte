@@ -102,13 +102,16 @@
     try {
       const kms = type === 'SecureString' ? kmsKeyId || undefined : undefined;
       if (editing) {
+        // On edit an omitted kmsKeyId keeps the current key; "" switches a
+        // SecureString back to the account default key.
+        const editKms = type !== 'SecureString' ? undefined : kmsKeyId !== (editing.kmsKeyId ?? '') ? kmsKeyId : undefined;
         await params.update({
           name: editing.name,
           expectedVersion: editing.version,
           type,
           value: keepValue ? undefined : value,
           description: description.trim(),
-          kmsKeyId: kms,
+          kmsKeyId: editKms,
           tier
         });
         toast.success(`Saved ${editing.name} as version ${editing.version + 1}`);
