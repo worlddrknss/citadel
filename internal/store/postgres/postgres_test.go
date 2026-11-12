@@ -247,7 +247,6 @@ func TestTenantIsolation(t *testing.T) {
 	})
 	t.Run("ListSecrets", func(t *testing.T) {
 		secrets, err := st.ListSecrets(ctxB)
-		skipIfRotationColumnBug(t, err)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -261,7 +260,6 @@ func TestTenantIsolation(t *testing.T) {
 		// Control: the owner can describe it, so a failure for B is isolation
 		// rather than a broken query.
 		_, err := st.DescribeSecret(ctxA, name)
-		skipIfRotationColumnBug(t, err)
 		if err != nil {
 			t.Fatalf("DescribeSecret(A): %v", err)
 		}
@@ -271,7 +269,6 @@ func TestTenantIsolation(t *testing.T) {
 	})
 	t.Run("GetSecretValue", func(t *testing.T) {
 		v, err := st.GetSecretValue(ctxA, name, "", "")
-		skipIfRotationColumnBug(t, err)
 		if err != nil || v.SecretString == nil || *v.SecretString != "a-secret" {
 			t.Fatalf("GetSecretValue(A) = %v, %v", v.SecretString, err)
 		}
@@ -300,14 +297,4 @@ func TestTenantIsolation(t *testing.T) {
 			t.Fatalf("account A's value after B's create = %v, %v", v.SecretString, err)
 		}
 	})
-}
-
-// skipIfRotationColumnBug skips when err is the missing rotation_enabled
-// column: the Secrets Manager queries select and update
-// sm_secrets.rotation_enabled, but no schema version ever creates it.
-func skipIfRotationColumnBug(t *testing.T, err error) {
-	t.Helper()
-	if err != nil && strings.Contains(err.Error(), `column "rotation_enabled" does not exist`) {
-		t.Skipf("known bug: sm_secrets has no rotation_enabled column, so secret reads fail on PostgreSQL: %v", err)
-	}
 }
