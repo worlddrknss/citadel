@@ -13,7 +13,7 @@ import (
 
 // ListUIUsers returns the admin-console users persisted in the database.
 func (s *Store) ListUIUsers(ctx context.Context) ([]store.UIUser, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT username, password_hash, role, display_name, accounts_json FROM ui_users ORDER BY username`)
+	rows, err := s.db.QueryContext(ctx, `SELECT username, password_hash, role, display_name, accounts_json, platform_admin FROM ui_users ORDER BY username`)
 	if err != nil {
 		return nil, err
 	}
@@ -24,7 +24,7 @@ func (s *Store) ListUIUsers(ctx context.Context) ([]store.UIUser, error) {
 			user         store.UIUser
 			accountsJSON string
 		)
-		if err := rows.Scan(&user.Username, &user.PasswordHash, &user.Role, &user.DisplayName, &accountsJSON); err != nil {
+		if err := rows.Scan(&user.Username, &user.PasswordHash, &user.Role, &user.DisplayName, &accountsJSON, &user.PlatformAdmin); err != nil {
 			return nil, err
 		}
 		user.Accounts = store.DecodeAccountsJSON(accountsJSON)
@@ -34,7 +34,7 @@ func (s *Store) ListUIUsers(ctx context.Context) ([]store.UIUser, error) {
 }
 
 // UpsertUIUser inserts or updates an admin-console user. The PasswordHash field
-// must already contain an Argon2id hash; plaintext passwords are never stored.
+// must already contain a password hash; plaintext passwords are never stored.
 func (s *Store) UpsertUIUser(ctx context.Context, user store.UIUser) error {
 	username := strings.TrimSpace(user.Username)
 	if username == "" {
@@ -47,15 +47,16 @@ func (s *Store) UpsertUIUser(ctx context.Context, user store.UIUser) error {
 	if err != nil {
 		return err
 	}
-	const q = `INSERT INTO ui_users (username, password_hash, role, display_name, accounts_json, updated_at)
-VALUES ($1, $2, $3, $4, $5, NOW())
+	const q = `INSERT INTO ui_users (username, password_hash, role, display_name, accounts_json, platform_admin, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, NOW())
 ON CONFLICT (username) DO UPDATE SET
 	password_hash = EXCLUDED.password_hash,
 	role = EXCLUDED.role,
 	display_name = EXCLUDED.display_name,
 	accounts_json = EXCLUDED.accounts_json,
+	platform_admin = EXCLUDED.platform_admin,
 	updated_at = NOW()`
-	_, err = s.db.ExecContext(ctx, q, username, user.PasswordHash, store.NormalizeUIRole(user.Role), user.DisplayName, accountsJSON)
+	_, err = s.db.ExecContext(ctx, q, username, user.PasswordHash, store.NormalizeUIRole(user.Role), user.DisplayName, accountsJSON, user.PlatformAdmin)
 	return err
 }
 

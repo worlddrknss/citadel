@@ -32,9 +32,9 @@ func auditTestServer(t *testing.T) (*Server, *memory.Store, http.Handler) {
 	t.Helper()
 	st := newTenantTestStore()
 	users := map[string]store.UIUser{
-		"admin-a":  {Username: "admin-a", Role: "admin", DisplayName: "Admin A"},
-		"viewer-a": {Username: "viewer-a", Role: "viewer"},
-		"admin-b":  {Username: "admin-b", Role: "admin"},
+		"admin-a":  {Username: "admin-a", Role: "admin", DisplayName: "Admin A", Accounts: []string{auditAcctA}},
+		"viewer-a": {Username: "viewer-a", Role: "viewer", Accounts: []string{auditAcctA}},
+		"admin-b":  {Username: "admin-b", Role: "admin", Accounts: []string{auditAcctB}},
 	}
 	cfg := config.Config{
 		UIUsers:        users,
@@ -44,11 +44,14 @@ func auditTestServer(t *testing.T) (*Server, *memory.Store, http.Handler) {
 		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
 	}
 	s := &Server{cfg: cfg, store: st}
-	rt := s.uiRuntime()
 	now := time.Now().UTC()
 	for name, acct := range map[string]string{"admin-a": auditAcctA, "viewer-a": auditAcctA, "admin-b": auditAcctB} {
-		u := users[name]
-		rt.sessions[name] = uiSession{SessionID: name, Username: name, AccountID: acct, Role: u.Role, DisplayName: u.DisplayName, CreatedAt: now, LastSeenAt: now}
+		if err := st.CreateConsoleSession(context.Background(), store.ConsoleSession{
+			ID: name, TokenHash: hashSessionToken(name), Username: name, AccountID: acct,
+			Method: store.SessionMethodPassword, CreatedAt: now, LastSeenAt: now, ExpiresAt: now.Add(time.Hour),
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return s, st, s.Handler()
 }
@@ -65,7 +68,8 @@ func auditDo(t *testing.T, h http.Handler, user, method, target string, body any
 	req.Header.Set("X-Forwarded-For", "198.51.100.9, 10.9.9.9")
 	req.Header.Set("User-Agent", "audit-test/1")
 	if user != "" {
-		req.AddCookie(&http.Cookie{Name: adminSessionCookieName, Value: user})
+		req.AddCookie(&http.Cookie{Name: sessionCookieInsecure, Value: user})
+		req.Header.Set(csrfHeader, "1")
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

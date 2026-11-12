@@ -33,7 +33,6 @@ var (
 type Server struct {
 	cfg            config.Config
 	store          store.Store
-	ui             *uiRuntime
 	acmeChallenges *acmeChallengeStore
 	// acmeHTTPClient, when set, is used by the Let's Encrypt ACME client. It
 	// allows trusting a private or test ACME CA (e.g. Pebble). When nil the
@@ -44,6 +43,12 @@ type Server struct {
 
 	secretsOnce sync.Once
 	secretsSvcV *secretsService
+
+	authOnce sync.Once
+	authV    *authState
+	// jobs runs periodic background jobs; see jobRunner. Nil in servers
+	// built without New.
+	jobs *jobRunner
 
 	audit auditRuntime
 }
@@ -75,6 +80,10 @@ func New(ctx context.Context, cfg config.Config, st store.Store, webFS fs.FS) (*
 
 	// Merge admin-console users from the database (RBAC tied into the DB) with
 	// any env-configured users, seeding env users into the DB on first run.
+	envUsers := make(map[string]store.UIUser, len(cfg.UIUsers))
+	for name, u := range cfg.UIUsers {
+		envUsers[name] = u
+	}
 	if mergedUsers, err := mergeDBUIUsers(ctx, st, cfg.UIUsers); err != nil {
 		log.Printf("warning: failed to load admin users from database: %v", err)
 	} else {
@@ -82,16 +91,47 @@ func New(ctx context.Context, cfg config.Config, st store.Store, webFS fs.FS) (*
 	}
 
 	_, dbBacked := st.(*postgres.Store)
-	if err := config.CheckSecurityPosture(cfg, dbBacked); err != nil {
+	posture, err := config.CheckSecurityPosture(cfg, dbBacked)
+	if err != nil {
 		return nil, fmt.Errorf("refusing to start: %w", err)
 	}
 	if cfg.InsecureDev {
 		log.Printf("WARNING: KMS_INSECURE_DEV=true — authentication is DISABLED. Never use this outside local development.")
 	}
 
-	srv := &Server{cfg: cfg, store: st, acmeChallenges: newACMEChallengeStore(), webFS: webFS}
-	srv.startAuditStreamJob()
-	return srv, nil
+	s := &Server{cfg: cfg, store: st, acmeChallenges: newACMEChallengeStore(), webFS: webFS, jobs: newJobRunner()}
+	s.authV = newAuthState()
+	s.authV.envUsers = envUsers
+	if len(cfg.UIUsers) > 0 {
+		s.authV.bootstrapped.Store(true)
+	}
+	if posture.Bootstrap {
+		log.Printf("No console users exist: %s is in bootstrap mode and its API is closed until setup completes. Open %s to create the organization and the first admin.", AppName, bootstrapURL(cfg))
+	}
+	s.jobs.Every("console-session-purge", 10*time.Minute, s.purgeExpiredSessions)
+	s.jobs.Every("sts-session-purge", 15*time.Minute, s.purgeExpiredSTSSessions)
+	s.startAuditStreamJob()
+	return s, nil
+}
+
+// Start runs the server's background jobs until ctx is cancelled.
+func (s *Server) Start(ctx context.Context) { s.jobs.Start(ctx) }
+
+// Wait blocks until the background jobs have stopped after the Start
+// context was cancelled.
+func (s *Server) Wait() { s.jobs.Wait() }
+
+// bootstrapURL is the console URL logged in bootstrap mode.
+func bootstrapURL(cfg config.Config) string {
+	scheme := "http"
+	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+		scheme = "https"
+	}
+	host := cfg.Addr
+	if strings.HasPrefix(host, ":") {
+		host = "localhost" + host
+	}
+	return scheme + "://" + host + "/app/"
 }
 
 // handler returns the HTTP handler serving every route, wrapped in the
@@ -201,6 +241,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/iam/roles", s.handleV1CreateRole)
 	mux.HandleFunc("DELETE /v1/iam/roles", s.handleV1DeleteRole)
 
+	s.registerAuthRoutes(mux)
+
 	// Modern Svelte single-page control plane, embedded into the binary.
 	mux.Handle("/app/", http.HandlerFunc(s.handleApp))
 	mux.Handle("/app", http.RedirectHandler("/app/", http.StatusMovedPermanently))
@@ -230,8 +272,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /crl/{ca_id}", s.handleCRLDownload)
 
 	// Middleware chain (outermost first): panic recovery, security headers,
-	// request logging.
-	return withPanicRecovery(withSecurityHeaders(withRequestLogging(s.withAuditContext(mux))))
+	// request logging, audit context, CSRF checks, the bootstrap-mode gate.
+	return withPanicRecovery(s.withSecurityHeaders(withRequestLogging(s.withAuditContext(s.withCSRFProtection(s.withBootstrapGate(mux))))))
 }
 
 func maybeBootstrapFromLegacy(ctx context.Context, cfg config.Config, st store.Store) error {

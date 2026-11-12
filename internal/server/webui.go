@@ -1,11 +1,15 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"io/fs"
 	"mime"
 	"net/http"
 	"path"
+	"regexp"
 	"strings"
+	"sync"
 )
 
 // webDist returns the web console build the server was given, or an empty
@@ -53,6 +57,9 @@ func (s *Server) handleApp(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if path.Ext(reqPath) == ".html" {
+		w.Header().Set("Content-Security-Policy", appCSP(inlineScriptHashes(data)))
+	}
 	if ctype := mime.TypeByExtension(path.Ext(reqPath)); ctype != "" {
 		w.Header().Set("Content-Type", ctype)
 	}
@@ -64,4 +71,32 @@ func (s *Server) handleApp(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+// inlineScriptRe matches script elements; group 1 is the attributes, group 2
+// the body.
+var inlineScriptRe = regexp.MustCompile(`(?is)<script\b([^>]*)>(.*?)</script\s*>`)
+
+var scriptSrcAttrRe = regexp.MustCompile(`(?i)\bsrc\s*=`)
+
+var scriptHashCache sync.Map // [sha256.Size]byte of the page -> []string
+
+// inlineScriptHashes returns the CSP sources ('sha256-<base64>') for every
+// inline script in an HTML page, so the console's CSP can allow exactly the
+// SvelteKit bootstrap and theme scripts the build produced and nothing else.
+func inlineScriptHashes(page []byte) []string {
+	key := sha256.Sum256(page)
+	if v, ok := scriptHashCache.Load(key); ok {
+		return v.([]string)
+	}
+	var out []string
+	for _, m := range inlineScriptRe.FindAllSubmatch(page, -1) {
+		if scriptSrcAttrRe.Match(m[1]) || len(m[2]) == 0 {
+			continue
+		}
+		sum := sha256.Sum256(m[2])
+		out = append(out, "'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'")
+	}
+	scriptHashCache.Store(key, out)
+	return out
 }

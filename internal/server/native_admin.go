@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,17 +33,14 @@ type nativeLoginRequest struct {
 }
 
 // handleV1Login authenticates a user and establishes the session cookie that
-// the SPA (and the rest of /v1) relies on. It is the JSON-native replacement
-// for the legacy /login html form.
+// the SPA (and the rest of /v1) relies on. Attempts are rate limited per
+// client address and per username, failures back off exponentially, and
+// every failure is audited. Unknown users, wrong passwords and accounts the
+// user does not belong to get the same response after the same work.
 func (s *Server) handleV1Login(w http.ResponseWriter, r *http.Request) {
-	runtime := s.uiRuntime()
-	if !runtime.enabled && !s.cfg.InsecureDev {
-		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "no console users are configured")
-		return
-	}
-	if !runtime.enabled {
-		// Auth disabled (local dev / bootstrap): every caller is the local
-		// admin, so report success without a cookie.
+	if s.cfg.InsecureDev && !s.hasConsoleUsers(r.Context()) {
+		// Auth disabled (local dev): every caller is the local admin, so
+		// report success without a cookie.
 		writeNativeJSON(w, http.StatusOK, map[string]any{
 			"username":  "local",
 			"role":      "admin",
@@ -51,90 +51,93 @@ func (s *Server) handleV1Login(w http.ResponseWriter, r *http.Request) {
 	}
 	var req nativeLoginRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
 	accountID := strings.TrimSpace(req.AccountID)
 	username := strings.TrimSpace(req.Username)
-	if accountID == "" || username == "" {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", "account ID and username are required")
+	if accountID == "" || len(accountID) > 64 || username == "" || len(username) > 128 || len(req.Password) > 1024 {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "account ID, username and password are required")
 		return
 	}
 
-	runtime.mu.Lock()
-	user, ok := runtime.users[username]
-	runtime.mu.Unlock()
+	a := s.auth()
+	ip := s.clientIP(r)
+	userKey := strings.ToLower(username)
+	if wait, limited := loginThrottled(a, ip, userKey); limited {
+		log.Printf("login throttled ip=%s", ip)
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		writeNativeError(w, http.StatusTooManyRequests, "rate_limited", "too many sign-in attempts; try again later")
+		return
+	}
 
-	// Always run a verification to keep timing roughly constant and avoid
+	user, found := s.lookupUser(r.Context(), username)
+	// Always run a verification to keep timing constant and avoid
 	// user-enumeration via response timing.
 	stored := dummyPasswordHash
-	if ok {
+	if found {
 		stored = user.StoredCredential()
 	}
-	if !cryptoutil.VerifyPassword(stored, req.Password) || !ok {
-		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid credentials")
-		return
+	passwordOK := cryptoutil.VerifyPassword(stored, req.Password)
+	member := false
+	if found && passwordOK {
+		_, member = accountRole(s.userMemberships(r.Context(), user), accountID)
 	}
-	s.rehashOnLogin(r.Context(), runtime, user, req.Password)
-
-	// Confirm the user may access the requested account. Prefer the DB-backed
-	// junction table; fall back to statically-configured accounts.
-	found := false
-	if userAccounts, err := s.store.ListUserAccounts(r.Context(), username); err == nil {
-		for _, ua := range userAccounts {
-			if ua.AccountID == accountID {
-				found = true
-				break
-			}
-		}
-	}
-	if !found {
-		for _, a := range user.Accounts {
-			if a == accountID {
-				found = true
-				break
-			}
-		}
-	}
-	if !found {
+	if !found || !passwordOK || !member {
+		a.failUser.Fail(userKey)
+		a.failIP.Fail(ip)
+		s.recordAudit(r.Context(), store.AuditEvent{Action: "citadel.LoginFailed", KeyID: accountID, Result: "denied", ErrorType: "InvalidCredentials", AuditOrigin: s.userAuditOrigin(r, truncate(username, 128), auditAccountFor(accountID))})
 		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid credentials or account access denied")
 		return
 	}
+	a.failUser.Reset(userKey)
+	a.failIP.Reset(ip)
+	s.rehashOnLogin(r.Context(), user, req.Password)
 
-	sessionID := cryptoutil.RandomHex(24)
-	now := time.Now().UTC()
-	session := uiSession{
-		SessionID:   sessionID,
-		Username:    user.Username,
-		AccountID:   accountID,
-		Role:        user.Role,
-		DisplayName: user.DisplayName,
-		Accounts:    append([]string(nil), user.Accounts...),
-		CreatedAt:   now,
-		LastSeenAt:  now,
+	sess, err := s.issueConsoleSession(r.Context(), w, r, user.Username, accountID, store.SessionMethodPassword)
+	if err != nil {
+		log.Printf("create console session failed: %v", err)
+		writeNativeError(w, http.StatusInternalServerError, "login_failed", "could not create a session")
+		return
 	}
-	runtime.mu.Lock()
-	runtime.sessions[sessionID] = session
-	runtime.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: adminSessionCookieName, Value: sessionID, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: runtime.secureCookies})
-	writeNativeJSON(w, http.StatusOK, map[string]any{
-		"username":    session.Username,
-		"displayName": session.DisplayName,
-		"role":        session.Role,
-		"accountId":   session.AccountID,
-		"accounts":    session.Accounts,
-	})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: "citadel.Login", KeyID: accountID, Result: "ok", AuditOrigin: s.userAuditOrigin(r, user.Username, accountID)})
+	me, err := s.sessionFromRow(r.Context(), sess)
+	if err != nil {
+		writeNativeError(w, http.StatusInternalServerError, "login_failed", "could not create a session")
+		return
+	}
+	writeNativeJSON(w, http.StatusOK, meResponse(me))
 }
 
-// handleV1Logout clears the active session and cookie.
-func (s *Server) handleV1Logout(w http.ResponseWriter, r *http.Request) {
-	runtime := s.uiRuntime()
-	if cookie, err := r.Cookie(adminSessionCookieName); err == nil {
-		runtime.mu.Lock()
-		delete(runtime.sessions, cookie.Value)
-		runtime.mu.Unlock()
+// loginThrottled applies the login rate limits and lockouts. It reports how
+// long to wait when the attempt must be refused.
+func loginThrottled(a *authState, ip, userKey string) (time.Duration, bool) {
+	if blocked, d := a.failIP.Blocked(ip); blocked {
+		return d, true
 	}
-	http.SetCookie(w, &http.Cookie{Name: adminSessionCookieName, Value: "", Path: "/", Expires: time.Unix(0, 0), MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	if blocked, d := a.failUser.Blocked(userKey); blocked {
+		return d, true
+	}
+	if ok, d := a.loginIP.Reserve(ip); !ok {
+		return d, true
+	}
+	if ok, d := a.loginUser.Reserve(userKey); !ok {
+		return d, true
+	}
+	return 0, false
+}
+
+// handleV1Logout revokes the active session and clears the cookie.
+func (s *Server) handleV1Logout(w http.ResponseWriter, r *http.Request) {
+	if token := s.sessionToken(r); token != "" {
+		if row, err := s.store.GetConsoleSessionByTokenHash(r.Context(), hashSessionToken(token)); err == nil {
+			if err := s.store.DeleteConsoleSession(r.Context(), row.Username, row.ID); err != nil && !errors.Is(err, store.ErrConsoleSessionNotFound) {
+				log.Printf("logout: delete session failed: %v", err)
+			}
+			s.recordAudit(r.Context(), store.AuditEvent{Action: "citadel.Logout", KeyID: row.AccountID, Result: "ok", AuditOrigin: s.userAuditOrigin(r, row.Username, row.AccountID)})
+		}
+	}
+	s.clearSessionCookie(w)
 	writeNativeJSON(w, http.StatusOK, map[string]any{"loggedOut": true})
 }
 
@@ -368,17 +371,23 @@ func (s *Server) handleV1SetAccessKeyStatus(w http.ResponseWriter, r *http.Reque
 	writeNativeJSON(w, http.StatusOK, map[string]any{"accessKeyId": keyID, "status": status})
 }
 
-// guardOwnAccessKey ensures a non-admin caller can only act on access keys that
-// belong to their own username, preventing cross-user key tampering.
+// guardOwnAccessKey ensures a caller can only act on their own access keys,
+// or, as an admin, on keys in their account, preventing cross-user and
+// cross-account key tampering.
 func (s *Server) guardOwnAccessKey(ctx context.Context, sess *uiSession, keyID string) error {
-	owner, _, _, _, err := s.store.GetAccessKeyByID(ctx, keyID)
+	owner, accountID, _, _, err := s.store.GetAccessKeyByID(ctx, keyID)
 	if err != nil {
 		return err
 	}
-	if !strings.EqualFold(owner, sess.Username) && !uiRoleAtLeast(sess.Role, "admin") {
-		return store.ErrAccessKeyNotFound
+	if strings.EqualFold(owner, sess.Username) {
+		return nil
 	}
-	return nil
+	// Admins may manage other users' keys, but only in their own account
+	// unless they are platform admins.
+	if uiRoleAtLeast(sess.Role, "admin") && (sess.PlatformAdmin || accountID == sess.AccountID) {
+		return nil
+	}
+	return store.ErrAccessKeyNotFound
 }
 
 type nativeChangePasswordRequest struct {
@@ -402,23 +411,25 @@ func (s *Server) handleV1ChangePassword(w http.ResponseWriter, r *http.Request) 
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "new password must be at least 8 characters")
 		return
 	}
-	users, err := s.store.ListUIUsers(ctx)
+	if len(req.NewPassword) > maxPasswordLen {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "new password is too long")
+		return
+	}
+	if sess.ViaToken || sess.SessionID == "" {
+		writeNativeError(w, http.StatusForbidden, "forbidden", "this action requires a console session")
+		return
+	}
+	current, err := s.store.GetUIUser(ctx, sess.Username)
 	if err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "update_failed", "failed to verify credentials")
-		return
-	}
-	var current *store.UIUser
-	for i := range users {
-		if users[i].Username == sess.Username {
-			current = &users[i]
-			break
+		env, isEnv := s.envUsers()[sess.Username]
+		if !errors.Is(err, store.ErrUIUserNotFound) || !isEnv || s.dbBacked() {
+			writeNativeError(w, http.StatusInternalServerError, "update_failed", "failed to verify credentials")
+			return
 		}
-	}
-	if current == nil {
-		writeNativeError(w, http.StatusNotFound, "not_found", "user not found")
-		return
+		current = env
 	}
 	if !cryptoutil.VerifyPassword(current.StoredCredential(), req.CurrentPassword) {
+		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ChangePassword", Result: "denied", ErrorType: "InvalidCredentials", AuditOrigin: s.auditOrigin(r)})
 		writeNativeError(w, http.StatusForbidden, "forbidden", "current password is incorrect")
 		return
 	}
@@ -429,112 +440,251 @@ func (s *Server) handleV1ChangePassword(w http.ResponseWriter, r *http.Request) 
 	}
 	current.PasswordHash = hashed
 	current.Password = ""
-	if err := s.store.UpsertUIUser(ctx, *current); err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "update_failed", err.Error())
+	if err := s.store.UpsertUIUser(ctx, current); err != nil {
+		log.Printf("change password: %v", err)
+		writeNativeError(w, http.StatusInternalServerError, "update_failed", "could not update the password")
 		return
+	}
+	// A new password ends the user's other sessions.
+	if _, err := s.store.DeleteUserConsoleSessions(ctx, sess.Username, sess.SessionID); err != nil {
+		log.Printf("change password: revoke sessions: %v", err)
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ChangePassword", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"updated": true})
 }
 
 // ---- master admin: users ---------------------------------------------------
+//
+// Platform admins manage every user and account; account admins only their
+// session's account (see the role model in admin_auth.go).
 
-type nativeUser struct {
-	Username    string   `json:"username"`
-	DisplayName string   `json:"displayName"`
-	Role        string   `json:"role"`
-	Accounts    []string `json:"accounts"`
+type nativeMembership struct {
+	AccountID string `json:"accountId"`
+	Role      string `json:"role"`
 }
 
-// handleV1ListUsers lists the admin-console users.
+type nativeUser struct {
+	Username      string             `json:"username"`
+	DisplayName   string             `json:"displayName"`
+	Role          string             `json:"role"`
+	Accounts      []string           `json:"accounts"`
+	Memberships   []nativeMembership `json:"memberships"`
+	PlatformAdmin bool               `json:"platformAdmin"`
+}
+
+// adminCanManageUser reports whether sess may modify or delete user: platform
+// admins may modify anyone; account admins only users who belong to no
+// account but the session's own and are not platform admins.
+func (s *Server) adminCanManageUser(ctx context.Context, sess *uiSession, user store.UIUser) bool {
+	if sess.PlatformAdmin {
+		return true
+	}
+	if s.isPlatformAdmin(user) {
+		return false
+	}
+	ms := s.userMemberships(ctx, user)
+	if len(ms) == 0 {
+		return false
+	}
+	for _, m := range ms {
+		if m.AccountID != sess.AccountID {
+			return false
+		}
+	}
+	return true
+}
+
+// handleV1ListUsers lists console users with their memberships. Account
+// admins see only the members of their account, and only that membership.
 func (s *Server) handleV1ListUsers(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "admin")
+	sess, ctx, ok := s.nativeSession(w, r, "admin")
 	if !ok {
 		return
 	}
 	users, err := s.store.ListUIUsers(ctx)
 	if err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "list_failed", err.Error())
+		log.Printf("list users: %v", err)
+		writeNativeError(w, http.StatusInternalServerError, "list_failed", "could not list users")
 		return
+	}
+	if !s.dbBacked() {
+		// The memory store does not hold env-configured users.
+		have := map[string]bool{}
+		for _, u := range users {
+			have[u.Username] = true
+		}
+		for name, u := range s.envUsers() {
+			if !have[name] {
+				users = append(users, u)
+			}
+		}
+		slices.SortFunc(users, func(a, b store.UIUser) int { return strings.Compare(a.Username, b.Username) })
 	}
 	out := make([]nativeUser, 0, len(users))
 	for _, u := range users {
-		out = append(out, nativeUser{Username: u.Username, DisplayName: u.DisplayName, Role: u.Role, Accounts: u.Accounts})
+		ms := s.userMemberships(ctx, u)
+		nu := nativeUser{Username: u.Username, DisplayName: u.DisplayName, Role: store.NormalizeUIRole(u.Role), Accounts: []string{}, Memberships: []nativeMembership{}, PlatformAdmin: s.isPlatformAdmin(u)}
+		for _, m := range ms {
+			if !sess.PlatformAdmin && m.AccountID != sess.AccountID {
+				continue
+			}
+			nu.Accounts = append(nu.Accounts, m.AccountID)
+			nu.Memberships = append(nu.Memberships, nativeMembership{AccountID: m.AccountID, Role: m.Role})
+		}
+		if !sess.PlatformAdmin {
+			if len(nu.Memberships) == 0 {
+				continue
+			}
+			// The global role is not account information; show the
+			// account role instead.
+			nu.Role = nu.Memberships[0].Role
+		}
+		out = append(out, nu)
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{"users": out})
 }
 
 type nativeUpsertUserRequest struct {
-	Username    string   `json:"username"`
-	DisplayName string   `json:"displayName"`
-	Role        string   `json:"role"`
-	Password    string   `json:"password"`
-	Accounts    []string `json:"accounts"`
+	Username      string   `json:"username"`
+	DisplayName   string   `json:"displayName"`
+	Role          string   `json:"role"`
+	Password      string   `json:"password"`
+	Accounts      []string `json:"accounts"`
+	PlatformAdmin *bool    `json:"platformAdmin,omitempty"`
 }
 
-// handleV1UpsertUser creates or updates an admin-console user.
+// handleV1UpsertUser creates or updates a console user.
+//
+// Platform admins set the global role, static accounts and (optionally) the
+// platformAdmin flag. Account admins create users into their own account
+// (global role viewer, membership with the requested role) and may update
+// only users who belong to their account alone; for them role sets the
+// account role and the global role is untouched.
 func (s *Server) handleV1UpsertUser(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "admin")
+	sess, ctx, ok := s.nativeSession(w, r, "admin")
 	if !ok {
 		return
 	}
 	var req nativeUpsertUserRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
 	username := strings.TrimSpace(req.Username)
-	if username == "" {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", "username is required")
+	if !usernameRe.MatchString(username) {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "username must be 1-64 letters, digits, dots, dashes, underscores or @")
 		return
 	}
-	user := store.UIUser{
-		Username:    username,
-		DisplayName: strings.TrimSpace(req.DisplayName),
-		Role:        store.NormalizeUIRole(req.Role),
-		Accounts:    req.Accounts,
+	displayName := strings.TrimSpace(req.DisplayName)
+	if displayName == "" {
+		displayName = username
 	}
-	if user.DisplayName == "" {
-		user.DisplayName = username
+	if !validDisplayText(displayName, 100) {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "display name must be 1-100 characters")
+		return
 	}
-	// A password is required when creating a brand-new user; for updates it is
-	// optional and only changed when supplied.
-	existing, _ := s.store.ListUIUsers(ctx)
-	isNew := true
-	for _, u := range existing {
-		if u.Username == username {
-			isNew = false
-			user.PasswordHash = u.PasswordHash
-			if len(req.Accounts) == 0 {
-				user.Accounts = u.Accounts
+	if req.Role != "" && !validRoleName(req.Role) {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "role must be viewer, editor or admin")
+		return
+	}
+	role := store.NormalizeUIRole(req.Role)
+	if !sess.PlatformAdmin {
+		if req.PlatformAdmin != nil {
+			writeNativeError(w, http.StatusForbidden, "forbidden", "only platform admins can grant platform admin")
+			return
+		}
+		for _, a := range req.Accounts {
+			if strings.TrimSpace(a) != sess.AccountID {
+				writeNativeError(w, http.StatusForbidden, "forbidden", "account admins can only manage their own account")
+				return
 			}
-			break
 		}
 	}
-	if strings.TrimSpace(req.Password) != "" {
-		if len(req.Password) < 8 {
+
+	existing, err := s.store.GetUIUser(ctx, username)
+	isNew := errors.Is(err, store.ErrUIUserNotFound)
+	if err != nil && !isNew {
+		log.Printf("upsert user: %v", err)
+		writeNativeError(w, http.StatusInternalServerError, "save_failed", "could not save the user")
+		return
+	}
+	if !isNew && !s.adminCanManageUser(ctx, sess, existing) {
+		writeNativeError(w, http.StatusForbidden, "forbidden", "that user belongs to other accounts; ask a platform admin")
+		return
+	}
+
+	user := store.UIUser{Username: username, DisplayName: displayName}
+	if isNew {
+		user.Role = role
+		user.Accounts = req.Accounts
+		if !sess.PlatformAdmin {
+			user.Role = "viewer"
+			user.Accounts = nil
+		}
+	} else {
+		user.PasswordHash = existing.PasswordHash
+		user.PlatformAdmin = existing.PlatformAdmin
+		user.Role = existing.Role
+		user.Accounts = existing.Accounts
+		if sess.PlatformAdmin {
+			user.Role = role
+			if len(req.Accounts) > 0 {
+				user.Accounts = req.Accounts
+			}
+		}
+	}
+	if sess.PlatformAdmin && req.PlatformAdmin != nil {
+		if !*req.PlatformAdmin && strings.EqualFold(username, sess.Username) {
+			writeNativeError(w, http.StatusBadRequest, "invalid_request", "you cannot remove your own platform admin flag")
+			return
+		}
+		user.PlatformAdmin = *req.PlatformAdmin
+	}
+	if sess.PlatformAdmin && strings.EqualFold(username, sess.Username) && store.NormalizeUIRole(user.Role) != "admin" {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "you cannot demote yourself")
+		return
+	}
+	if req.Password != "" {
+		if len(req.Password) < 8 || len(req.Password) > maxPasswordLen {
 			writeNativeError(w, http.StatusBadRequest, "invalid_request", "password must be at least 8 characters")
 			return
 		}
 		hashed, err := cryptoutil.HashPassword(req.Password)
 		if err != nil {
-			writeNativeError(w, http.StatusInternalServerError, "create_failed", "failed to hash password")
+			log.Printf("upsert user: hash: %v", err)
+			writeNativeError(w, http.StatusInternalServerError, "save_failed", "could not save the user")
 			return
 		}
 		user.PasswordHash = hashed
-	} else if isNew {
+	} else if isNew || user.PasswordHash == "" {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "password is required for a new user")
 		return
 	}
 	if err := s.store.UpsertUIUser(ctx, user); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
+		log.Printf("upsert user: %v", err)
+		writeNativeError(w, http.StatusBadRequest, "save_failed", "could not save the user")
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpsertUser", Result: "ok", AuditOrigin: s.auditOrigin(r)})
+	if !sess.PlatformAdmin && sess.AccountID != "" {
+		// Account admins set the role in their own account.
+		if err := s.store.AddUserAccount(ctx, username, sess.AccountID, role); err != nil {
+			log.Printf("upsert user: membership: %v", err)
+			writeNativeError(w, http.StatusInternalServerError, "save_failed", "could not save the membership")
+			return
+		}
+	}
+	if req.Password != "" && !isNew {
+		// A reset password ends the user's existing sessions.
+		if _, err := s.store.DeleteUserConsoleSessions(ctx, username, ""); err != nil {
+			log.Printf("upsert user: revoke sessions: %v", err)
+		}
+	}
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpsertUser", KeyID: username, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"username": username, "created": isNew})
 }
 
-// handleV1DeleteUser removes an admin-console user.
+// handleV1DeleteUser removes a console user (and, with them, their sessions
+// and memberships).
 func (s *Server) handleV1DeleteUser(w http.ResponseWriter, r *http.Request) {
 	sess, ctx, ok := s.nativeSession(w, r, "admin")
 	if !ok {
@@ -549,11 +699,26 @@ func (s *Server) handleV1DeleteUser(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "you cannot delete your own account")
 		return
 	}
-	if err := s.store.DeleteUIUser(ctx, username); err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
+	user, err := s.store.GetUIUser(ctx, username)
+	if errors.Is(err, store.ErrUIUserNotFound) {
+		writeNativeError(w, http.StatusNotFound, "not_found", "user not found")
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteUser", Result: "ok", AuditOrigin: s.auditOrigin(r)})
+	if err != nil {
+		log.Printf("delete user: %v", err)
+		writeNativeError(w, http.StatusInternalServerError, "delete_failed", "could not delete the user")
+		return
+	}
+	if !s.adminCanManageUser(ctx, sess, user) {
+		writeNativeError(w, http.StatusForbidden, "forbidden", "that user belongs to other accounts; ask a platform admin")
+		return
+	}
+	if err := s.store.DeleteUIUser(ctx, username); err != nil {
+		log.Printf("delete user: %v", err)
+		writeNativeError(w, http.StatusInternalServerError, "delete_failed", "could not delete the user")
+		return
+	}
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteUser", KeyID: username, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
@@ -565,19 +730,24 @@ type nativeAccount struct {
 	CreatedAt string `json:"createdAt"`
 }
 
-// handleV1ListAccounts lists the deployment's accounts (organizations).
+// handleV1ListAccounts lists accounts: all of them for platform admins, the
+// caller's own accounts otherwise.
 func (s *Server) handleV1ListAccounts(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "admin")
+	sess, ctx, ok := s.nativeSession(w, r, "admin")
 	if !ok {
 		return
 	}
 	accounts, err := s.store.ListUIAccounts(ctx)
 	if err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "list_failed", err.Error())
+		log.Printf("list accounts: %v", err)
+		writeNativeError(w, http.StatusInternalServerError, "list_failed", "could not list accounts")
 		return
 	}
 	out := make([]nativeAccount, 0, len(accounts))
 	for _, a := range accounts {
+		if !sess.PlatformAdmin && !slices.Contains(sess.Accounts, a.AccountID) {
+			continue
+		}
 		out = append(out, nativeAccount{AccountID: a.AccountID, Name: a.Name, CreatedAt: a.CreatedAt})
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{"accounts": out})
@@ -587,24 +757,39 @@ type nativeCreateAccountRequest struct {
 	Name string `json:"name"`
 }
 
-// handleV1CreateAccount creates a new account.
+// requirePlatformAdmin is nativeSession(admin) restricted to platform admins.
+func (s *Server) requirePlatformAdmin(w http.ResponseWriter, r *http.Request) (*uiSession, context.Context, bool) {
+	sess, ctx, ok := s.nativeSession(w, r, "admin")
+	if !ok {
+		return nil, nil, false
+	}
+	if !sess.PlatformAdmin {
+		writeNativeError(w, http.StatusForbidden, "forbidden", "only platform admins can do that")
+		return nil, nil, false
+	}
+	return sess, ctx, true
+}
+
+// handleV1CreateAccount creates a new account (platform admins only).
 func (s *Server) handleV1CreateAccount(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "admin")
+	_, ctx, ok := s.requirePlatformAdmin(w, r)
 	if !ok {
 		return
 	}
 	var req nativeCreateAccountRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
-	if strings.TrimSpace(req.Name) == "" {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", "account name is required")
+	name := strings.TrimSpace(req.Name)
+	if !accountNameRe.MatchString(name) {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "account name must be 1-63 letters, digits, spaces, dots, dashes or underscores")
 		return
 	}
-	accountID, err := s.store.CreateUIAccount(ctx, req.Name)
+	accountID, err := s.store.CreateUIAccount(ctx, name)
 	if err != nil {
-		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
+		log.Printf("create account: %v", err)
+		writeNativeError(w, http.StatusBadRequest, "create_failed", "could not create the account (is the name taken?)")
 		return
 	}
 	// Provision the account's immutable default key (alias/default). Best-effort:
@@ -613,13 +798,13 @@ func (s *Server) handleV1CreateAccount(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.store.EnsureAccountDefaultKey(ctx, accountID); err != nil {
 		log.Printf("warning: failed to provision default key for account %s: %v", accountID, err)
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateAccount", Result: "ok", AuditOrigin: s.auditOrigin(r)})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateAccount", KeyID: accountID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"accountId": accountID, "created": true})
 }
 
-// handleV1DeleteAccount deletes an account.
+// handleV1DeleteAccount deletes an account (platform admins only).
 func (s *Server) handleV1DeleteAccount(w http.ResponseWriter, r *http.Request) {
-	sess, ctx, ok := s.nativeSession(w, r, "admin")
+	sess, ctx, ok := s.requirePlatformAdmin(w, r)
 	if !ok {
 		return
 	}
@@ -633,10 +818,15 @@ func (s *Server) handleV1DeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.DeleteUIAccount(ctx, accountID); err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
+		if errors.Is(err, store.ErrUIAccountNotFound) {
+			writeNativeError(w, http.StatusNotFound, "not_found", "account not found")
+			return
+		}
+		log.Printf("delete account: %v", err)
+		writeNativeError(w, http.StatusInternalServerError, "delete_failed", "could not delete the account")
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteAccount", Result: "ok", AuditOrigin: s.auditOrigin(r)})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteAccount", KeyID: accountID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
@@ -646,15 +836,22 @@ type nativeUserAccountRequest struct {
 	Role      string `json:"role"`
 }
 
-// handleV1AssignUserAccount grants a user membership in an account.
+// adminCanManageAccount reports whether sess may change accountID's
+// memberships: platform admins any account, account admins their own.
+func adminCanManageAccount(sess *uiSession, accountID string) bool {
+	return sess.PlatformAdmin || accountID == sess.AccountID
+}
+
+// handleV1AssignUserAccount grants a user membership in an account, or
+// changes their role there.
 func (s *Server) handleV1AssignUserAccount(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "admin")
+	sess, ctx, ok := s.nativeSession(w, r, "admin")
 	if !ok {
 		return
 	}
 	var req nativeUserAccountRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
 	username := strings.TrimSpace(req.Username)
@@ -663,17 +860,30 @@ func (s *Server) handleV1AssignUserAccount(w http.ResponseWriter, r *http.Reques
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "username and accountId are required")
 		return
 	}
-	if err := s.store.AddUserAccount(ctx, username, accountID, store.NormalizeUIRole(req.Role)); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "assign_failed", err.Error())
+	if req.Role != "" && !validRoleName(req.Role) {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", "role must be viewer, editor or admin")
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.AssignUserAccount", Result: "ok", AuditOrigin: s.auditOrigin(r)})
+	if !adminCanManageAccount(sess, accountID) {
+		writeNativeError(w, http.StatusForbidden, "forbidden", "account admins can only manage their own account")
+		return
+	}
+	if _, found := s.lookupUser(ctx, username); !found {
+		writeNativeError(w, http.StatusNotFound, "not_found", "user not found")
+		return
+	}
+	if err := s.store.AddUserAccount(ctx, username, accountID, store.NormalizeUIRole(req.Role)); err != nil {
+		log.Printf("assign membership: %v", err)
+		writeNativeError(w, http.StatusBadRequest, "assign_failed", "could not assign the membership")
+		return
+	}
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.AssignUserAccount", KeyID: accountID + ":" + username, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"assigned": true})
 }
 
 // handleV1RemoveUserAccount revokes a user's membership in an account.
 func (s *Server) handleV1RemoveUserAccount(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.nativeSession(w, r, "admin")
+	sess, ctx, ok := s.nativeSession(w, r, "admin")
 	if !ok {
 		return
 	}
@@ -683,11 +893,16 @@ func (s *Server) handleV1RemoveUserAccount(w http.ResponseWriter, r *http.Reques
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "username and accountId are required")
 		return
 	}
-	if err := s.store.RemoveUserAccount(ctx, username, accountID); err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "remove_failed", err.Error())
+	if !adminCanManageAccount(sess, accountID) {
+		writeNativeError(w, http.StatusForbidden, "forbidden", "account admins can only manage their own account")
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RemoveUserAccount", Result: "ok", AuditOrigin: s.auditOrigin(r)})
+	if err := s.store.RemoveUserAccount(ctx, username, accountID); err != nil {
+		log.Printf("remove membership: %v", err)
+		writeNativeError(w, http.StatusInternalServerError, "remove_failed", "could not remove the membership")
+		return
+	}
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RemoveUserAccount", KeyID: accountID + ":" + username, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"removed": true})
 }
 
@@ -999,8 +1214,8 @@ func (s *Server) handleV1CompleteLEDNSOrder(w http.ResponseWriter, r *http.Reque
 
 // rehashOnLogin replaces a verified legacy credential (Argon2id, plaintext or
 // an outdated PBKDF2 hash) with a current PBKDF2 hash, in the database and in
-// memory. Failures are logged, never fatal: the login already succeeded.
-func (s *Server) rehashOnLogin(ctx context.Context, runtime *uiRuntime, user store.UIUser, password string) {
+// the store. Failures are logged, never fatal: the login already succeeded.
+func (s *Server) rehashOnLogin(ctx context.Context, user store.UIUser, password string) {
 	if !cryptoutil.NeedsRehash(user.StoredCredential()) {
 		return
 	}
@@ -1015,8 +1230,5 @@ func (s *Server) rehashOnLogin(ctx context.Context, runtime *uiRuntime, user sto
 		log.Printf("password rehash for %q: %v", user.Username, err)
 		return
 	}
-	runtime.mu.Lock()
-	runtime.users[user.Username] = user
-	runtime.mu.Unlock()
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RehashPassword", Result: "ok", AuditOrigin: store.AuditOrigin{Actor: user.Username, ActorType: store.AuditActorConsole}})
 }
