@@ -205,12 +205,12 @@ const roles = [
 
 const wiClients = [
   {
-    clientId: 'wic-1',
+    clientId: 'wic-8f2a91c03d5e',
     name: 'billing-worker',
     audiences: ['sts.amazonaws.com'],
     tokenTtlSeconds: 3600,
     subjectFormat: 'system:serviceaccount:{namespace}:{serviceAccount}',
-    auth: { method: 'k8s-token-review', apiServer: 'https://k8s.acme.test', serviceAccounts: ['billing:worker'] },
+    auth: { method: 'k8s-token-review', apiServer: 'https://k8s.acme.test', serviceAccounts: ['billing:worker'], reviewAudience: 'citadel' },
     createdAt: ago(20 * DAY),
     updatedAt: ago(2 * DAY),
     lastIssuedAt: ago(3_600_000)
@@ -379,17 +379,23 @@ const GET: Record<string, Handler> = {
     ]
   }),
   '/v1/iam/roles': () => ({ roles }),
-  '/v1/workload-identity/issuer': () => ({
-    issuer: 'https://citadel.acme.test/oidc',
+  '/v1/workload-identity/issuer': () => issuerInfo,
+  '/v1/workload-identity/clients': () => ({ clients: wiClients })
+};
+
+// GET /v1/workload-identity/issuer (and the settings/rotate responses).
+const issuerInfo = {
+  configured: true,
+  algorithm: 'ES256',
+  k8sTokenReview: true,
+  issuer: 'https://citadel.acme.test/oidc',
     discoveryUrl: 'https://citadel.acme.test/oidc/.well-known/openid-configuration',
     jwksUrl: 'https://citadel.acme.test/oidc/jwks.json',
     tokenEndpoint: 'https://citadel.acme.test/v1/workload-identity/token',
-    signingKey: { kid: 'kid-1', kmsKeyId: keys[2].keyId, kmsAlias: 'alias/wi-signing', algorithm: 'ES256', activatedAt: ago(20 * DAY) },
-    previousKeys: [],
-    rotationDays: 90,
-    nextRotationAt: ahead(70 * DAY)
-  }),
-  '/v1/workload-identity/clients': () => ({ clients: wiClients })
+  signingKey: { kid: 'kid-1', kmsKeyId: keys[2].keyId, algorithm: 'ES256', activatedAt: ago(20 * DAY) },
+  previousKeys: [],
+  rotationDays: 90,
+  nextRotationAt: ahead(70 * DAY)
 };
 
 /** Non-GET handlers by "METHOD path". Anything else gets {ok:true}. */
@@ -408,7 +414,18 @@ const WRITE: Record<string, Handler> = {
   'POST /v1/admin/sso/providers': () => ({ id: 'sso-0a1b2c3d4e5f', redirectUri: 'http://localhost:4173/v1/auth/oidc/sso-0a1b2c3d4e5f/callback' }),
   'POST /v1/admin/sso/providers/update': (_, b) => ({ id: b.id, updated: true }),
   'DELETE /v1/admin/sso/providers': () => ({ deleted: true }),
-  'POST /v1/admin/sso/providers/test': () => ({ ok: true, message: 'discovery document fetched', authorizationEndpoint: 'https://idp.acme.test/authorize' })
+  'POST /v1/admin/sso/providers/test': () => ({ ok: true, message: 'discovery document fetched', authorizationEndpoint: 'https://idp.acme.test/authorize' }),
+  'POST /v1/iam/oidc-providers': (_, b) => ({ providerArn: `arn:aws:iam::${ACCOUNT}:oidc-provider/${String(b.url).replace(/^https:\/\//, '')}` }),
+  'POST /v1/iam/oidc-providers/update': (_, b) => ({ providerArn: b.providerArn, updated: true }),
+  'DELETE /v1/iam/oidc-providers': () => ({ deleted: true }),
+  'POST /v1/iam/roles': (_, b) => ({ roleArn: `arn:aws:iam::${ACCOUNT}:role/${b.roleName}` }),
+  'POST /v1/iam/roles/update': (_, b) => ({ roleArn: `arn:aws:iam::${ACCOUNT}:role/${b.roleName}`, updated: true }),
+  'DELETE /v1/iam/roles': () => ({ deleted: true }),
+  'POST /v1/workload-identity/issuer/settings': (_, b) => ({ ...issuerInfo, ...b }),
+  'POST /v1/workload-identity/issuer/rotate': () => issuerInfo,
+  'POST /v1/workload-identity/clients': () => ({ clientId: 'wic-0123456789ab' }),
+  'POST /v1/workload-identity/clients/update': (_, b) => ({ clientId: b.clientId, updated: true }),
+  'DELETE /v1/workload-identity/clients': () => ({ deleted: true })
 };
 
 /** Non-JSON GET responses (downloads). */
