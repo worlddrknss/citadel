@@ -64,9 +64,3 @@ func normalizeParameterTier(t string) string {
 	}
 	return parameterTierStandard
 }
-
-// ---- dbStore implementation -----------------------------------------------
-
-// ---- inMemoryStore implementation -----------------------------------------
-
-// ---- label helpers ---------------------------------------------------------

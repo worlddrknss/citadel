@@ -6,7 +6,7 @@ import (
 	"github.com/worlddrknss/citadel/internal/store"
 )
 
-// inMemoryStore CA implementations (unsupported)
+// The in-memory store's CA implementations (unsupported)
 func (s *Store) CreateCertificateAuthority(_ context.Context, _ store.PCACertificateAuthority) error {
 	return store.ErrUnsupported
 }

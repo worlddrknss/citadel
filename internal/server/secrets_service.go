@@ -18,7 +18,7 @@ import (
 // "one shared service layer").
 //
 // Item VALUES are persisted through the existing AWS-compatible secrets store
-// (keyStore) so External Secrets Operator and the AWS SDK keep reading them
+// (store.Store) so External Secrets Operator and the AWS SDK keep reading them
 // unchanged. Optional hierarchy STRUCTURE (projects / environments / empty
 // folders) is persisted through hierarchyStore when available, which lets the
 // UI model folders that do not yet contain any items.

@@ -51,11 +51,3 @@ func generateSessionToken() string {
 	}
 	return base64.RawURLEncoding.EncodeToString(b)
 }
-
-// ---- OIDC providers --------------------------------------------------------
-
-// ---- IAM roles -------------------------------------------------------------
-
-// ---- STS sessions ----------------------------------------------------------
-
-// ---- in-memory store: unsupported -----------------------------------------

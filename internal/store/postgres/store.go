@@ -27,7 +27,7 @@ type Store struct {
 	accountID         string
 }
 
-// Options configures a dbStore.
+// Options configures a Store.
 type Options struct {
 	// WrappingKey wraps per-key material at rest (32 bytes).
 	WrappingKey []byte

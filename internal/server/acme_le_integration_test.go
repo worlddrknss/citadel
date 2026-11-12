@@ -61,7 +61,7 @@ func TestLetsEncryptIssue93rdAvenue(t *testing.T) {
 	hostIP := hostDockerInternalIP(t)
 	t.Logf("host address reachable from containers: %s", hostIP)
 
-	// Postgres for a real dbStore (wrapping + settings + storage are exercised).
+	// Postgres for a real postgres.Store (wrapping + settings + storage are exercised).
 	mustRun(t, "docker", "run", "-d", "--name", itestPGName, "--network", itestNetwork,
 		"-p", itestPGPort+":5432",
 		"-e", "POSTGRES_PASSWORD=postgres", "-e", "POSTGRES_DB=kms",

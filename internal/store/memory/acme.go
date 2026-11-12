@@ -6,7 +6,7 @@ import (
 	"github.com/worlddrknss/citadel/internal/store"
 )
 
-// inMemoryStore ACME (Let's Encrypt) implementations are unsupported: the
+// The in-memory store's ACME (Let's Encrypt) implementations are unsupported: the
 // feature requires the database-backed wrapping path.
 func (s *Store) GetACMELEAccount(_ context.Context, _ string) (store.ACMELEAccount, error) {
 	return store.ACMELEAccount{}, store.ErrUnsupported

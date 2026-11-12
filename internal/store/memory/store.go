@@ -51,7 +51,7 @@ func (s *Store) secretARNFor(name string) string {
 }
 
 // accountForContext returns the caller's account ID when present, otherwise the
-// deployment's global account ID. The in-memory store mirrors the dbStore
+// deployment's global account ID. The in-memory store mirrors the postgres store
 // behaviour so per-account isolation is identical across both backends.
 func (s *Store) accountForContext(ctx context.Context) string {
 	if acct, ok := store.CallerAccountFromContext(ctx); ok {

@@ -34,7 +34,7 @@ func mergeDBUIUsers(ctx context.Context, st store.Store, base map[string]store.U
 	}
 
 	// Seed env-configured users into the database (hashed) so they persist and
-	// can be managed centrally. Only do this for the dbStore.
+	// can be managed centrally. Only do this for the PostgreSQL store.
 	if _, isDB := st.(*postgres.Store); isDB {
 		for name, user := range base {
 			if _, exists := merged[name]; exists {
