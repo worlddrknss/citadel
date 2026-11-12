@@ -31,6 +31,7 @@ type inMemorySecretVersion struct {
 	EncryptedPayloadB64 string
 	IsBinary            bool
 	CreatedAt           time.Time
+	CreatedBy           string
 }
 
 func (s *Store) CreateSecret(ctx context.Context, req store.CreateSecretRequest) (store.SecretMetadataRecord, store.SecretValueRecord, error) {
@@ -63,6 +64,7 @@ func (s *Store) CreateSecret(ctx context.Context, req store.CreateSecretRequest)
 		VersionStages:     map[string][]string{versionID: {store.CurrentVersionStage}},
 		CreatedAt:         now,
 		LastChangedDate:   now,
+		UpdatedBy:         store.ActorFromContext(ctx),
 	}
 	secret := &inMemorySecret{
 		account:  account,
@@ -70,9 +72,10 @@ func (s *Store) CreateSecret(ctx context.Context, req store.CreateSecretRequest)
 		versions: map[string]inMemorySecretVersion{},
 		byToken:  map[string]string{},
 	}
-	secret.versions[versionID] = inMemorySecretVersion{VersionID: versionID, ClientRequestToken: versionID, EncryptedPayloadB64: encryptedPayloadB64, IsBinary: isBinary, CreatedAt: now}
+	secret.versions[versionID] = inMemorySecretVersion{VersionID: versionID, ClientRequestToken: versionID, EncryptedPayloadB64: encryptedPayloadB64, IsBinary: isBinary, CreatedAt: now, CreatedBy: store.ActorFromContext(ctx)}
 	secret.byToken[versionID] = versionID
 	s.secrets[memSecretKey(account, name)] = secret
+	meta.VersionCount = 1
 	value, err := store.BuildSecretValueRecord(ctx, s.ResolveByID, meta, store.SecretVersionRow{VersionID: versionID, EncryptedPayloadB64: encryptedPayloadB64, IsBinary: isBinary, CreatedAt: now})
 	if err != nil {
 		return store.SecretMetadataRecord{}, store.SecretValueRecord{}, err
@@ -87,7 +90,15 @@ func (s *Store) DescribeSecret(ctx context.Context, secretID string) (store.Secr
 	if err != nil {
 		return store.SecretMetadataRecord{}, err
 	}
-	return secret.metadata, nil
+	return secret.snapshot(), nil
+}
+
+// snapshot returns the metadata with derived fields filled in.
+func (sec *inMemorySecret) snapshot() store.SecretMetadataRecord {
+	m := sec.metadata
+	m.VersionCount = len(sec.versions)
+	m.Tags = append([]store.SecretTag(nil), sec.metadata.Tags...)
+	return m
 }
 
 func (s *Store) GetSecretValue(ctx context.Context, secretID, versionID, versionStage string) (store.SecretValueRecord, error) {
@@ -147,8 +158,9 @@ func (s *Store) putSecretValueLocked(ctx context.Context, req store.PutSecretVal
 	secret.metadata.KMSKeyID = kmsKeyID
 	store.PromoteSecretVersion(&secret.metadata, versionID)
 	secret.metadata.LastChangedDate = now
+	secret.metadata.UpdatedBy = store.ActorFromContext(ctx)
 	secret.byToken[versionID] = versionID
-	secret.versions[versionID] = inMemorySecretVersion{VersionID: versionID, ClientRequestToken: versionID, EncryptedPayloadB64: encryptedPayloadB64, IsBinary: isBinary, CreatedAt: now}
+	secret.versions[versionID] = inMemorySecretVersion{VersionID: versionID, ClientRequestToken: versionID, EncryptedPayloadB64: encryptedPayloadB64, IsBinary: isBinary, CreatedAt: now, CreatedBy: store.ActorFromContext(ctx)}
 	return store.BuildSecretValueRecord(ctx, s.ResolveByID, secret.metadata, store.SecretVersionRow{VersionID: versionID, EncryptedPayloadB64: encryptedPayloadB64, IsBinary: isBinary, CreatedAt: now})
 }
 
@@ -239,7 +251,7 @@ func (s *Store) ListSecrets(ctx context.Context) ([]store.SecretMetadataRecord, 
 	sort.Strings(keys)
 	out := make([]store.SecretMetadataRecord, 0, len(keys))
 	for _, key := range keys {
-		out = append(out, s.secrets[key].metadata)
+		out = append(out, s.secrets[key].snapshot())
 	}
 	return out, nil
 }
@@ -273,7 +285,7 @@ func (s *Store) ListSecretVersionIDs(ctx context.Context, secretID string) ([]st
 	}
 	entries := make([]store.SecretVersionListEntry, 0, len(secret.versions))
 	for _, version := range secret.versions {
-		entries = append(entries, store.SecretVersionListEntry{VersionID: version.VersionID, VersionStages: store.SecretStagesForVersion(secret.metadata, version.VersionID), CreatedDate: store.AWSTimestamp(version.CreatedAt), KMSKeyIDs: []string{secret.metadata.KMSKeyID}})
+		entries = append(entries, store.SecretVersionListEntry{VersionID: version.VersionID, VersionStages: store.SecretStagesForVersion(secret.metadata, version.VersionID), CreatedDate: store.AWSTimestamp(version.CreatedAt), KMSKeyIDs: []string{secret.metadata.KMSKeyID}, CreatedBy: version.CreatedBy})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return time.Time(entries[i].CreatedDate).Before(time.Time(entries[j].CreatedDate))

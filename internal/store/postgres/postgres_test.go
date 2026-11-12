@@ -22,7 +22,6 @@ import (
 	"errors"
 	"net/url"
 	"os"
-	"strings"
 	"sync"
 	"testing"
 
@@ -287,14 +286,43 @@ func TestTenantIsolation(t *testing.T) {
 	t.Run("SameSecretNameInOtherAccount", func(t *testing.T) {
 		_, _, err := st.CreateSecret(ctxB, store.CreateSecretRequest{Name: name, KMSKeyID: keyB.ID, SecretString: "b-secret"})
 		if err != nil {
-			if strings.Contains(err.Error(), "exists") || errors.Is(err, store.ErrSecretExists) {
-				t.Skipf("known bug: sm_secrets is keyed by name alone, so account B cannot create a secret whose name account A already uses (the in-memory store allows it): %v", err)
-			}
 			t.Fatalf("CreateSecret(B): %v", err)
 		}
 		v, err := st.GetSecretValue(ctxA, name, "", "")
 		if err != nil || v.SecretString == nil || *v.SecretString != "a-secret" {
 			t.Fatalf("account A's value after B's create = %v, %v", v.SecretString, err)
+		}
+		vb, err := st.GetSecretValue(ctxB, name, "", "")
+		if err != nil || vb.SecretString == nil || *vb.SecretString != "b-secret" {
+			t.Fatalf("account B's value = %v, %v", vb.SecretString, err)
+		}
+		// Every per-secret write must touch only the caller's row.
+		if _, err := st.PutSecretValue(ctxB, store.PutSecretValueRequest{SecretID: name, SecretString: "b-2"}); err != nil {
+			t.Fatalf("PutSecretValue(B): %v", err)
+		}
+		if err := st.TagSecret(ctxB, name, []store.SecretTag{{Key: "owner", Value: "b"}}); err != nil {
+			t.Fatalf("TagSecret(B): %v", err)
+		}
+		if err := st.PutSecretResourcePolicy(ctxB, name, `{"Version":"2012-10-17","Statement":[]}`); err != nil {
+			t.Fatalf("PutSecretResourcePolicy(B): %v", err)
+		}
+		if _, err := st.DeleteSecret(ctxB, name, 0, true); err != nil {
+			t.Fatalf("DeleteSecret(B, force): %v", err)
+		}
+		metaA, err := st.DescribeSecret(ctxA, name)
+		if err != nil {
+			t.Fatalf("account A's secret gone after B's force delete: %v", err)
+		}
+		if len(metaA.Tags) != 0 || metaA.VersionCount != 1 {
+			t.Fatalf("account A's secret changed by B's writes: tags=%v versions=%d", metaA.Tags, metaA.VersionCount)
+		}
+		v, err = st.GetSecretValue(ctxA, name, "", "")
+		if err != nil || v.SecretString == nil || *v.SecretString != "a-secret" {
+			t.Fatalf("account A's value after B's writes = %v, %v", v.SecretString, err)
+		}
+		// A duplicate within one account is still refused.
+		if _, _, err := st.CreateSecret(ctxA, store.CreateSecretRequest{Name: name, KMSKeyID: keyA.ID, SecretString: "x"}); !errors.Is(err, store.ErrSecretExists) {
+			t.Fatalf("duplicate CreateSecret(A) err = %v, want ErrSecretExists", err)
 		}
 	})
 }
