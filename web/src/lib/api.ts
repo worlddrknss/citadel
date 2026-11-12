@@ -89,6 +89,8 @@ export interface ChangeRequest {
   createdAt: string;
   decidedBy?: string;
   decidedAt?: string;
+  /** Pending rows: whether the caller may approve (server decides: role, policy, not the requester). */
+  canApprove?: boolean;
 }
 
 export interface Me {

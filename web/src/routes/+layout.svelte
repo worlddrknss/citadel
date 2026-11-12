@@ -96,11 +96,15 @@
   let lastPoll = 0;
 
   const me = $derived(session.me);
-  const forMe = $derived(pending.filter((c) => c.status === 'pending' && c.requester !== me?.username));
+  // Requests the caller may approve: the server says per row (policy roles,
+  // not the requester, not already approved); older servers: admins.
+  const forMe = $derived(
+    pending.filter((c) => c.status === 'pending' && c.requester !== me?.username && (c.canApprove ?? session.can('admin')))
+  );
   const currentAccount = $derived(org?.accounts.find((a) => a.accountId === me?.accountId));
   const orgName = $derived(org?.organization.name || 'Citadel');
   const orgInitials = $derived(initialsOf(orgName));
-  const notifCount = $derived((session.can('admin') ? forMe.length : 0) + expiring.length);
+  const notifCount = $derived(forMe.length + expiring.length);
 
   function initialsOf(s: string) {
     return (
@@ -271,7 +275,7 @@
                 <a class="navi" href={navHref(item)} aria-current={isActive(item) ? 'page' : undefined}>
                   <Icon name={item.icon} />
                   <span>{item.label}</span>
-                  {#if item.href === '/approvals' && session.can('admin') && forMe.length}
+                  {#if item.href === '/approvals' && forMe.length}
                     <span class="count" aria-label="{forMe.length} pending">{forMe.length}</span>
                   {/if}
                 </a>
@@ -356,14 +360,12 @@
             {/snippet}
             {#snippet children(close)}
               <div class="menu-label">Notifications</div>
-              {#if session.can('admin')}
-                {#each forMe.slice(0, 5) as c (c.id)}
-                  <a role="menuitem" href="{base}/approvals?cr={encodeURIComponent(c.id)}" onclick={close}>
-                    <Icon name="git-pull-request" />
-                    <span class="acct"><span>Review change to <span class="mono">{c.key}</span></span><span class="subtle small">{c.requester} · {c.project} / {c.env}</span></span>
-                  </a>
-                {/each}
-              {/if}
+              {#each forMe.slice(0, 5) as c (c.id)}
+                <a role="menuitem" href="{base}/approvals?cr={encodeURIComponent(c.id)}" onclick={close}>
+                  <Icon name="git-pull-request" />
+                  <span class="acct"><span>Review change to <span class="mono">{c.key}</span></span><span class="subtle small">{c.requester} · {c.project} / {c.env}</span></span>
+                </a>
+              {/each}
               {#each expiring.slice(0, 5) as c (c.source + c.id)}
                 {@const d = daysUntil(c.notAfter!)}
                 <a role="menuitem" href="{base}/certificates?cert={encodeURIComponent(c.id)}&source={encodeURIComponent(c.source)}" onclick={close}>

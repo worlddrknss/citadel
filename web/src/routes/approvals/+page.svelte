@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { api, errorMessage, type ChangeRequest } from '$lib/api';
+  import { ApiError, errorMessage } from '$lib/api';
   import { session } from '$lib/stores/session.svelte';
   import { toast } from '$lib/stores/toast.svelte';
   import { confirm } from '$lib/stores/confirm.svelte';
@@ -12,13 +12,16 @@
   import { isNotImplemented } from '../http';
   import { fullTime, initials, relTime } from '../time';
   import PoliciesModal from './PoliciesModal.svelte';
-  import { approvalsApi, envTone, fingerprint, shortId, type ChangeRequestDetail } from './api';
+  import { approvalsApi, envTone, fingerprint, roleMayApprove, shortId, type ChangeRequestDetail, type ChangeRequestRow } from './api';
 
+  type ChangeRequest = ChangeRequestRow;
   type View = 'forme' | 'open' | 'closed';
 
   const me = $derived(session.me);
-  const isAdmin = $derived(session.can('admin'));
-  const view = $derived((param('view') || (isAdmin ? 'forme' : 'open')) as View);
+  // Editors can approve where a policy lists the editor role; the server
+  // says per request (canApprove) which ones the caller may approve.
+  const mayReview = $derived(session.can('editor'));
+  const view = $derived((param('view') || (mayReview ? 'forme' : 'open')) as View);
   const selectedId = $derived(param('cr'));
   const policiesOpen = $derived(param('policies') === '1');
 
@@ -30,7 +33,7 @@
   async function loadList() {
     if (listState !== 'ok') listState = 'loading';
     try {
-      list = (await api.changeRequests()).changeRequests.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+      list = (await approvalsApi.list()).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
       listState = 'ok';
     } catch (e) {
       listError = errorMessage(e, "Couldn't load change requests");
@@ -40,7 +43,10 @@
   onMount(loadList);
 
   const mine = (c: ChangeRequest) => c.requester === me?.username;
-  const forMe = $derived(list.filter((c) => c.status === 'pending' && !mine(c) && isAdmin));
+  // Older servers don't send canApprove on list rows: fall back to the role.
+  const canApproveRow = (c: ChangeRequest) =>
+    c.status === 'pending' && !mine(c) && (c.canApprove ?? roleMayApprove(me?.role, c.approverRoles));
+  const forMe = $derived(list.filter(canApproveRow));
   const openList = $derived(list.filter((c) => c.status === 'pending'));
   const closed = $derived(list.filter((c) => c.status !== 'pending'));
   const shown = $derived(view === 'forme' ? forMe : view === 'open' ? openList : closed);
@@ -52,7 +58,7 @@
     if (c.status === 'approved') return { text: 'Approved', tone: 'success' };
     if (c.status === 'rejected') return { text: 'Rejected', tone: 'danger' };
     if (mine(c)) return { text: 'Waiting on others', tone: 'neutral' };
-    if (isAdmin) return { text: 'Needs your review', tone: 'accent' };
+    if (canApproveRow(c)) return { text: 'Needs your review', tone: 'accent' };
     return { text: 'Open', tone: 'info' };
   }
 
@@ -76,13 +82,18 @@
       detailState = 'ok';
     } catch (e) {
       if (my !== seq) return;
-      if (isNotImplemented(e)) {
+      // A 404 "not_found" is a request that's gone (or in another account),
+      // not an older server without the detail endpoint.
+      if (isNotImplemented(e) && !(e instanceof ApiError && e.code === 'not_found')) {
         // Older server: build what we can from the list entry.
+        const isAdmin = session.can('admin');
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { approvals: _n, ...row } = c;
         detail = {
-          ...c,
+          ...row,
           changes: [{ key: c.key, path: c.path, change: 'modified' }],
           canApprove: c.status === 'pending' && isAdmin && !mine(c),
-          cannotApproveReason: mine(c) ? "You can't approve your own request" : !isAdmin ? 'Only admins can approve change requests' : undefined
+          cannotApproveReason: mine(c) ? "You can't approve your own change request." : !isAdmin ? 'Only admins can approve change requests.' : undefined
         };
         legacyDetail = true;
         detailState = 'ok';
@@ -111,14 +122,16 @@
   const isMine = $derived(!!detail && detail.requester === me?.username);
   // The requester can never approve, whatever the server or role says.
   const canDecide = $derived(!!detail && detail.status === 'pending' && detail.canApprove && !isMine);
+  // Rejecting: approvers, and the requester withdrawing their own request.
+  const canRejectIt = $derived(
+    !!detail && detail.status === 'pending' && (detail.canReject ?? canDecide) && session.can('editor')
+  );
+  // The server's reason, verbatim (it knows about roles, prior approvals and
+  // access-key sessions); a generic one for older servers.
   const blockReason = $derived(
-    !detail || detail.status !== 'pending'
+    !detail || detail.status !== 'pending' || canDecide
       ? ''
-      : isMine
-        ? "You can't approve your own request"
-        : !detail.canApprove
-          ? (detail.cannotApproveReason ?? "You aren't an eligible approver for this change")
-          : ''
+      : (detail.cannotApproveReason ?? (isMine ? "You can't approve your own change request." : "You aren't an eligible approver for this change."))
   );
   const title = $derived.by(() => {
     if (!detail) return '';
@@ -178,8 +191,13 @@
     if (!ok) return;
     busy = 'approve';
     try {
-      await approvalsApi.approve(detail.id, comment.trim());
-      toast.success(`${shortId(detail.id)} approved and applied`);
+      const res = await approvalsApi.approve(detail.id, comment.trim());
+      if (res && res.applied === false) {
+        const left = Math.max(0, (res.approvalsRequired ?? 0) - (res.approvals ?? 0));
+        toast.success(`${shortId(detail.id)} approved · ${left} more approval${left === 1 ? '' : 's'} needed`);
+      } else {
+        toast.success(`${shortId(detail.id)} approved and applied`);
+      }
       changed();
       await loadList();
     } catch (e) {
@@ -192,23 +210,32 @@
   let commentEl = $state<HTMLTextAreaElement>();
   let commentError = $state('');
   async function reject() {
-    if (!detail || !canDecide) return;
-    if (!comment.trim()) {
+    if (!detail || !canRejectIt) return;
+    if (!comment.trim() && !isMine) {
       commentError = 'Add a comment so the requester knows why.';
       commentEl?.focus();
       return;
     }
-    const ok = await confirm({
-      title: `Reject ${shortId(detail.id)}?`,
-      message: 'The change is discarded. The requester sees your comment and can open a new request.',
-      confirmLabel: 'Reject',
-      danger: true
-    });
+    const ok = await confirm(
+      isMine
+        ? {
+            title: `Withdraw ${shortId(detail.id)}?`,
+            message: 'Your proposed change is discarded. You can open a new request later.',
+            confirmLabel: 'Withdraw',
+            danger: true
+          }
+        : {
+            title: `Reject ${shortId(detail.id)}?`,
+            message: 'The change is discarded. The requester sees your comment and can open a new request.',
+            confirmLabel: 'Reject',
+            danger: true
+          }
+    );
     if (!ok) return;
     busy = 'reject';
     try {
       await approvalsApi.reject(detail.id, comment.trim());
-      toast.success(`${shortId(detail.id)} rejected`);
+      toast.success(`${shortId(detail.id)} ${isMine ? 'withdrawn' : 'rejected'}`);
       changed();
       await loadList();
     } catch (e) {
@@ -241,7 +268,7 @@
     <div class="inbox-head">
       <h2 id="ib-title" class="sr-only">Change requests</h2>
       <div class="seg" role="group" aria-label="Inbox filter">
-        {#each views.filter((v) => v.id !== 'forme' || isAdmin) as v (v.id)}
+        {#each views.filter((v) => v.id !== 'forme' || mayReview) as v (v.id)}
           <button type="button" aria-pressed={view === v.id} onclick={() => setParams({ view: v.id, cr: null })}>
             {v.label}{#if v.count && listState === 'ok'}<span class="count">{v.count()}</span>{/if}
           </button>
@@ -275,7 +302,7 @@
           <li>
             <a href="?{new URLSearchParams({ view, cr: c.id })}" class="item" class:sel aria-current={sel ? 'true' : undefined} onclick={(e) => select(c, e)}>
               <span class="item-top"><span class="mono subtle small">{shortId(c.id)}</span><time class="subtle small" datetime={c.createdAt} title={fullTime(c.createdAt)}>{relTime(c.createdAt)}</time></span>
-              <span class="item-title">Update {c.key}</span>
+              <span class="item-title">{c.title || `Update ${c.key}`}</span>
               <span class="mono muted small">{c.project} / {c.env}</span>
               <span class="item-meta">
                 <span class="avatar" aria-hidden="true">{initials(c.requester)}</span>
@@ -334,6 +361,7 @@
             <strong>Policy: {detail.policy?.name ?? 'change requests'}</strong>
             <span class="muted small">
               Needs {required} approval{required === 1 ? '' : 's'} from {detail.policy?.approverRoles?.length ? `an ${detail.policy.approverRoles.join(' or ')}` : 'an admin'} who is not the requester. The requester can't approve their own change, even as an admin.
+              Values are compared by keyed fingerprint (hmac), never shown unless revealed.
             </span>
           </div>
           <div class="policy-status">
@@ -374,7 +402,7 @@
                       {#if ch.change === 'added'}
                         <span class="subtle">—</span>
                       {:else}
-                        <span class="mono del"><span aria-hidden="true">− </span><span class="sr-only">Before: </span>{v ? (v.previousValue ?? '—') : legacyDetail ? 'current value' : fingerprint(ch.previous)}</span>
+                        <span class="mono del"><span aria-hidden="true">− </span><span class="sr-only">Before: </span>{v ? (v.previousValue ?? "—") : legacyDetail ? "current value" : `fingerprint ${fingerprint(ch.previous)}`}</span>
                         {#if ch.previous?.version}<span class="subtle small">Current {ch.previous.version}</span>{/if}
                       {/if}
                     </div>
@@ -384,7 +412,7 @@
                       {#if ch.change === 'deleted'}
                         <span class="subtle">—</span>
                       {:else}
-                        <span class="mono add"><span aria-hidden="true">+ </span><span class="sr-only">After: </span>{v ? (v.proposedValue ?? '—') : legacyDetail ? 'new value' : fingerprint(ch.proposed)}</span>
+                        <span class="mono add"><span aria-hidden="true">+ </span><span class="sr-only">After: </span>{v ? (v.proposedValue ?? "—") : legacyDetail ? "new value" : `fingerprint ${fingerprint(ch.proposed)}`}</span>
                         {#if ch.proposed?.version}<span class="subtle small">New version {ch.proposed.version}</span>{/if}
                       {/if}
                     </div>
@@ -397,7 +425,7 @@
         <div class="sec-foot">
           <Icon name={values ? 'eye' : 'eye-off'} size={14} />
           <span class="muted small">
-            {#if legacyDetail}This server doesn't report value fingerprints yet.{:else if values}Values are visible for 30 seconds. This reveal was logged.{:else}Values are shown as fingerprints. Revealing them is logged.{/if}
+            {#if legacyDetail}This server doesn't report value fingerprints yet.{:else if values}Values are visible for 30 seconds. This reveal was logged.{:else}Values are shown as keyed fingerprints (HMAC with a per-server key, so they can be compared but not reversed). Revealing them is logged.{/if}
           </span>
           {#if session.can('editor') && !legacyDetail}
             <button type="button" class="btn btn-secondary btn-sm push" onclick={reveal} disabled={revealing}>
@@ -432,19 +460,28 @@
           </div>
         {/if}
 
-        {#if detail.status === 'pending' && canDecide}
+        {#if detail.status === 'pending' && (canDecide || canRejectIt)}
+          {#if !canDecide}
+            <p class="subtle small lock" data-testid="cannot-approve"><Icon name="lock" size={14} />{blockReason}</p>
+          {/if}
           <label class="field">
-            <span class="field-label">Comment <span class="subtle normal">(required to reject)</span></span>
+            <span class="field-label">Comment <span class="subtle normal">{isMine ? '(optional)' : '(required to reject)'}</span></span>
             <textarea bind:this={commentEl} class="textarea" rows="3" placeholder="Add context for the requester" bind:value={comment} oninput={() => (commentError = '')} aria-invalid={!!commentError} aria-describedby={commentError ? 'cmt-err' : undefined}></textarea>
             {#if commentError}<span class="field-error" id="cmt-err">{commentError}</span>{/if}
           </label>
           <div class="actions">
-            <button type="button" class="btn btn-primary" onclick={approve} disabled={!!busy}><Icon name="check" />{busy === 'approve' ? 'Applying…' : 'Approve and apply'}</button>
-            <button type="button" class="btn btn-danger-ghost" onclick={reject} disabled={!!busy}><Icon name="x" />{busy === 'reject' ? 'Rejecting…' : 'Reject'}</button>
-            <span class="field-hint push">Approving applies the change right away{nextVersion ? ` as version ${nextVersion}` : ''}.</span>
+            {#if canDecide}
+              <button type="button" class="btn btn-primary" onclick={approve} disabled={!!busy}><Icon name="check" />{busy === 'approve' ? 'Applying…' : approvals + 1 >= required ? 'Approve and apply' : 'Approve'}</button>
+            {/if}
+            {#if canRejectIt}
+              <button type="button" class="btn btn-danger-ghost" onclick={reject} disabled={!!busy}><Icon name="x" />{busy === 'reject' ? (isMine ? 'Withdrawing…' : 'Rejecting…') : isMine ? 'Withdraw request' : 'Reject'}</button>
+            {/if}
+            {#if canDecide}
+              <span class="field-hint push">{approvals + 1 >= required ? `Approving applies the change right away${nextVersion ? ` as version ${nextVersion}` : ''}.` : `${required - approvals - 1} more approval${required - approvals - 1 === 1 ? '' : 's'} needed after yours.`}</span>
+            {/if}
           </div>
         {:else if detail.status === 'pending'}
-          <p class="subtle small lock"><Icon name="lock" size={14} />{blockReason}. {isMine ? 'Another admin has to review it.' : ''}</p>
+          <p class="subtle small lock" data-testid="cannot-approve"><Icon name="lock" size={14} />{blockReason}</p>
         {:else if !detail.decisionComment && !detail.comment}
           <p class="subtle small">No comments.</p>
         {/if}
