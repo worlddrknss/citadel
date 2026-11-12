@@ -39,6 +39,7 @@ type Store struct {
 	appr         memApprovals
 	awsCompatState
 	pki pkiState
+	kms *memKMS
 }
 
 var _ store.Store = (*Store)(nil)

@@ -82,20 +82,14 @@ func DecryptBlob(masterKey, blob, aad []byte) ([]byte, error) {
 	return GCMOpen(masterKey, blob, aad)
 }
 
+// DecodeCipherBlob returns the key ID named by a v1 or v2 blob header and
+// the sealed bytes after the header. Headerless (legacy) input comes back
+// unchanged with an empty key ID. A v2 blob's material ID is dropped: callers
+// that may see rotated keys should use ParseCipherBlob and store.KMSKey's
+// DecryptBlob instead.
 func DecodeCipherBlob(blob []byte) (string, []byte, error) {
-	if len(blob) < 2 || blob[0] != CipherBlobVersionV1 {
-		return "", blob, nil
-	}
-	keyLen := int(blob[1])
-	if len(blob) < 2+keyLen {
-		return "", blob, nil
-	}
-	keyID := string(blob[2 : 2+keyLen])
-	raw := blob[2+keyLen:]
-	if len(raw) < 12+16 {
-		return "", blob, nil
-	}
-	return keyID, raw, nil
+	p := ParseCipherBlob(blob)
+	return p.KeyID, p.Sealed, nil
 }
 
 func encodeCipherBlob(keyID string, raw []byte) []byte {

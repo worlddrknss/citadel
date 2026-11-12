@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/worlddrknss/citadel/internal/cryptoutil"
 )
 
 // AWSTimestamp marshals a time.Time as an AWS JSON 1.1 protocol epoch-seconds
@@ -131,7 +129,7 @@ func BuildSecretCiphertext(ctx context.Context, resolveByID func(context.Context
 	} else {
 		raw = []byte(secretString)
 	}
-	cipherBlob, err := cryptoutil.EncryptBlob(key.MasterKeyRaw, key.ID, raw, nil)
+	cipherBlob, err := key.EncryptBlob(raw, nil)
 	if err != nil {
 		return "", "", false, err
 	}
@@ -147,11 +145,7 @@ func BuildSecretValueRecord(ctx context.Context, resolveByID func(context.Contex
 	if err != nil {
 		return SecretValueRecord{}, err
 	}
-	_, rawBlob, err := cryptoutil.DecodeCipherBlob(encoded)
-	if err != nil {
-		return SecretValueRecord{}, err
-	}
-	raw, err := cryptoutil.DecryptBlob(key.MasterKeyRaw, rawBlob, nil)
+	raw, err := key.DecryptBlob(encoded, nil)
 	if err != nil {
 		return SecretValueRecord{}, err
 	}

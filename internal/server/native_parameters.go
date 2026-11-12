@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/worlddrknss/citadel/internal/cryptoutil"
 	"github.com/worlddrknss/citadel/internal/store"
 )
 
@@ -45,11 +44,7 @@ func (s *Server) decryptParameterValue(ctx context.Context, keyID, cipherB64 str
 	if err != nil {
 		return "", err
 	}
-	_, rawBlob, err := cryptoutil.DecodeCipherBlob(encoded)
-	if err != nil {
-		return "", err
-	}
-	raw, err := cryptoutil.DecryptBlob(key.MasterKeyRaw, rawBlob, nil)
+	raw, err := key.DecryptBlob(encoded, nil)
 	if err != nil {
 		return "", err
 	}

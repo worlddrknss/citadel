@@ -62,7 +62,7 @@ func (s *Store) resolveLocked(ctx context.Context, keyID string) (store.KMSKey, 
 	}
 	for _, key := range s.keysLocked() {
 		if (keyID == "" || keyID == key.ID) && s.keyVisibleLocked(ctx, key.ID) {
-			return key, nil
+			return s.decorateKey(key), nil
 		}
 	}
 	return store.KMSKey{}, sql.ErrNoRows
@@ -81,7 +81,7 @@ func (s *Store) ResolveDefault(ctx context.Context) (store.KMSKey, error) {
 	if len(keys) == 0 {
 		return store.KMSKey{}, sql.ErrNoRows
 	}
-	return keys[0], nil
+	return s.decorateKey(keys[0]), nil
 }
 
 func (s *Store) EnsureBootstrap(_ context.Context, _ store.KMSKey) error {
@@ -134,14 +134,14 @@ func (s *Store) ListKeys(ctx context.Context) ([]store.KMSKey, error) {
 	var out []store.KMSKey
 	for _, key := range s.keysLocked() {
 		if s.keyVisibleLocked(ctx, key.ID) {
-			out = append(out, key)
+			out = append(out, s.decorateKey(key))
 		}
 	}
 	return out, nil
 }
 
-func policyMapKey(keyID, policyName string) string {
-	return keyID + "\x00" + policyName
+func policyMapKey(account, keyID, policyName string) string {
+	return account + "\x00" + keyID + "\x00" + policyName
 }
 
 func (s *Store) GetKeyPolicy(ctx context.Context, keyID, policyName string) (string, error) {
@@ -154,7 +154,7 @@ func (s *Store) GetKeyPolicy(ctx context.Context, keyID, policyName string) (str
 	if policyName == "" {
 		policyName = "default"
 	}
-	if doc, ok := s.policies[policyMapKey(key.ID, policyName)]; ok {
+	if doc, ok := s.policies[policyMapKey(s.accountForContext(ctx), key.ID, policyName)]; ok {
 		return doc, nil
 	}
 	return store.DefaultKeyPolicy(key), nil
@@ -173,7 +173,7 @@ func (s *Store) PutKeyPolicy(ctx context.Context, keyID, policyName, policyDocum
 	if s.policies == nil {
 		s.policies = map[string]string{}
 	}
-	s.policies[policyMapKey(key.ID, policyName)] = policyDocument
+	s.policies[policyMapKey(s.accountForContext(ctx), key.ID, policyName)] = policyDocument
 	return nil
 }
 
@@ -311,59 +311,4 @@ func (s *Store) CancelKeyDeletion(ctx context.Context, keyID string) error {
 
 func (s *Store) ForceDeleteKey(_ context.Context, _ string) error {
 	return store.ErrUnsupported
-}
-
-func (s *Store) CreateGrant(_ context.Context, req store.CreateGrantRequest) (store.KMSGrant, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	grant := store.KMSGrant{
-		GrantID:           "grant-" + cryptoutil.RandomHex(12),
-		GrantToken:        cryptoutil.RandomHex(16),
-		KeyID:             req.KeyID,
-		GranteePrincipal:  strings.TrimSpace(req.GranteePrincipal),
-		RetiringPrincipal: strings.TrimSpace(req.RetiringPrincipal),
-		Operations:        append([]string(nil), req.Operations...),
-		Name:              strings.TrimSpace(req.Name),
-		CreatedAt:         time.Now().UTC(),
-	}
-	s.grants = append(s.grants, grant)
-	return grant, nil
-}
-
-func (s *Store) ListGrants(_ context.Context, keyID string) ([]store.KMSGrant, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]store.KMSGrant, 0)
-	for _, grant := range s.grants {
-		if grant.KeyID == keyID {
-			grantCopy := grant
-			grantCopy.Operations = append([]string(nil), grant.Operations...)
-			out = append(out, grantCopy)
-		}
-	}
-	return out, nil
-}
-
-func (s *Store) RevokeGrant(_ context.Context, keyID, grantID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i, grant := range s.grants {
-		if grant.KeyID == keyID && grant.GrantID == grantID {
-			s.grants = append(s.grants[:i], s.grants[i+1:]...)
-			return nil
-		}
-	}
-	return sql.ErrNoRows
-}
-
-func (s *Store) RetireGrant(_ context.Context, grantID, grantToken string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i, grant := range s.grants {
-		if (grantID != "" && grant.GrantID == grantID) || (grantToken != "" && grant.GrantToken == grantToken) {
-			s.grants = append(s.grants[:i], s.grants[i+1:]...)
-			return nil
-		}
-	}
-	return sql.ErrNoRows
 }

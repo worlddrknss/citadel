@@ -22,9 +22,12 @@ type Store struct {
 	db                *sql.DB
 	wrappingKey       []byte
 	legacyWrappingKey []byte
-	auditHMACKey      []byte
-	region            string
-	accountID         string
+	// previousWrappingKeys unwrap material wrapped before a wrapping-key
+	// rotation (see kms_wrapping.go).
+	previousWrappingKeys [][]byte
+	auditHMACKey         []byte
+	region               string
+	accountID            string
 }
 
 // Options configures a Store.
@@ -33,6 +36,9 @@ type Options struct {
 	WrappingKey []byte
 	// LegacyWrappingKey unwraps material wrapped before the HKDF upgrade.
 	LegacyWrappingKey []byte
+	// PreviousWrappingKeys unwrap material wrapped with a wrapping key that
+	// has since been rotated out; nothing new is wrapped with them.
+	PreviousWrappingKeys [][]byte
 	// AuditHMACKey keys the audit chain MAC. When empty it is derived from
 	// WrappingKey; the chain is never unkeyed.
 	AuditHMACKey []byte
@@ -45,7 +51,7 @@ type Options struct {
 // New wraps an already-migrated database. It runs no migrations and
 // does not resolve the deployment identity; use openDBStore for that.
 func New(db *sql.DB, opts Options) *Store {
-	return &Store{db: db, wrappingKey: opts.WrappingKey, legacyWrappingKey: opts.LegacyWrappingKey, auditHMACKey: auditChainKey(opts)}
+	return &Store{db: db, wrappingKey: opts.WrappingKey, legacyWrappingKey: opts.LegacyWrappingKey, previousWrappingKeys: opts.PreviousWrappingKeys, auditHMACKey: auditChainKey(opts)}
 }
 
 // Open brings the schema up to date, resolves the persisted deployment
