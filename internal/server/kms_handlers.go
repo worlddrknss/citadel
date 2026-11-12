@@ -361,12 +361,12 @@ func (s *Server) handleGetKeyPolicy(w http.ResponseWriter, r *http.Request) {
 	var req getKeyPolicyRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if req.KeyID == "" {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "KeyId is required")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if req.PolicyName == "" {
@@ -375,21 +375,21 @@ func (s *Server) handleGetKeyPolicy(w http.ResponseWriter, r *http.Request) {
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key or policy not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:GetKeyPolicy"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	doc, err := s.store.GetKeyPolicy(r.Context(), req.KeyID, req.PolicyName)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key or policy not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, getKeyPolicyResponse{Policy: doc})
 }
 
@@ -398,12 +398,12 @@ func (s *Server) handlePutKeyPolicy(w http.ResponseWriter, r *http.Request) {
 	var req putKeyPolicyRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if req.KeyID == "" {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "KeyId is required")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if req.PolicyName == "" {
@@ -411,32 +411,32 @@ func (s *Server) handlePutKeyPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.Policy) == "" {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "Policy is required")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	normalizedPolicy, err := normalizePolicyDocument(req.Policy)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "MalformedPolicyDocumentException", "Policy must be valid JSON")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "MalformedPolicyDocumentException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "MalformedPolicyDocumentException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:PutKeyPolicy"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.store.PutKeyPolicy(r.Context(), req.KeyID, req.PolicyName, normalizedPolicy); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -444,12 +444,12 @@ func (s *Server) handleEncrypt(w http.ResponseWriter, r *http.Request) {
 	const action = "TrentService.Encrypt"
 	var req encryptRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
 	if req.Plaintext == "" {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "Plaintext is required")
 		return
 	}
@@ -465,50 +465,50 @@ func (s *Server) handleEncrypt(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+			s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 			writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "unknown key id")
 			return
 		}
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "DependencyTimeoutException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "key lookup failed")
 		return
 	}
 	if keyUsage, _ := keyUsageAndSpecForMetadata(key); keyUsage != store.KeyUsageEncryptDecrypt {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidKeyUsageException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidKeyUsageException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidKeyUsageException", "key does not support encryption")
 		return
 	}
 	if keyUsage, _ := keyUsageAndSpecForMetadata(key); keyUsage != store.KeyUsageEncryptDecrypt {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidKeyUsageException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidKeyUsageException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidKeyUsageException", "key does not support decryption")
 		return
 	}
 	if !key.Enabled {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DisabledException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DisabledException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "DisabledException", "key is disabled")
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:Encrypt"); err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
 		return
 	}
 
 	plaintext, err := base64.StdEncoding.DecodeString(req.Plaintext)
 	if err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "Plaintext must be base64")
 		return
 	}
 
 	cipherBlob, err := cryptoutil.EncryptBlob(key.MasterKeyRaw, key.ID, plaintext, cryptoutil.CanonicalContext(req.EncryptionContext))
 	if err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DependencyTimeoutException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "encrypt failed")
 		return
 	}
 
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 
 	writeJSON(w, http.StatusOK, encryptResponse{
 		CiphertextBlob:    base64.StdEncoding.EncodeToString(cipherBlob),
@@ -521,26 +521,26 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 	const action = "TrentService.Decrypt"
 	var req decryptRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
 	if req.CiphertextBlob == "" {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "CiphertextBlob is required")
 		return
 	}
 
 	cipherBlob, err := base64.StdEncoding.DecodeString(req.CiphertextBlob)
 	if err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", "CiphertextBlob must be base64")
 		return
 	}
 
 	keyID, rawBlob, err := cryptoutil.DecodeCipherBlob(cipherBlob)
 	if err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidCiphertextException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidCiphertextException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidCiphertextException", "decrypt failed")
 		return
 	}
@@ -552,29 +552,29 @@ func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
 		key, err = s.store.ResolveByID(r.Context(), keyID)
 	}
 	if err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: keyID, Result: "error", ErrorType: "InvalidCiphertextException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: keyID, Result: "error", ErrorType: "InvalidCiphertextException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidCiphertextException", "decrypt failed")
 		return
 	}
 	if !key.Enabled {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DisabledException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DisabledException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "DisabledException", "key is disabled")
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:Decrypt"); err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
 		return
 	}
 
 	plaintext, err := cryptoutil.DecryptBlob(key.MasterKeyRaw, rawBlob, cryptoutil.CanonicalContext(req.EncryptionContext))
 	if err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidCiphertextException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "InvalidCiphertextException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidCiphertextException", "decrypt failed")
 		return
 	}
 
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 
 	writeJSON(w, http.StatusOK, decryptResponse{
 		KeyID:             key.ID,
@@ -587,7 +587,7 @@ func (s *Server) handleDescribeKey(w http.ResponseWriter, r *http.Request) {
 	const action = "TrentService.DescribeKey"
 	var req describeKeyRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
@@ -602,17 +602,17 @@ func (s *Server) handleDescribeKey(w http.ResponseWriter, r *http.Request) {
 		key, err = s.store.ResolveDefault(r.Context())
 	}
 	if err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "unknown key id")
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:DescribeKey"); err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
 		return
 	}
 
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 
 	writeJSON(w, http.StatusOK, describeKeyResponse{
 		KeyMetadata: toKeyMetadata(key),
@@ -623,7 +623,7 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	const action = "TrentService.CreateKey"
 	var req createKeyRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
@@ -636,10 +636,10 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeAWSJSONError(w, http.StatusInternalServerError, errType, "create key failed")
 		}
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: errType, Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: errType, AuditOrigin: s.auditOrigin(r)})
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, createKeyResponse{KeyMetadata: toKeyMetadata(key)})
 }
 
@@ -647,19 +647,19 @@ func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	const action = "TrentService.ListKeys"
 	var req listKeysRequest
 	if err := decodeOptionalJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
 	limit, err := normalizeListLimit(req.Limit)
 	if err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
 	keys, err := s.store.ListKeys(r.Context())
 	if err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "list keys failed")
 		return
 	}
@@ -669,11 +669,11 @@ func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	out, nextMarker, truncated, err := paginateList(out, req.Marker, limit, func(item listKeyEntry) string { return item.KeyID })
 	if err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, listKeysResponse{Keys: out, NextMarker: nextMarker, Truncated: truncated})
 }
 
@@ -681,7 +681,7 @@ func (s *Server) handleCreateAlias(w http.ResponseWriter, r *http.Request) {
 	const action = "TrentService.CreateAlias"
 	var req createAliasRequest
 	if err := decodeJSONBody(r, &req); err != nil {
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
@@ -691,26 +691,26 @@ func (s *Server) handleCreateAlias(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AliasName == store.ManagedDefaultAlias {
 		writeAWSJSONError(w, http.StatusBadRequest, "UnsupportedOperationException", "alias/default is reserved for the account's managed default key")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "UnsupportedOperationException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	key, err := s.store.ResolveByID(r.Context(), req.TargetKeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "target key not found or alias exists")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:CreateAlias"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.store.CreateAlias(r.Context(), req.AliasName, req.TargetKeyID); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "target key not found or alias exists")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -727,26 +727,26 @@ func (s *Server) handleUpdateAlias(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AliasName == store.ManagedDefaultAlias {
 		writeAWSJSONError(w, http.StatusBadRequest, "UnsupportedOperationException", "alias/default is immutable and cannot be re-pointed")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "UnsupportedOperationException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	key, err := s.store.ResolveByID(r.Context(), req.TargetKeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "alias or key not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:UpdateAlias"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.store.UpdateAlias(r.Context(), req.AliasName, req.TargetKeyID); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "alias or key not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.TargetKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -755,19 +755,19 @@ func (s *Server) handleListAliases(w http.ResponseWriter, r *http.Request) {
 	var req listAliasesRequest
 	if err := decodeOptionalJSONBody(r, &req); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	limit, err := normalizeListLimit(req.Limit)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	aliases, err := s.store.ListAliases(r.Context())
 	if err != nil {
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "list aliases failed")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "DependencyTimeoutException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	out := make([]aliasEntry, 0, len(aliases))
@@ -777,10 +777,10 @@ func (s *Server) handleListAliases(w http.ResponseWriter, r *http.Request) {
 	out, nextMarker, truncated, err := paginateList(out, req.Marker, limit, func(item aliasEntry) string { return item.AliasName })
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "ValidationException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, listAliasesResponse{Aliases: out, NextMarker: nextMarker, Truncated: truncated})
 }
 
@@ -801,7 +801,7 @@ func (s *Server) handleSetKeyEnabled(w http.ResponseWriter, r *http.Request, ena
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	policyAction := "kms:DisableKey"
@@ -810,20 +810,20 @@ func (s *Server) handleSetKeyEnabled(w http.ResponseWriter, r *http.Request, ena
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, policyAction); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if !enabled && key.Managed {
 		writeAWSJSONError(w, http.StatusBadRequest, "UnsupportedOperationException", "the account default key cannot be disabled")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "UnsupportedOperationException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.store.SetKeyEnabled(r.Context(), req.KeyID, enabled); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -848,26 +848,26 @@ func (s *Server) handleScheduleKeyDeletion(w http.ResponseWriter, r *http.Reques
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:ScheduleKeyDeletion"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if key.Managed {
 		writeAWSJSONError(w, http.StatusBadRequest, "UnsupportedOperationException", "the account default key cannot be scheduled for deletion")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "UnsupportedOperationException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "UnsupportedOperationException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	deletionDate, err := s.store.ScheduleKeyDeletion(r.Context(), req.KeyID, req.PendingWindowInDays)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, scheduleKeyDeletionResponse{KeyID: req.KeyID, DeletionDate: deletionDate})
 }
 
@@ -885,20 +885,20 @@ func (s *Server) handleCancelKeyDeletion(w http.ResponseWriter, r *http.Request)
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:CancelKeyDeletion"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.store.CancelKeyDeletion(r.Context(), req.KeyID); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	key, err = s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "reload key failed")
@@ -921,21 +921,21 @@ func (s *Server) handleCreateGrant(w http.ResponseWriter, r *http.Request) {
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:CreateGrant"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	grant, err := s.store.CreateGrant(r.Context(), req)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "create grant failed")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DependencyTimeoutException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, createGrantResponse{GrantID: grant.GrantID, GrantToken: grant.GrantToken})
 }
 
@@ -953,25 +953,25 @@ func (s *Server) handleListGrants(w http.ResponseWriter, r *http.Request) {
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:ListGrants"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	grants, err := s.store.ListGrants(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusInternalServerError, "DependencyTimeoutException", "list grants failed")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DependencyTimeoutException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "DependencyTimeoutException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	out := make([]grantListEntry, 0, len(grants))
 	for _, grant := range grants {
 		out = append(out, grantListEntry{GrantID: grant.GrantID, KeyID: grant.KeyID, GranteePrincipal: grant.GranteePrincipal, RetiringPrincipal: grant.RetiringPrincipal, Operations: append([]string(nil), grant.Operations...), Name: grant.Name, CreationDate: grant.CreatedAt})
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, listGrantsResponse{Grants: out})
 }
 
@@ -989,20 +989,20 @@ func (s *Server) handleRevokeGrant(w http.ResponseWriter, r *http.Request) {
 	key, err := s.store.ResolveByID(r.Context(), req.KeyID)
 	if err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "key not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: req.KeyID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.authorizeKeyAction(r.Context(), r, key, "kms:RevokeGrant"); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "access denied by key policy")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	if err := s.store.RevokeGrant(r.Context(), req.KeyID, req.GrantID); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "grant not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: key.ID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -1019,10 +1019,10 @@ func (s *Server) handleRetireGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.store.RetireGrant(r.Context(), req.GrantID, req.GrantToken); err != nil {
 		writeAWSJSONError(w, http.StatusBadRequest, "NotFoundException", "grant not found")
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "NotFoundException", Actor: r.RemoteAddr})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "NotFoundException", AuditOrigin: s.auditOrigin(r)})
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 

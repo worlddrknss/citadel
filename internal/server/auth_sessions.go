@@ -6,13 +6,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"log"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/worlddrknss/citadel/internal/arn"
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
 	"github.com/worlddrknss/citadel/internal/ratelimit"
 	"github.com/worlddrknss/citadel/internal/store"
@@ -248,14 +248,24 @@ func (s *Server) sessionToken(r *http.Request) string {
 	return strings.TrimSpace(c.Value)
 }
 
-// clientIP is the TCP peer address. Forwarding headers are not trusted:
-// they are client-controlled unless a proxy is known to set them.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+// userAuditOrigin is auditOrigin for requests that authenticate a user
+// themselves (login, logout, bootstrap): no session principal exists yet, so
+// the actor is the named user.
+func (s *Server) userAuditOrigin(r *http.Request, username, accountID string) store.AuditOrigin {
+	o := s.auditOrigin(r)
+	o.Actor, o.ActorType, o.ActorDisplayName, o.AccessKeyID = username, store.AuditActorConsole, "", ""
+	o.AccountID = accountID
+	return o
+}
+
+// auditAccountFor files an event under a client-supplied account ID only when
+// it is a well-formed one, so failed logins cannot create audit chains for
+// arbitrary strings; otherwise the deployment account gets the event.
+func auditAccountFor(accountID string) string {
+	if arn.IsValidAccountID(accountID) {
+		return accountID
 	}
-	return host
+	return ""
 }
 
 func truncate(s string, n int) string {
@@ -279,7 +289,7 @@ func (s *Server) issueConsoleSession(ctx context.Context, w http.ResponseWriter,
 		Username:   username,
 		AccountID:  accountID,
 		Method:     method,
-		IP:         truncate(clientIP(r), 64),
+		IP:         truncate(s.clientIP(r), 64),
 		UserAgent:  truncate(r.UserAgent(), 512),
 		CreatedAt:  now,
 		LastSeenAt: now,

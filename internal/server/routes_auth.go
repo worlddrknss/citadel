@@ -133,7 +133,7 @@ func validDisplayText(s string, max int) bool {
 // while no console user exists, is rate limited per client address, and is
 // serialized in the store so concurrent attempts cannot both succeed.
 func (s *Server) handleV1Bootstrap(w http.ResponseWriter, r *http.Request) {
-	ip := clientIP(r)
+	ip := s.clientIP(r)
 	if ok, wait := s.auth().bootstrapIP.Reserve(ip); !ok {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 		writeNativeError(w, http.StatusTooManyRequests, "rate_limited", "too many attempts; try again later")
@@ -188,7 +188,7 @@ func (s *Server) handleV1Bootstrap(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.store.EnsureAccountDefaultKey(r.Context(), accountID); err != nil {
 		log.Printf("warning: failed to provision default key for account %s: %v", accountID, err)
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: "citadel.Bootstrap", KeyID: accountID, Result: "ok", Actor: username})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: "citadel.Bootstrap", KeyID: accountID, Result: "ok", AuditOrigin: s.userAuditOrigin(r, username, accountID)})
 	if _, err := s.issueConsoleSession(r.Context(), w, r, username, accountID, store.SessionMethodPassword); err != nil {
 		// Setup is done; the admin can still sign in with the password.
 		log.Printf("bootstrap: create session failed: %v", err)
@@ -263,7 +263,7 @@ func (s *Server) handleV1SwitchAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !slices.Contains(sess.Accounts, target) {
-		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.SwitchAccount", KeyID: target, Result: "denied", ErrorType: "AccessDenied", Actor: sess.Username})
+		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.SwitchAccount", KeyID: target, Result: "denied", ErrorType: "AccessDenied", AuditOrigin: s.auditOrigin(r)})
 		writeNativeError(w, http.StatusForbidden, "forbidden", "you do not belong to that account")
 		return
 	}
@@ -278,7 +278,7 @@ func (s *Server) handleV1SwitchAccount(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusForbidden, "forbidden", "you do not belong to that account")
 		return
 	}
-	s.recordAudit(store.WithCallerAccount(r.Context(), target), store.AuditEvent{Action: "citadel.SwitchAccount", KeyID: target, Result: "ok", Actor: sess.Username})
+	s.recordAudit(store.WithCallerAccount(r.Context(), target), store.AuditEvent{Action: "citadel.SwitchAccount", KeyID: target, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, meResponse(next))
 }
 
@@ -365,7 +365,7 @@ func (s *Server) handleV1UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusInternalServerError, "update_failed", "could not update the profile")
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpdateProfile", KeyID: user.Username, Result: "ok", Actor: sess.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpdateProfile", KeyID: user.Username, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]string{"username": user.Username, "displayName": name})
 }
 
@@ -444,7 +444,7 @@ func (s *Server) handleV1RevokeSession(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusInternalServerError, "revoke_failed", "could not revoke the session")
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RevokeSession", KeyID: id, Result: "ok", Actor: sess.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RevokeSession", KeyID: id, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]bool{"revoked": true})
 }
 
@@ -461,7 +461,7 @@ func (s *Server) handleV1RevokeOtherSessions(w http.ResponseWriter, r *http.Requ
 		writeNativeError(w, http.StatusInternalServerError, "revoke_failed", "could not revoke sessions")
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RevokeSession", KeyID: "others:" + strconv.FormatInt(n, 10), Result: "ok", Actor: sess.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RevokeSession", KeyID: "others:" + strconv.FormatInt(n, 10), Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]int64{"revoked": n})
 }
 
@@ -583,6 +583,6 @@ func (s *Server) handleV1PutOrgSettings(w http.ResponseWriter, r *http.Request) 
 	if next.AllowSelfApproval {
 		resource = "org-settings:allowSelfApproval=true"
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpdateOrgSettings", KeyID: resource, Result: "ok", Actor: sess.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpdateOrgSettings", KeyID: resource, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, s.orgSettingsJSON(ctx, next))
 }

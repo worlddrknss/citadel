@@ -41,6 +41,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer s.Close()
 	// Background jobs (session purges...) stop when the server does.
 	jobsCtx, stopJobs := context.WithCancel(context.Background())
 	s.Start(jobsCtx)

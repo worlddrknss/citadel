@@ -56,13 +56,13 @@ func (s *Server) handleV1Login(w http.ResponseWriter, r *http.Request) {
 	}
 	accountID := strings.TrimSpace(req.AccountID)
 	username := strings.TrimSpace(req.Username)
-	if accountID == "" || username == "" || len(username) > 128 || len(req.Password) > 1024 {
+	if accountID == "" || len(accountID) > 64 || username == "" || len(username) > 128 || len(req.Password) > 1024 {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "account ID, username and password are required")
 		return
 	}
 
 	a := s.auth()
-	ip := clientIP(r)
+	ip := s.clientIP(r)
 	userKey := strings.ToLower(username)
 	if wait, limited := loginThrottled(a, ip, userKey); limited {
 		log.Printf("login throttled ip=%s", ip)
@@ -86,7 +86,7 @@ func (s *Server) handleV1Login(w http.ResponseWriter, r *http.Request) {
 	if !found || !passwordOK || !member {
 		a.failUser.Fail(userKey)
 		a.failIP.Fail(ip)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: "citadel.Login", KeyID: accountID, Result: "denied", ErrorType: "InvalidCredentials", Actor: truncate(username, 128)})
+		s.recordAudit(r.Context(), store.AuditEvent{Action: "citadel.LoginFailed", KeyID: accountID, Result: "denied", ErrorType: "InvalidCredentials", AuditOrigin: s.userAuditOrigin(r, truncate(username, 128), auditAccountFor(accountID))})
 		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid credentials or account access denied")
 		return
 	}
@@ -100,7 +100,7 @@ func (s *Server) handleV1Login(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusInternalServerError, "login_failed", "could not create a session")
 		return
 	}
-	s.recordAudit(r.Context(), store.AuditEvent{Action: "citadel.Login", KeyID: accountID, Result: "ok", Actor: user.Username})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: "citadel.Login", KeyID: accountID, Result: "ok", AuditOrigin: s.userAuditOrigin(r, user.Username, accountID)})
 	me, err := s.sessionFromRow(r.Context(), sess)
 	if err != nil {
 		writeNativeError(w, http.StatusInternalServerError, "login_failed", "could not create a session")
@@ -134,7 +134,7 @@ func (s *Server) handleV1Logout(w http.ResponseWriter, r *http.Request) {
 			if err := s.store.DeleteConsoleSession(r.Context(), row.Username, row.ID); err != nil && !errors.Is(err, store.ErrConsoleSessionNotFound) {
 				log.Printf("logout: delete session failed: %v", err)
 			}
-			s.recordAudit(r.Context(), store.AuditEvent{Action: "citadel.Logout", KeyID: row.AccountID, Result: "ok", Actor: row.Username})
+			s.recordAudit(r.Context(), store.AuditEvent{Action: "citadel.Logout", KeyID: row.AccountID, Result: "ok", AuditOrigin: s.userAuditOrigin(r, row.Username, row.AccountID)})
 		}
 	}
 	s.clearSessionCookie(w)
@@ -173,7 +173,7 @@ func (s *Server) handleV1CreateKMSKey(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateKey", KeyID: key.ID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateKey", KeyID: key.ID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"keyId": key.ID, "arn": key.ARN, "created": true})
 }
 
@@ -207,7 +207,7 @@ func (s *Server) handleV1SetKMSKeyEnabled(w http.ResponseWriter, r *http.Request
 	if req.Enabled {
 		action = "citadel.EnableKey"
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: action, KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: action, KeyID: keyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"keyId": keyID, "enabled": req.Enabled})
 }
 
@@ -236,7 +236,7 @@ func (s *Server) handleV1ScheduleKMSKeyDeletion(w http.ResponseWriter, r *http.R
 		writeNativeError(w, http.StatusBadRequest, "delete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ScheduleKeyDeletion", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ScheduleKeyDeletion", KeyID: keyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"keyId": keyID, "deletionDate": when.UTC().Format(time.RFC3339)})
 }
 
@@ -260,7 +260,7 @@ func (s *Server) handleV1CancelKMSKeyDeletion(w http.ResponseWriter, r *http.Req
 		writeNativeError(w, http.StatusBadRequest, "cancel_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CancelKeyDeletion", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CancelKeyDeletion", KeyID: keyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"keyId": keyID, "restored": true})
 }
 
@@ -307,7 +307,7 @@ func (s *Server) handleV1CreateAccessKey(w http.ResponseWriter, r *http.Request)
 		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateAccessKey", Result: "ok", Actor: sess.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateAccessKey", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{
 		"accessKeyId": secret.AccessKeyID,
 		"secretKey":   secret.SecretKey,
@@ -338,7 +338,7 @@ func (s *Server) handleV1DeleteAccessKey(w http.ResponseWriter, r *http.Request)
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteAccessKey", Result: "ok", Actor: sess.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteAccessKey", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
@@ -367,7 +367,7 @@ func (s *Server) handleV1SetAccessKeyStatus(w http.ResponseWriter, r *http.Reque
 		writeNativeError(w, http.StatusInternalServerError, "update_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.SetAccessKeyStatus", Result: "ok", Actor: sess.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.SetAccessKeyStatus", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"accessKeyId": keyID, "status": status})
 }
 
@@ -429,7 +429,7 @@ func (s *Server) handleV1ChangePassword(w http.ResponseWriter, r *http.Request) 
 		current = env
 	}
 	if !cryptoutil.VerifyPassword(current.StoredCredential(), req.CurrentPassword) {
-		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ChangePassword", Result: "denied", ErrorType: "InvalidCredentials", Actor: sess.Username})
+		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ChangePassword", Result: "denied", ErrorType: "InvalidCredentials", AuditOrigin: s.auditOrigin(r)})
 		writeNativeError(w, http.StatusForbidden, "forbidden", "current password is incorrect")
 		return
 	}
@@ -449,7 +449,7 @@ func (s *Server) handleV1ChangePassword(w http.ResponseWriter, r *http.Request) 
 	if _, err := s.store.DeleteUserConsoleSessions(ctx, sess.Username, sess.SessionID); err != nil {
 		log.Printf("change password: revoke sessions: %v", err)
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ChangePassword", Result: "ok", Actor: sess.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ChangePassword", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"updated": true})
 }
 
@@ -679,7 +679,7 @@ func (s *Server) handleV1UpsertUser(w http.ResponseWriter, r *http.Request) {
 			log.Printf("upsert user: revoke sessions: %v", err)
 		}
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpsertUser", KeyID: username, Result: "ok", Actor: sess.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpsertUser", KeyID: username, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"username": username, "created": isNew})
 }
 
@@ -718,7 +718,7 @@ func (s *Server) handleV1DeleteUser(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", "could not delete the user")
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteUser", KeyID: username, Result: "ok", Actor: sess.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteUser", KeyID: username, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
@@ -772,7 +772,7 @@ func (s *Server) requirePlatformAdmin(w http.ResponseWriter, r *http.Request) (*
 
 // handleV1CreateAccount creates a new account (platform admins only).
 func (s *Server) handleV1CreateAccount(w http.ResponseWriter, r *http.Request) {
-	sess, ctx, ok := s.requirePlatformAdmin(w, r)
+	_, ctx, ok := s.requirePlatformAdmin(w, r)
 	if !ok {
 		return
 	}
@@ -798,7 +798,7 @@ func (s *Server) handleV1CreateAccount(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.store.EnsureAccountDefaultKey(ctx, accountID); err != nil {
 		log.Printf("warning: failed to provision default key for account %s: %v", accountID, err)
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateAccount", KeyID: accountID, Result: "ok", Actor: sess.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateAccount", KeyID: accountID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"accountId": accountID, "created": true})
 }
 
@@ -826,7 +826,7 @@ func (s *Server) handleV1DeleteAccount(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", "could not delete the account")
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteAccount", KeyID: accountID, Result: "ok", Actor: sess.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteAccount", KeyID: accountID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
@@ -877,7 +877,7 @@ func (s *Server) handleV1AssignUserAccount(w http.ResponseWriter, r *http.Reques
 		writeNativeError(w, http.StatusBadRequest, "assign_failed", "could not assign the membership")
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.AssignUserAccount", KeyID: accountID + ":" + username, Result: "ok", Actor: sess.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.AssignUserAccount", KeyID: accountID + ":" + username, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"assigned": true})
 }
 
@@ -902,7 +902,7 @@ func (s *Server) handleV1RemoveUserAccount(w http.ResponseWriter, r *http.Reques
 		writeNativeError(w, http.StatusInternalServerError, "remove_failed", "could not remove the membership")
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RemoveUserAccount", KeyID: accountID + ":" + username, Result: "ok", Actor: sess.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RemoveUserAccount", KeyID: accountID + ":" + username, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"removed": true})
 }
 
@@ -956,7 +956,7 @@ func (s *Server) handleV1CreateCA(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateCA", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateCA", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"caId": caID, "created": true})
 }
 
@@ -992,7 +992,7 @@ func (s *Server) handleV1IssueCert(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "issue_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.IssueCertificate", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.IssueCertificate", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"issued": true})
 }
 
@@ -1020,7 +1020,7 @@ func (s *Server) handleV1RevokeCert(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "revoke_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RevokeCertificate", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RevokeCertificate", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"revoked": true})
 }
 
@@ -1051,7 +1051,7 @@ func (s *Server) handleV1ImportCA(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "import_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ImportCA", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ImportCA", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"caId": caID, "imported": true})
 }
 
@@ -1079,7 +1079,7 @@ func (s *Server) handleV1RenewCert(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "renew_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RenewCertificate", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RenewCertificate", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"renewed": true})
 }
 
@@ -1124,7 +1124,7 @@ func (s *Server) handleV1SaveLESettings(w http.ResponseWriter, r *http.Request) 
 		writeNativeError(w, http.StatusBadRequest, "save_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.SaveLESettings", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.SaveLESettings", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"saved": true})
 }
 
@@ -1150,7 +1150,7 @@ func (s *Server) handleV1RequestLECert(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "request_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RequestLetsEncrypt", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RequestLetsEncrypt", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"requested": true})
 }
 
@@ -1175,7 +1175,7 @@ func (s *Server) handleV1BeginLEDNSOrder(w http.ResponseWriter, r *http.Request)
 		writeNativeError(w, http.StatusBadRequest, "begin_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.BeginLetsEncryptDNS", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.BeginLetsEncryptDNS", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	recs := make([]map[string]any, 0, len(records))
 	for _, rec := range records {
 		recs = append(recs, map[string]any{"domain": rec.Domain, "name": rec.Name, "value": rec.Value})
@@ -1208,7 +1208,7 @@ func (s *Server) handleV1CompleteLEDNSOrder(w http.ResponseWriter, r *http.Reque
 		writeNativeError(w, http.StatusBadRequest, "complete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CompleteLetsEncryptDNS", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CompleteLetsEncryptDNS", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"certId": cert.CertID, "domains": cert.Domains, "issued": true})
 }
 
@@ -1230,5 +1230,5 @@ func (s *Server) rehashOnLogin(ctx context.Context, user store.UIUser, password 
 		log.Printf("password rehash for %q: %v", user.Username, err)
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RehashPassword", Result: "ok", Actor: user.Username})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RehashPassword", Result: "ok", AuditOrigin: store.AuditOrigin{Actor: user.Username, ActorType: store.AuditActorConsole}})
 }

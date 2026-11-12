@@ -136,11 +136,11 @@ func (s *Server) handleV1PutParameter(w http.ResponseWriter, r *http.Request) {
 	}
 	saved, err := ps.PutParameter(ctx, rec, req.Overwrite)
 	if err != nil {
-		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PutParameter", KeyID: rec.KMSKeyID, Result: "error", ErrorType: classifyParameterError(err), Actor: r.RemoteAddr})
+		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PutParameter", KeyID: rec.KMSKeyID, Result: "error", ErrorType: classifyParameterError(err), AuditOrigin: s.auditOrigin(r)})
 		writeParameterNativeError(w, err)
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PutParameter", KeyID: saved.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PutParameter", KeyID: saved.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"parameter": nativeParameterFrom(saved)})
 }
 
@@ -194,11 +194,11 @@ func (s *Server) handleV1DeleteParameter(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := ps.DeleteParameter(ctx, name); err != nil {
-		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteParameter", Result: "error", ErrorType: classifyParameterError(err), Actor: r.RemoteAddr})
+		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteParameter", Result: "error", ErrorType: classifyParameterError(err), AuditOrigin: s.auditOrigin(r)})
 		writeParameterNativeError(w, err)
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteParameter", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteParameter", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": name})
 }
 
@@ -232,7 +232,7 @@ func (s *Server) handleV1RevealParameter(w http.ResponseWriter, r *http.Request)
 		}
 		value = plain
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.GetParameter", KeyID: rec.KMSKeyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.GetParameter", KeyID: rec.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{
 		"parameter": nativeParameterFrom(rec),
 		"value":     value,
@@ -311,7 +311,7 @@ func (s *Server) handleV1LabelParameterVersion(w http.ResponseWriter, r *http.Re
 		writeParameterNativeError(w, err)
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.LabelParameterVersion", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.LabelParameterVersion", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"name": name, "labels": labels})
 }
 
@@ -380,7 +380,7 @@ func (s *Server) handleV1TagParameter(w http.ResponseWriter, r *http.Request) {
 		writeParameterNativeError(w, err)
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.TagParameter", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.TagParameter", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"name": name})
 }
 
@@ -415,7 +415,7 @@ func (s *Server) handleV1UntagParameter(w http.ResponseWriter, r *http.Request) 
 		writeParameterNativeError(w, err)
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UntagParameter", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UntagParameter", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"name": name})
 }
 

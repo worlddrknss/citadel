@@ -145,7 +145,7 @@ func (s *Server) handleV1PutKMSKeyPolicy(w http.ResponseWriter, r *http.Request)
 		writeNativeError(w, http.StatusBadRequest, "policy_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PutKeyPolicy", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PutKeyPolicy", KeyID: keyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"keyId": keyID, "saved": true})
 }
 
@@ -202,7 +202,7 @@ func (s *Server) handleV1CreateKMSAlias(w http.ResponseWriter, r *http.Request) 
 		writeNativeError(w, http.StatusBadRequest, "alias_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateAlias", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateAlias", KeyID: keyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"aliasName": aliasName, "keyId": keyID, "created": true})
 }
 
@@ -239,7 +239,7 @@ func (s *Server) handleV1UpdateKMSAlias(w http.ResponseWriter, r *http.Request) 
 		writeNativeError(w, http.StatusBadRequest, "alias_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpdateAlias", KeyID: keyID, Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.UpdateAlias", KeyID: keyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"aliasName": aliasName, "keyId": keyID, "updated": true})
 }
 
@@ -263,7 +263,7 @@ func (s *Server) handleV1DeleteKMSAlias(w http.ResponseWriter, r *http.Request) 
 		writeNativeError(w, http.StatusBadRequest, "alias_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteAlias", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteAlias", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"aliasName": aliasName, "deleted": true})
 }
 

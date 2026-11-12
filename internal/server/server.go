@@ -49,6 +49,8 @@ type Server struct {
 	// jobs runs periodic background jobs; see jobRunner. Nil in servers
 	// built without New.
 	jobs *jobRunner
+
+	audit auditRuntime
 }
 
 // secretsSvc returns the shared protocol-free secrets service, lazily binding
@@ -108,6 +110,7 @@ func New(ctx context.Context, cfg config.Config, st store.Store, webFS fs.FS) (*
 	}
 	s.jobs.Every("console-session-purge", 10*time.Minute, s.purgeExpiredSessions)
 	s.jobs.Every("sts-session-purge", 15*time.Minute, s.purgeExpiredSTSSessions)
+	s.startAuditStreamJob()
 	return s, nil
 }
 
@@ -206,6 +209,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/certificates/letsencrypt/dns/begin", s.handleV1BeginLEDNSOrder)
 	mux.HandleFunc("POST /v1/certificates/letsencrypt/dns/complete", s.handleV1CompleteLEDNSOrder)
 	mux.HandleFunc("GET /v1/audit", s.handleV1ListAudit)
+	s.registerAuditRoutes(mux)
 	mux.HandleFunc("GET /v1/change-requests", s.handleV1ListChangeRequests)
 	mux.HandleFunc("POST /v1/change-requests", s.handleV1CreateChangeRequest)
 	mux.HandleFunc("POST /v1/change-requests/approve", s.handleV1ApproveChangeRequest)
@@ -268,8 +272,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /crl/{ca_id}", s.handleCRLDownload)
 
 	// Middleware chain (outermost first): panic recovery, security headers,
-	// request logging, CSRF checks, the bootstrap-mode gate.
-	return withPanicRecovery(s.withSecurityHeaders(withRequestLogging(s.withCSRFProtection(s.withBootstrapGate(mux)))))
+	// request logging, audit context, CSRF checks, the bootstrap-mode gate.
+	return withPanicRecovery(s.withSecurityHeaders(withRequestLogging(s.withAuditContext(s.withCSRFProtection(s.withBootstrapGate(mux))))))
 }
 
 func maybeBootstrapFromLegacy(ctx context.Context, cfg config.Config, st store.Store) error {
@@ -320,10 +324,4 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
-}
-
-func (s *Server) recordAudit(ctx context.Context, event store.AuditEvent) {
-	if err := s.store.RecordAudit(ctx, event); err != nil {
-		log.Printf("audit write failed action=%s key=%s: %v", event.Action, event.KeyID, err)
-	}
 }

@@ -169,13 +169,22 @@ func wantStatus(t *testing.T, rec *httptest.ResponseRecorder, want int) {
 
 func (e *authEnv) audited(action, result string) bool {
 	e.t.Helper()
-	events, err := e.st.ListAuditEvents(context.Background(), 500)
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	for _, ev := range events {
-		if ev.Action == action && ev.Result == result {
-			return true
+	return auditedIn(e.t, e.st, action, result, "", e.acctA, e.acctB)
+}
+
+// auditedIn reports whether any of the accounts' audit logs holds action
+// with result (normalized) and, when actor is set, that actor.
+func auditedIn(t *testing.T, st *memory.Store, action, result, actor string, accounts ...string) bool {
+	t.Helper()
+	for _, acct := range accounts {
+		events, err := st.QueryAuditEvents(store.WithCallerAccount(context.Background(), acct), store.AuditQuery{Limit: 500})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range events {
+			if ev.Action == action && store.NormalizeAuditResult(ev.Result, ev.ErrorType) == store.NormalizeAuditResult(result, "") && (actor == "" || ev.Actor == actor) {
+				return true
+			}
 		}
 	}
 	return false
@@ -248,7 +257,7 @@ func TestLoginFailures(t *testing.T) {
 	if msgs[0] != msgs[1] || msgs[1] != msgs[2] {
 		t.Fatalf("failure responses differ (enumeration): %q", msgs)
 	}
-	if !e.audited("citadel.Login", "denied") {
+	if !e.audited("citadel.LoginFailed", "denied") {
 		t.Fatal("failed login not audited")
 	}
 	wantStatus(t, e.do("POST", "/v1/login", map[string]string{"username": "bob"}, nil), http.StatusBadRequest)
@@ -463,12 +472,7 @@ func TestBootstrapFlow(t *testing.T) {
 	if decode(t, rec)["error"] != "already_bootstrapped" {
 		t.Fatal("want already_bootstrapped")
 	}
-	events, _ := st.ListAuditEvents(context.Background(), 50)
-	found := false
-	for _, ev := range events {
-		found = found || (ev.Action == "citadel.Bootstrap" && ev.Actor == "founder")
-	}
-	if !found {
+	if !auditedIn(t, st, "citadel.Bootstrap", "ok", "founder", acct) {
 		t.Fatal("bootstrap not audited with the admin as actor")
 	}
 }

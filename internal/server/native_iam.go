@@ -102,7 +102,7 @@ func (s *Server) handleV1CreateOIDCProvider(w http.ResponseWriter, r *http.Reque
 		writeNativeError(w, http.StatusInternalServerError, "create_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateOIDCProvider", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateOIDCProvider", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"providerArn": providerARN})
 }
 
@@ -120,7 +120,7 @@ func (s *Server) handleV1DeleteOIDCProvider(w http.ResponseWriter, r *http.Reque
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteOIDCProvider", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteOIDCProvider", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
@@ -192,7 +192,7 @@ func (s *Server) handleV1CreateRole(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusInternalServerError, "create_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateRole", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.CreateRole", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"roleArn": role.RoleARN})
 }
 
@@ -210,7 +210,7 @@ func (s *Server) handleV1DeleteRole(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
 		return
 	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteRole", Result: "ok", Actor: r.RemoteAddr})
+	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.DeleteRole", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 

@@ -33,7 +33,8 @@ type Options struct {
 	WrappingKey []byte
 	// LegacyWrappingKey unwraps material wrapped before the HKDF upgrade.
 	LegacyWrappingKey []byte
-	// AuditHMACKey, when set, makes the audit chain an HMAC chain.
+	// AuditHMACKey keys the audit chain MAC. When empty it is derived from
+	// WrappingKey; the chain is never unkeyed.
 	AuditHMACKey []byte
 	// Region and AccountID are the configured deployment identity, used only
 	// when the database has not recorded one yet.
@@ -44,7 +45,7 @@ type Options struct {
 // New wraps an already-migrated database. It runs no migrations and
 // does not resolve the deployment identity; use openDBStore for that.
 func New(db *sql.DB, opts Options) *Store {
-	return &Store{db: db, wrappingKey: opts.WrappingKey, legacyWrappingKey: opts.LegacyWrappingKey, auditHMACKey: opts.AuditHMACKey}
+	return &Store{db: db, wrappingKey: opts.WrappingKey, legacyWrappingKey: opts.LegacyWrappingKey, auditHMACKey: auditChainKey(opts)}
 }
 
 // Open brings the schema up to date, resolves the persisted deployment
@@ -66,6 +67,9 @@ func Open(ctx context.Context, db *sql.DB, opts Options) (*Store, error) {
 	}
 	if err := store.migrateResourceARNs(ctx); err != nil {
 		return nil, fmt.Errorf("migrate resource ARNs: %w", err)
+	}
+	if err := store.migrateAuditAccounts(ctx); err != nil {
+		return nil, fmt.Errorf("migrate audit accounts: %w", err)
 	}
 	return store, nil
 }
