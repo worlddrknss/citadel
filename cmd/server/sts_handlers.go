@@ -85,7 +85,7 @@ func isSTSRequest(r *http.Request) bool {
 // the caller's account and principal. Only KMS_INSECURE_DEV accepts unsigned
 // requests, attributing them to the deployment account.
 func (s *server) resolveSignedSTSCaller(r *http.Request, bodyHash string) (accountID, principalARN string, err error) {
-	if s.cfg.insecureDev && strings.TrimSpace(r.Header.Get("Authorization")) == "" {
+	if s.cfg.InsecureDev && strings.TrimSpace(r.Header.Get("Authorization")) == "" {
 		_, acct := s.store.DeploymentIdentity()
 		return acct, arn.Build("iam", "", acct, "user/local"), nil
 	}

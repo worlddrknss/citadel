@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/worlddrknss/citadel/internal/arn"
+	"github.com/worlddrknss/citadel/internal/config"
 )
 
 const (
@@ -22,13 +23,13 @@ const (
 // (env/default) and finally to a freshly generated account ID. Any values that
 // are not yet persisted are written back so the identity is stable across
 // restarts.
-func resolveDeploymentIdentity(ctx context.Context, db *sql.DB, cfg config) (string, string, error) {
+func resolveDeploymentIdentity(ctx context.Context, db *sql.DB, cfg config.Config) (string, string, error) {
 	region, err := getSetting(ctx, db, settingAWSRegion)
 	if err != nil {
 		return "", "", err
 	}
 	if !arn.IsValidRegion(region) {
-		region = arn.EffectiveRegion(cfg.awsRegion)
+		region = arn.EffectiveRegion(cfg.AWSRegion)
 		if err := putSetting(ctx, db, settingAWSRegion, region); err != nil {
 			return "", "", err
 		}
@@ -39,8 +40,8 @@ func resolveDeploymentIdentity(ctx context.Context, db *sql.DB, cfg config) (str
 		return "", "", err
 	}
 	if !arn.IsValidAccountID(accountID) {
-		if arn.IsValidAccountID(cfg.awsAccountID) {
-			accountID = cfg.awsAccountID
+		if arn.IsValidAccountID(cfg.AWSAccountID) {
+			accountID = cfg.AWSAccountID
 		} else {
 			accountID = arn.GenerateAccountID()
 		}

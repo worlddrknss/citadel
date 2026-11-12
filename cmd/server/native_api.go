@@ -51,7 +51,7 @@ func (s *server) nativeSession(w http.ResponseWriter, r *http.Request, minRole s
 	if !runtime.enabled {
 		// No console users: only insecure dev mode gets the implicit local
 		// admin. Startup refuses this state otherwise; this is the backstop.
-		if s.cfg.insecureDev {
+		if s.cfg.InsecureDev {
 			sess := &uiSession{Username: "local", Role: "admin", DisplayName: "Local Admin"}
 			return sess, r.Context(), true
 		}

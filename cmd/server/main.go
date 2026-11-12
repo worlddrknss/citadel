@@ -23,7 +23,9 @@ import (
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/arn"
+	"github.com/worlddrknss/citadel/internal/config"
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
+	"github.com/worlddrknss/citadel/internal/store"
 
 	_ "github.com/lib/pq"
 )
@@ -39,34 +41,8 @@ var (
 	errAccessDenied = errors.New("access denied")
 )
 
-type config struct {
-	addr              string
-	dbConnString      string
-	expectedAccessKey string
-	secretAccessKey   string
-	// insecureDev disables every authentication check (AWS SigV4, console
-	// login). Local development only; set with KMS_INSECURE_DEV=true.
-	insecureDev       bool
-	defaultDenyPolicy bool
-	wrappingKey       []byte
-	legacyWrappingKey []byte
-	auditHMACKey      []byte
-	uiUsers           map[string]uiUserConfig
-	uiSecureCookies   bool
-	sessionIdleTTL    time.Duration
-	sessionAbsTTL     time.Duration
-	tlsCertFile       string
-	tlsKeyFile        string
-
-	awsRegion    string
-	awsAccountID string
-
-	legacyKeyID     string
-	legacyMasterKey []byte
-}
-
 type server struct {
-	cfg            config
+	cfg            config.Config
 	store          keyStore
 	ui             *uiRuntime
 	acmeChallenges *acmeChallengeStore
@@ -130,8 +106,8 @@ type keyStore interface {
 	UpdateSecretVersionStage(ctx context.Context, secretID, versionStage, moveToVersionID, removeFromVersionID string) (secretMetadataRecord, error)
 	ListAuditEvents(ctx context.Context, limit int) ([]auditRecord, error)
 	RecordAudit(ctx context.Context, event auditEvent) error
-	ListUIUsers(ctx context.Context) ([]uiUserConfig, error)
-	UpsertUIUser(ctx context.Context, user uiUserConfig) error
+	ListUIUsers(ctx context.Context) ([]store.UIUser, error)
+	UpsertUIUser(ctx context.Context, user store.UIUser) error
 	DeleteUIUser(ctx context.Context, username string) error
 	CreateUIAccount(ctx context.Context, name string) (string, error)
 	GetUIAccount(ctx context.Context, accountID string) (uiAccountInfo, error)
@@ -202,7 +178,7 @@ type inMemoryStore struct {
 	audit        []auditRecord
 	auditSeq     int64
 	auditHMACKey []byte
-	uiUsers      map[string]uiUserConfig
+	uiUsers      map[string]store.UIUser
 	uiAccounts   map[string]struct{}
 	region       string
 	accountID    string
@@ -645,7 +621,7 @@ type keyMetadata struct {
 }
 
 func main() {
-	cfg, err := loadConfig()
+	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
@@ -669,17 +645,17 @@ func main() {
 
 	// Merge admin-console users from the database (RBAC tied into the DB) with
 	// any env-configured users, seeding env users into the DB on first run.
-	if mergedUsers, err := mergeDBUIUsers(context.Background(), store, cfg.uiUsers); err != nil {
+	if mergedUsers, err := mergeDBUIUsers(context.Background(), store, cfg.UIUsers); err != nil {
 		log.Printf("warning: failed to load admin users from database: %v", err)
 	} else {
-		cfg.uiUsers = mergedUsers
+		cfg.UIUsers = mergedUsers
 	}
 
 	_, dbBacked := store.(*dbStore)
-	if err := checkSecurityPosture(cfg, dbBacked); err != nil {
+	if err := config.CheckSecurityPosture(cfg, dbBacked); err != nil {
 		log.Fatalf("refusing to start: %v", err)
 	}
-	if cfg.insecureDev {
+	if cfg.InsecureDev {
 		log.Printf("WARNING: KMS_INSECURE_DEV=true — authentication is DISABLED. Never use this outside local development.")
 	}
 
@@ -820,7 +796,7 @@ func main() {
 	h := withPanicRecovery(withSecurityHeaders(withRequestLogging(mux)))
 
 	httpServer := &http.Server{
-		Addr:              cfg.addr,
+		Addr:              cfg.Addr,
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -832,7 +808,7 @@ func main() {
 	// set, and intended to be bound to loopback only (e.g. 127.0.0.1:6060) so
 	// the sensitive pprof endpoints are reachable solely via `kubectl
 	// port-forward`, never exposed on the service network.
-	if pprofAddr := strings.TrimSpace(os.Getenv("KMS_PPROF_ADDR")); pprofAddr != "" {
+	if pprofAddr := cfg.PprofAddr; pprofAddr != "" {
 		pprofMux := http.NewServeMux()
 		pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
 		pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
@@ -854,12 +830,12 @@ func main() {
 
 	serveErr := make(chan error, 1)
 	go func() {
-		if cfg.tlsCertFile != "" && cfg.tlsKeyFile != "" {
-			log.Printf("%s listening on %s (TLS)", appName, cfg.addr)
-			serveErr <- httpServer.ListenAndServeTLS(cfg.tlsCertFile, cfg.tlsKeyFile)
+		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+			log.Printf("%s listening on %s (TLS)", appName, cfg.Addr)
+			serveErr <- httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
 			return
 		}
-		log.Printf("%s listening on %s", appName, cfg.addr)
+		log.Printf("%s listening on %s", appName, cfg.Addr)
 		serveErr <- httpServer.ListenAndServe()
 	}()
 
@@ -881,143 +857,36 @@ func main() {
 	}
 }
 
-// minSecretAccessKeyLen is the shortest static secret accepted. See loadConfig.
-const minSecretAccessKeyLen = 20
-
-// checkSecurityPosture refuses configurations that would leave Citadel open.
-// Outside insecure dev mode the console needs at least one user, and the AWS
-// APIs need a source of credentials to verify signatures against.
-func checkSecurityPosture(cfg config, dbBacked bool) error {
-	if cfg.insecureDev {
-		return nil
-	}
-	if len(cfg.uiUsers) == 0 {
-		return errors.New("no console users are configured: set KMS_UI_USERS_JSON or KMS_UI_PASSWORD (or KMS_INSECURE_DEV=true for local development)")
-	}
-	if !dbBacked && cfg.expectedAccessKey == "" {
-		return errors.New("the in-memory store has no access keys: set KMS_ACCESS_KEY_ID and KMS_SECRET_ACCESS_KEY, use KMS_DB_URL, or set KMS_INSECURE_DEV=true for local development")
-	}
-	return nil
-}
-
-func loadConfig() (config, error) {
-	cfg := config{
-		addr:         envOrDefault("KMS_LISTEN_ADDR", ":8080"),
-		dbConnString: os.Getenv("KMS_DB_URL"),
-	}
-
-	cfg.expectedAccessKey = strings.TrimSpace(os.Getenv("KMS_ACCESS_KEY_ID"))
-	cfg.secretAccessKey = os.Getenv("KMS_SECRET_ACCESS_KEY")
-	if (cfg.expectedAccessKey == "") != (cfg.secretAccessKey == "") {
-		return config{}, errors.New("KMS_ACCESS_KEY_ID and KMS_SECRET_ACCESS_KEY must be set together")
-	}
-	// SigV4's first HMAC key is "AWS4"+secret. FIPS 140-3 forbids HMAC keys
-	// under 112 bits, so a short secret would fail every request; AWS-issued
-	// and Citadel-issued secrets are 40 characters.
-	if cfg.secretAccessKey != "" && len(cfg.secretAccessKey) < minSecretAccessKeyLen {
-		return config{}, fmt.Errorf("KMS_SECRET_ACCESS_KEY must be at least %d characters", minSecretAccessKeyLen)
-	}
-	cfg.insecureDev = strings.EqualFold(os.Getenv("KMS_INSECURE_DEV"), "true")
-	if v := os.Getenv("KMS_SIGV4_STRICT"); v != "" {
-		log.Printf("warning: KMS_SIGV4_STRICT is no longer read; SigV4 is always verified unless KMS_INSECURE_DEV=true")
-	}
-	cfg.defaultDenyPolicy = strings.EqualFold(envOrDefault("KMS_POLICY_DEFAULT_DENY", "false"), "true")
-	// Session cookies are Secure unless explicitly turned off, or in insecure
-	// dev mode where the console is usually served over plain http://localhost.
-	secureDefault := "true"
-	if cfg.insecureDev {
-		secureDefault = "false"
-	}
-	cfg.uiSecureCookies = strings.EqualFold(envOrDefault("KMS_UI_SECURE_COOKIES", secureDefault), "true")
-	cfg.sessionIdleTTL = envDurationOrDefault("KMS_UI_SESSION_IDLE_TTL", 30*time.Minute)
-	cfg.sessionAbsTTL = envDurationOrDefault("KMS_UI_SESSION_MAX_TTL", 12*time.Hour)
-	cfg.tlsCertFile = os.Getenv("KMS_TLS_CERT_FILE")
-	cfg.tlsKeyFile = os.Getenv("KMS_TLS_KEY_FILE")
-
-	cfg.awsRegion = strings.TrimSpace(envOrDefault("KMS_AWS_REGION", arn.DefaultRegion))
-	cfg.awsAccountID = strings.TrimSpace(os.Getenv("KMS_AWS_ACCOUNT_ID"))
-
-	if hmacKeyB64 := os.Getenv("KMS_AUDIT_HMAC_KEY_B64"); hmacKeyB64 != "" {
-		hmacKey, err := base64.StdEncoding.DecodeString(hmacKeyB64)
-		if err != nil {
-			return config{}, fmt.Errorf("decode KMS_AUDIT_HMAC_KEY_B64: %w", err)
-		}
-		cfg.auditHMACKey = hmacKey
-	}
-
-	masterKeyB64 := os.Getenv("KMS_MASTER_KEY_B64")
-	if masterKeyB64 != "" {
-		masterKey, err := base64.StdEncoding.DecodeString(masterKeyB64)
-		if err != nil {
-			return config{}, fmt.Errorf("decode KMS_MASTER_KEY_B64: %w", err)
-		}
-		if len(masterKey) != 32 {
-			return config{}, errors.New("KMS_MASTER_KEY_B64 must decode to exactly 32 bytes")
-		}
-		cfg.legacyMasterKey = masterKey
-		cfg.legacyKeyID = os.Getenv("KMS_KEY_ID")
-	}
-
-	wrappingKeyB64 := os.Getenv("KMS_WRAPPING_KEY_B64")
-	if wrappingKeyB64 != "" {
-		wrappingKey, err := base64.StdEncoding.DecodeString(wrappingKeyB64)
-		if err != nil {
-			return config{}, fmt.Errorf("decode KMS_WRAPPING_KEY_B64: %w", err)
-		}
-		if len(wrappingKey) != 32 {
-			return config{}, errors.New("KMS_WRAPPING_KEY_B64 must decode to exactly 32 bytes")
-		}
-		cfg.wrappingKey = wrappingKey
-	}
-	if len(cfg.wrappingKey) == 0 && len(cfg.legacyMasterKey) == 32 {
-		cfg.wrappingKey = cryptoutil.DeriveWrappingKeyHKDF(cfg.legacyMasterKey)
-		// Retain the previous (v1) derivation so key material wrapped before the
-		// HKDF upgrade can still be unwrapped.
-		cfg.legacyWrappingKey = cryptoutil.DeriveWrappingKey(cfg.legacyMasterKey)
-	}
-
-	if cfg.dbConnString == "" && len(cfg.legacyMasterKey) == 0 {
-		return config{}, errors.New("set KMS_DB_URL, or provide legacy KMS_MASTER_KEY_B64")
-	}
-	if cfg.dbConnString != "" && len(cfg.wrappingKey) != 32 {
-		return config{}, errors.New("set KMS_WRAPPING_KEY_B64 (or KMS_MASTER_KEY_B64 for derived wrapping key) when using KMS_DB_URL")
-	}
-
-	uiUsers, err := loadUIUsersFromEnv()
-	if err != nil {
-		return config{}, err
-	}
-	cfg.uiUsers = uiUsers
-
-	return cfg, nil
-}
-
-func buildStore(cfg config) (keyStore, func(), error) {
-	if cfg.dbConnString == "" {
-		if len(cfg.legacyMasterKey) == 0 {
+func buildStore(cfg config.Config) (keyStore, func(), error) {
+	if cfg.DBConnString == "" {
+		if len(cfg.LegacyMasterKey) == 0 {
 			return nil, nil, errors.New("legacy key is required when KMS_DB_URL is not set")
 		}
-		legacyKeyID := strings.TrimSpace(cfg.legacyKeyID)
+		legacyKeyID := strings.TrimSpace(cfg.LegacyKeyID)
 		if legacyKeyID == "" {
-			legacyKeyID = cryptoutil.DeriveDeterministicLegacyKeyID(cfg.legacyMasterKey)
+			legacyKeyID = cryptoutil.DeriveDeterministicLegacyKeyID(cfg.LegacyMasterKey)
 		}
-		region := arn.EffectiveRegion(cfg.awsRegion)
-		accountID := cfg.awsAccountID
+		region := arn.EffectiveRegion(cfg.AWSRegion)
+		accountID := cfg.AWSAccountID
 		if !arn.IsValidAccountID(accountID) {
 			accountID = arn.GenerateAccountID()
 		}
+		keyARN := cfg.LegacyKeyARN
+		if keyARN == "" {
+			keyARN = arn.Build("kms", region, accountID, "key/"+legacyKeyID)
+		}
 		k := kmsKey{
 			ID:           legacyKeyID,
-			ARN:          envOrDefault("KMS_KEY_ARN", arn.Build("kms", region, accountID, "key/"+legacyKeyID)),
-			MasterKeyRaw: cfg.legacyMasterKey,
+			ARN:          keyARN,
+			MasterKeyRaw: cfg.LegacyMasterKey,
 			Description:  "go-kms key",
 			CreatedAt:    time.Now().UTC(),
 			Enabled:      true,
 		}
-		return &inMemoryStore{k: k, auditHMACKey: cfg.auditHMACKey, region: region, accountID: accountID}, func() {}, nil
+		return &inMemoryStore{k: k, auditHMACKey: cfg.AuditHMACKey, region: region, accountID: accountID}, func() {}, nil
 	}
 
-	db, err := sql.Open("postgres", cfg.dbConnString)
+	db, err := sql.Open("postgres", cfg.DBConnString)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open postgres connection: %w", err)
 	}
@@ -1040,7 +909,7 @@ func buildStore(cfg config) (keyStore, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	store := &dbStore{db: db, wrappingKey: cfg.wrappingKey, legacyWrappingKey: cfg.legacyWrappingKey, auditHMACKey: cfg.auditHMACKey}
+	store := &dbStore{db: db, wrappingKey: cfg.WrappingKey, legacyWrappingKey: cfg.LegacyWrappingKey, auditHMACKey: cfg.AuditHMACKey}
 	region, accountID, err := resolveDeploymentIdentity(context.Background(), db, cfg)
 	if err != nil {
 		cleanup()
@@ -1604,24 +1473,28 @@ END $$;
 	return nil
 }
 
-func maybeBootstrapFromLegacy(ctx context.Context, cfg config, store keyStore) error {
-	if len(cfg.legacyMasterKey) == 0 {
+func maybeBootstrapFromLegacy(ctx context.Context, cfg config.Config, store keyStore) error {
+	if len(cfg.LegacyMasterKey) == 0 {
 		return nil
 	}
-	legacyKeyID := strings.TrimSpace(cfg.legacyKeyID)
+	legacyKeyID := strings.TrimSpace(cfg.LegacyKeyID)
 	if legacyKeyID == "" {
 		if existing, err := store.ResolveDefault(ctx); err == nil && strings.TrimSpace(existing.ID) != "" {
 			legacyKeyID = existing.ID
-		} else if cfg.dbConnString == "" {
-			legacyKeyID = cryptoutil.DeriveDeterministicLegacyKeyID(cfg.legacyMasterKey)
+		} else if cfg.DBConnString == "" {
+			legacyKeyID = cryptoutil.DeriveDeterministicLegacyKeyID(cfg.LegacyMasterKey)
 		} else {
 			legacyKeyID = cryptoutil.RandomHex(12)
 		}
 	}
+	keyARN := cfg.LegacyKeyARN
+	if keyARN == "" {
+		keyARN = bootstrapKeyARN(store, legacyKeyID)
+	}
 	k := kmsKey{
 		ID:           legacyKeyID,
-		ARN:          envOrDefault("KMS_KEY_ARN", bootstrapKeyARN(store, legacyKeyID)),
-		MasterKeyRaw: cfg.legacyMasterKey,
+		ARN:          keyARN,
+		MasterKeyRaw: cfg.LegacyMasterKey,
 		Description:  "go-kms key",
 		CreatedAt:    time.Now().UTC(),
 		Enabled:      true,
@@ -3548,26 +3421,6 @@ func writeAWSJSONError(w http.ResponseWriter, status int, typ, msg string) {
 	writeJSON(w, status, awsError{Type: typ, Message: msg})
 }
 
-func envOrDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func envDurationOrDefault(key string, fallback time.Duration) time.Duration {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return fallback
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		log.Printf("invalid duration for %s=%q, using default %s", key, v, fallback)
-		return fallback
-	}
-	return d
-}
-
 // hashAuditRecord computes the chain hash for an audit record. When key is
 // non-empty it produces an HMAC-SHA256 (authenticity: an attacker with DB write
 // access cannot forge a valid chain without the key); otherwise it falls back to
@@ -3588,7 +3441,7 @@ func (s *server) authorizeKeyAction(ctx context.Context, r *http.Request, key km
 	if err != nil {
 		return err
 	}
-	allowed, err := policyAllows(policy, requestPrincipal(r), action, key.ARN, s.cfg.defaultDenyPolicy)
+	allowed, err := policyAllows(policy, requestPrincipal(r), action, key.ARN, s.cfg.DefaultDenyPolicy)
 	if err != nil {
 		return err
 	}

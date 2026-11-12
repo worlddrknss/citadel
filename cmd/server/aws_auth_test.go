@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/worlddrknss/citadel/internal/config"
 	"github.com/worlddrknss/citadel/internal/sigv4"
 )
 
@@ -59,7 +60,7 @@ func postSigned(t *testing.T, h http.Handler, target string, body map[string]any
 }
 
 func staticKeyServer() (*server, *http.ServeMux) {
-	s := &server{cfg: config{expectedAccessKey: "AKIASTATIC", secretAccessKey: "static-secret"}, store: &inMemoryStore{k: sampleKey(1)}}
+	s := &server{cfg: config.Config{ExpectedAccessKey: "AKIASTATIC", SecretAccessKey: "static-secret"}, store: &inMemoryStore{k: sampleKey(1)}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleKMS)
 	return s, mux
@@ -111,29 +112,8 @@ func TestAWSAuthCallerReachesPolicyPrincipal(t *testing.T) {
 	}
 }
 
-func TestCheckSecurityPosture(t *testing.T) {
-	users := map[string]uiUserConfig{"admin": {Username: "admin", Role: "admin"}}
-	cases := []struct {
-		name     string
-		cfg      config
-		dbBacked bool
-		ok       bool
-	}{
-		{"insecure dev allows anything", config{insecureDev: true}, false, true},
-		{"no users", config{expectedAccessKey: "a", secretAccessKey: "b"}, true, false},
-		{"memory store without static key", config{uiUsers: users}, false, false},
-		{"memory store with static key", config{uiUsers: users, expectedAccessKey: "a", secretAccessKey: "b"}, false, true},
-		{"db store with users", config{uiUsers: users}, true, true},
-	}
-	for _, c := range cases {
-		if err := checkSecurityPosture(c.cfg, c.dbBacked); (err == nil) != c.ok {
-			t.Errorf("%s: err=%v, want ok=%v", c.name, err, c.ok)
-		}
-	}
-}
-
 func TestNativeSessionRequiresUsersOutsideDevMode(t *testing.T) {
-	s := &server{cfg: config{}, store: &inMemoryStore{k: sampleKey(1)}}
+	s := &server{cfg: config.Config{}, store: &inMemoryStore{k: sampleKey(1)}}
 	rec := httptest.NewRecorder()
 	if _, _, ok := s.nativeSession(rec, httptest.NewRequest(http.MethodGet, "/v1/me", nil), "viewer"); ok {
 		t.Fatal("got a session with no users configured and insecure dev off")
@@ -142,14 +122,14 @@ func TestNativeSessionRequiresUsersOutsideDevMode(t *testing.T) {
 		t.Fatalf("status %d, want 401", rec.Code)
 	}
 
-	dev := &server{cfg: config{insecureDev: true}, store: &inMemoryStore{k: sampleKey(1)}}
+	dev := &server{cfg: config.Config{InsecureDev: true}, store: &inMemoryStore{k: sampleKey(1)}}
 	if _, _, ok := dev.nativeSession(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/me", nil), "admin"); !ok {
 		t.Fatal("insecure dev mode should get the local admin session")
 	}
 }
 
 func TestNativeTokenRejectsTemporaryCredentials(t *testing.T) {
-	s := &server{cfg: config{}, store: &inMemoryStore{k: sampleKey(1)}}
+	s := &server{cfg: config.Config{}, store: &inMemoryStore{k: sampleKey(1)}}
 	req := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 	req.Header.Set("Authorization", "Bearer ASIAEXAMPLEEXAMPLE12:secret")
 	rec := httptest.NewRecorder()

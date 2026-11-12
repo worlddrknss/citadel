@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // Native Citadel admin/action API (/v1)
@@ -33,7 +34,7 @@ type nativeLoginRequest struct {
 // for the legacy /login html form.
 func (s *server) handleV1Login(w http.ResponseWriter, r *http.Request) {
 	runtime := s.uiRuntime()
-	if !runtime.enabled && !s.cfg.insecureDev {
+	if !runtime.enabled && !s.cfg.InsecureDev {
 		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "no console users are configured")
 		return
 	}
@@ -68,7 +69,7 @@ func (s *server) handleV1Login(w http.ResponseWriter, r *http.Request) {
 	// user-enumeration via response timing.
 	stored := dummyPasswordHash
 	if ok {
-		stored = user.storedCredential()
+		stored = user.StoredCredential()
 	}
 	if !cryptoutil.VerifyPassword(stored, req.Password) || !ok {
 		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "invalid credentials")
@@ -406,7 +407,7 @@ func (s *server) handleV1ChangePassword(w http.ResponseWriter, r *http.Request) 
 		writeNativeError(w, http.StatusInternalServerError, "update_failed", "failed to verify credentials")
 		return
 	}
-	var current *uiUserConfig
+	var current *store.UIUser
 	for i := range users {
 		if users[i].Username == sess.Username {
 			current = &users[i]
@@ -417,7 +418,7 @@ func (s *server) handleV1ChangePassword(w http.ResponseWriter, r *http.Request) 
 		writeNativeError(w, http.StatusNotFound, "not_found", "user not found")
 		return
 	}
-	if !cryptoutil.VerifyPassword(current.storedCredential(), req.CurrentPassword) {
+	if !cryptoutil.VerifyPassword(current.StoredCredential(), req.CurrentPassword) {
 		writeNativeError(w, http.StatusForbidden, "forbidden", "current password is incorrect")
 		return
 	}
@@ -487,10 +488,10 @@ func (s *server) handleV1UpsertUser(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "username is required")
 		return
 	}
-	user := uiUserConfig{
+	user := store.UIUser{
 		Username:    username,
 		DisplayName: strings.TrimSpace(req.DisplayName),
-		Role:        normalizeUIRole(req.Role),
+		Role:        store.NormalizeUIRole(req.Role),
 		Accounts:    req.Accounts,
 	}
 	if user.DisplayName == "" {
@@ -662,7 +663,7 @@ func (s *server) handleV1AssignUserAccount(w http.ResponseWriter, r *http.Reques
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "username and accountId are required")
 		return
 	}
-	if err := s.store.AddUserAccount(ctx, username, accountID, normalizeUIRole(req.Role)); err != nil {
+	if err := s.store.AddUserAccount(ctx, username, accountID, store.NormalizeUIRole(req.Role)); err != nil {
 		writeNativeError(w, http.StatusBadRequest, "assign_failed", err.Error())
 		return
 	}
@@ -999,8 +1000,8 @@ func (s *server) handleV1CompleteLEDNSOrder(w http.ResponseWriter, r *http.Reque
 // rehashOnLogin replaces a verified legacy credential (Argon2id, plaintext or
 // an outdated PBKDF2 hash) with a current PBKDF2 hash, in the database and in
 // memory. Failures are logged, never fatal: the login already succeeded.
-func (s *server) rehashOnLogin(ctx context.Context, runtime *uiRuntime, user uiUserConfig, password string) {
-	if !cryptoutil.NeedsRehash(user.storedCredential()) {
+func (s *server) rehashOnLogin(ctx context.Context, runtime *uiRuntime, user store.UIUser, password string) {
+	if !cryptoutil.NeedsRehash(user.StoredCredential()) {
 		return
 	}
 	hashed, err := cryptoutil.HashPassword(password)

@@ -76,13 +76,13 @@ func (s *server) verifyAWSRequest(r *http.Request, bodyHash string) (awsCaller, 
 		secret string
 	)
 	switch {
-	case s.cfg.expectedAccessKey != "" && s.cfg.secretAccessKey != "" &&
-		subtle.ConstantTimeCompare([]byte(comp.AccessKey), []byte(s.cfg.expectedAccessKey)) == 1:
+	case s.cfg.ExpectedAccessKey != "" && s.cfg.SecretAccessKey != "" &&
+		subtle.ConstantTimeCompare([]byte(comp.AccessKey), []byte(s.cfg.ExpectedAccessKey)) == 1:
 		// The statically configured deployment credential (KMS_ACCESS_KEY_ID /
 		// KMS_SECRET_ACCESS_KEY) acts in the deployment account.
 		_, acct := s.store.DeploymentIdentity()
 		caller = awsCaller{AccessKeyID: comp.AccessKey, Username: comp.AccessKey, AccountID: acct}
-		secret = s.cfg.secretAccessKey
+		secret = s.cfg.SecretAccessKey
 	case isTempAccessKeyID(comp.AccessKey):
 		resolver, ok := s.store.(stsSessionResolver)
 		if !ok {
@@ -115,7 +115,7 @@ func (s *server) verifyAWSRequest(r *http.Request, bodyHash string) (awsCaller, 
 	if err := sigv4.VerifySignature(r, bodyHash, secret); err != nil {
 		return awsCaller{}, err
 	}
-	if !caller.Temporary && caller.AccessKeyID != s.cfg.expectedAccessKey {
+	if !caller.Temporary && caller.AccessKeyID != s.cfg.ExpectedAccessKey {
 		if err := s.store.TouchAccessKeyLastUsed(r.Context(), caller.AccessKeyID); err != nil {
 			log.Printf("failed to update key last_used_at: %v", err)
 		}
@@ -127,7 +127,7 @@ func (s *server) verifyAWSRequest(r *http.Request, bodyHash string) (awsCaller, 
 // it returns the request with the caller attached to its context. On failure
 // it has already written the AWS-style error response.
 func (s *server) authenticateAWSJSON(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
-	if s.cfg.insecureDev {
+	if s.cfg.InsecureDev {
 		return r, true
 	}
 	bodyHash, err := sigv4.DrainAndHashBody(r, 1<<20)

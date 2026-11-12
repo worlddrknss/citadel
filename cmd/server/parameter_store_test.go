@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"testing"
+
+	"github.com/worlddrknss/citadel/internal/config"
 )
 
 func newParamTestServer() *server {
 	store := &inMemoryStore{k: sampleKey(1)}
-	return &server{cfg: config{insecureDev: true}, store: store}
+	return &server{cfg: config.Config{InsecureDev: true}, store: store}
 }
 
 func TestNormalizeParameterName(t *testing.T) {

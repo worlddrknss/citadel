@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
+	"github.com/worlddrknss/citadel/internal/store"
 )
 
 // errUIUserNotFound is returned when a UI user lookup or delete targets an
@@ -16,16 +17,16 @@ import (
 var errUIUserNotFound = errors.New("ui user not found")
 
 // ListUIUsers returns the admin-console users persisted in the database.
-func (s *dbStore) ListUIUsers(ctx context.Context) ([]uiUserConfig, error) {
+func (s *dbStore) ListUIUsers(ctx context.Context) ([]store.UIUser, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT username, password_hash, role, display_name, accounts_json FROM ui_users ORDER BY username`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var users []uiUserConfig
+	var users []store.UIUser
 	for rows.Next() {
 		var (
-			user         uiUserConfig
+			user         store.UIUser
 			accountsJSON string
 		)
 		if err := rows.Scan(&user.Username, &user.PasswordHash, &user.Role, &user.DisplayName, &accountsJSON); err != nil {
@@ -39,7 +40,7 @@ func (s *dbStore) ListUIUsers(ctx context.Context) ([]uiUserConfig, error) {
 
 // UpsertUIUser inserts or updates an admin-console user. The PasswordHash field
 // must already contain an Argon2id hash; plaintext passwords are never stored.
-func (s *dbStore) UpsertUIUser(ctx context.Context, user uiUserConfig) error {
+func (s *dbStore) UpsertUIUser(ctx context.Context, user store.UIUser) error {
 	username := strings.TrimSpace(user.Username)
 	if username == "" {
 		return errors.New("ui user requires a username")
@@ -59,7 +60,7 @@ ON CONFLICT (username) DO UPDATE SET
 	display_name = EXCLUDED.display_name,
 	accounts_json = EXCLUDED.accounts_json,
 	updated_at = NOW()`
-	_, err = s.db.ExecContext(ctx, q, username, user.PasswordHash, normalizeUIRole(user.Role), user.DisplayName, accountsJSON)
+	_, err = s.db.ExecContext(ctx, q, username, user.PasswordHash, store.NormalizeUIRole(user.Role), user.DisplayName, accountsJSON)
 	return err
 }
 
@@ -80,10 +81,10 @@ func (s *dbStore) DeleteUIUser(ctx context.Context, username string) error {
 }
 
 // ListUIUsers returns admin-console users held in memory.
-func (s *inMemoryStore) ListUIUsers(_ context.Context) ([]uiUserConfig, error) {
+func (s *inMemoryStore) ListUIUsers(_ context.Context) ([]store.UIUser, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	users := make([]uiUserConfig, 0, len(s.uiUsers))
+	users := make([]store.UIUser, 0, len(s.uiUsers))
 	for _, user := range s.uiUsers {
 		users = append(users, user)
 	}
@@ -92,7 +93,7 @@ func (s *inMemoryStore) ListUIUsers(_ context.Context) ([]uiUserConfig, error) {
 }
 
 // UpsertUIUser stores an admin-console user in memory.
-func (s *inMemoryStore) UpsertUIUser(_ context.Context, user uiUserConfig) error {
+func (s *inMemoryStore) UpsertUIUser(_ context.Context, user store.UIUser) error {
 	username := strings.TrimSpace(user.Username)
 	if username == "" {
 		return errors.New("ui user requires a username")
@@ -103,10 +104,10 @@ func (s *inMemoryStore) UpsertUIUser(_ context.Context, user uiUserConfig) error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.uiUsers == nil {
-		s.uiUsers = map[string]uiUserConfig{}
+		s.uiUsers = map[string]store.UIUser{}
 	}
 	user.Username = username
-	user.Role = normalizeUIRole(user.Role)
+	user.Role = store.NormalizeUIRole(user.Role)
 	s.uiUsers[username] = user
 	return nil
 }
@@ -132,14 +133,14 @@ func decodeAccountsJSON(raw string) []string {
 	if err := json.Unmarshal([]byte(raw), &accounts); err != nil {
 		return nil
 	}
-	return normalizeAccounts(accounts)
+	return store.NormalizeAccounts(accounts)
 }
 
 func encodeAccountsJSON(accounts []string) (string, error) {
 	if len(accounts) == 0 {
 		return "[]", nil
 	}
-	b, err := json.Marshal(normalizeAccounts(accounts))
+	b, err := json.Marshal(store.NormalizeAccounts(accounts))
 	if err != nil {
 		return "", err
 	}
@@ -151,13 +152,13 @@ func encodeAccountsJSON(accounts []string) (string, error) {
 // precedence so operators can manage accounts without a redeploy. Env users
 // with a plaintext password are seeded into the database (hashed) on first run
 // when they are not already present.
-func mergeDBUIUsers(ctx context.Context, store keyStore, base map[string]uiUserConfig) (map[string]uiUserConfig, error) {
-	merged := map[string]uiUserConfig{}
+func mergeDBUIUsers(ctx context.Context, st keyStore, base map[string]store.UIUser) (map[string]store.UIUser, error) {
+	merged := map[string]store.UIUser{}
 	for name, user := range base {
 		merged[name] = user
 	}
 
-	dbUsers, err := store.ListUIUsers(ctx)
+	dbUsers, err := st.ListUIUsers(ctx)
 	if err != nil {
 		if errors.Is(err, sql.ErrConnDone) {
 			return merged, nil
@@ -170,7 +171,7 @@ func mergeDBUIUsers(ctx context.Context, store keyStore, base map[string]uiUserC
 
 	// Seed env-configured users into the database (hashed) so they persist and
 	// can be managed centrally. Only do this for the dbStore.
-	if _, isDB := store.(*dbStore); isDB {
+	if _, isDB := st.(*dbStore); isDB {
 		for name, user := range base {
 			if _, exists := merged[name]; exists {
 				if _, inDB := findUser(dbUsers, name); inDB {
@@ -191,7 +192,7 @@ func mergeDBUIUsers(ctx context.Context, store keyStore, base map[string]uiUserC
 			seeded := user
 			seeded.PasswordHash = hash
 			seeded.Password = ""
-			if err := store.UpsertUIUser(ctx, seeded); err != nil {
+			if err := st.UpsertUIUser(ctx, seeded); err != nil {
 				return merged, err
 			}
 			merged[name] = seeded
@@ -201,11 +202,11 @@ func mergeDBUIUsers(ctx context.Context, store keyStore, base map[string]uiUserC
 	return merged, nil
 }
 
-func findUser(users []uiUserConfig, username string) (uiUserConfig, bool) {
+func findUser(users []store.UIUser, username string) (store.UIUser, bool) {
 	for _, user := range users {
 		if user.Username == username {
 			return user, true
 		}
 	}
-	return uiUserConfig{}, false
+	return store.UIUser{}, false
 }

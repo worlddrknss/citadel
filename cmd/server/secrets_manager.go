@@ -1507,7 +1507,7 @@ func (s *server) authorizeSecretAction(ctx context.Context, r *http.Request, met
 			return err
 		}
 	}
-	allowed, err := policyAllows(policy, requestPrincipal(r), action, meta.ARN, s.cfg.defaultDenyPolicy)
+	allowed, err := policyAllows(policy, requestPrincipal(r), action, meta.ARN, s.cfg.DefaultDenyPolicy)
 	if err != nil {
 		return err
 	}
