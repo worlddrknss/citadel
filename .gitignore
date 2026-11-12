@@ -12,3 +12,8 @@ web/.vite/
 # scripts/build-web.sh locally and by the Dockerfile in images; never committed.
 cmd/server/webdist/*
 !cmd/server/webdist/.keep
+
+# go build output when run inside cmd/server
+/cmd/server/server
+# Agent worktrees (local tooling)
+/.claude/
