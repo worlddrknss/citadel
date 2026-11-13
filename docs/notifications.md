@@ -23,7 +23,7 @@ delivery log.
 | `agent.approval_requested` | An agent asked for access that needs a human's approval. The payload links to the request in the console (`url`) and names the agent, credential, actions, reason and task ID. |
 | `agent.access_decided` | Someone approved or denied an agent's access request (with the scope and lease expiry, or the denial reason). |
 | `agent.suspended` | An agent was suspended, by a person or automatically. |
-| `agent.anomaly` | An agent behaved unusually: a new host, off-hours use, a rate spike or repeated denials. |
+| `agent.anomaly` | An agent behaved unusually: a new host, off-hours use, a rate spike or repeated denials (payload: `agentId`, `name`, `owner`, `kind`, `detail`, `anomalyId`, `autoSuspend`). At most once per kind per agent per hour; see [agents.md](agents.md#anomaly-alerts). |
 | `security.kill_switch` | Every agent in the account was suspended with the kill switch. |
 | `test` | You pressed **Send test**. Every channel receives test events, even a disabled one. |
 

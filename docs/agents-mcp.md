@@ -4,7 +4,9 @@ Citadel 2.2 runs a [Model Context Protocol](https://modelcontextprotocol.io)
 server at `https://<your-citadel>/mcp`. An AI agent connected to it can list
 the credentials it has been granted and make HTTP requests with them
 (`list_credentials`, `http_request`, and `reveal_credential` when the agent
-has a `reveal` grant) without ever holding the secret values.
+has a `reveal` grant) without ever holding the secret values. Browser agents
+also get a login's one-time codes and, for a matching page, its username and
+password (`get_totp_code`, `get_login`; 2.4).
 
 The agent authenticates with an **agent token** (`cagt_...`), created in the
 console under **Agents**. Each MCP client connection acts as that agent, with
@@ -242,11 +244,13 @@ Tools follow the agent's grants:
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
-| `list_credentials` | none | `{"credentials": [{name, kind, description, allowedHosts, allowedMethods, allowedPathPrefixes, actions, status}]}`; never values. |
+| `list_credentials` | none | `{"credentials": [{name, kind, description, allowedHosts, allowedMethods, allowedPathPrefixes, actions, status, urlPatterns}]}` (`urlPatterns` for login credentials); never values. |
 | `http_request` | `credential`, `url`, optional `method`, `headers`, `body`, `bodyEncoding`, `taskId` | Brokered use, exactly like `POST /v1/agent/http` (see [agents.md](agents.md)): `{status, headers, body, bodyEncoding, truncated, redacted}`. |
-| `reveal_credential` | `credential`, optional `taskId` | `{credential, kind, value}` (plus `leaseId`, `leaseExpiresAt` under a lease). Listed only when the agent holds a grant with `reveal`. |
+| `reveal_credential` | `credential`, optional `taskId` | `{credential, kind, value}` (plus `leaseId`, `leaseExpiresAt` under a lease, and `expiresAt` for a minted token). Listed only when the agent holds a grant with `reveal`. |
 | `request_access` | `credential`, `reason`, optional `actions`, `duration` (`15m`), `taskId` | Asks a person for access (see [Approvals and leases](agents.md#approvals-and-leases)): the access request, `{requestId, status, ...}`. |
 | `get_lease` | optional `requestId`, `credential` | With `requestId`, that request's status, the approver's comment and its lease; without, `{"leases": [...]}`, the agent's active leases. |
+| `get_totp_code` | `credential`, optional `taskId` | The current one-time code of a login credential, `{credential, code, expiresAt, secondsRemaining, digits, period, algorithm}`; never the seed. Listed only when the agent holds a `totp` grant. SHA-1 seeds give `totp_sha1_unsupported` (Citadel runs in FIPS 140-3 mode; see [agents.md](agents.md#logins-for-browser-agents)). |
+| `get_login` | `credential`, `url`, optional `taskId` | A login's `{credential, username, password, urlPattern}` for the page at `url`, which must match the credential's `urlPatterns`. Listed only when the agent holds a `reveal` grant on a login credential. |
 
 Results come as a JSON text block and as `structuredContent`. A refused or
 failed call (no grant, a host the credential may not be sent to, an

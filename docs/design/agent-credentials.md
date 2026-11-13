@@ -262,6 +262,40 @@ Desktop, Cursor and VS Code (`docs/agents-mcp.md`).
   the notification channels on new host, off-hours use, rate spikes, repeated
   denials; optional auto-suspend.
 
+### As built in 2.4
+
+- **Profiles.** Kind-specific settings are one JSON column on the usage
+  profile (`config`: `login`, `awsSts`, `githubApp` or `oauth2`) and a grant
+  `scope` column; the API embeds them as those members. The login's URL
+  patterns live on the profile, not in the secret (the design's `url` in the
+  secret JSON is ignored).
+- **Logins.** `get_login` and `get_totp_code` also exist as REST
+  (`POST /v1/agent/login`, `POST /v1/agent/totp`). Reveal of a login returns
+  only `{username, password}`: the TOTP seed never leaves Citadel. A bare
+  base32 seed takes its algorithm, digits and period from the profile. The
+  console writes login fields through `POST /v1/agents/credentials/login`
+  (new secret version, protected environments need a change request) and
+  previews codes with `GET ...?code=true`; "Add login" composes the existing
+  secret and credential calls.
+- **Minting.** The server caches minted tokens per (credential, profile
+  update time, secret version, effective scope) until 60 s before expiry,
+  with a per-key single flight; the OAuth minter's own cache is not relied
+  on. Minter HTTP uses the broker's guarded client with the profile's
+  `allowedCidrs`; `allowHttp` also allows an http endpoint. GitHub tokens
+  are injected as `Authorization: Bearer`; AWS requests are signed by a new
+  broker kind `aws_sigv4` (re-signed on each followed redirect). A grant
+  scope that no longer fits is refused at profile update (`grants_conflict`)
+  and, defensively, at use (`scope_invalid`). Provider failures are
+  `502 token_unavailable`. A lease without a grant mints with the profile's
+  defaults.
+- **Anomalies.** Detection hooks `recordAudit` (agent actor events), so every
+  use and denial is seen without touching the protocol handlers. Baselines
+  are read from the audit log (at most 20,000 recent events, partial agent
+  index) and refreshed hourly per replica; counts are per replica.
+  De-duplication is a unique (agent, kind, hour) key on `agent_anomalies`.
+  Auto-suspend reproduces the console suspend (status, audit, leases,
+  `agent.suspended`) with the system actor `anomaly-detector`.
+
 ## Security requirements (all releases)
 
 FIPS 140-3 (standard library crypto, `GODEBUG=fips140=only` in tests); every
