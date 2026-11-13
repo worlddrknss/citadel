@@ -16,7 +16,10 @@ import (
 func TestSharedLoginLimitAcrossReplicas(t *testing.T) {
 	stA := pgTestStore(t)
 	stB := replicaOn(t, stA)
-	override := map[string]sharedLimit{"login-user": {"login-user", 3, time.Minute}}
+	// Windows are aligned to the clock, and four sign-ins take seconds under
+	// -race and FIPS: a one-minute window could reset mid-test. A day-long
+	// window makes crossing a boundary vanishingly unlikely.
+	override := map[string]sharedLimit{"login-user": {"login-user", 3, 24 * time.Hour}}
 	mk := func(st *postgres.Store) http.Handler {
 		s := &Server{cfg: config.Config{SessionIdleTTL: time.Hour, SessionAbsTTL: time.Hour}, store: st, sharedLimitOverrides: override}
 		s.auth().bootstrapped.Store(true)
