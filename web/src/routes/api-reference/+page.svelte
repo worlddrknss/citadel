@@ -42,7 +42,8 @@
     editor: 'Editor or above',
     admin: 'Account admin',
     'platform-admin': 'Platform admin',
-    session: 'Any signed-in caller'
+    session: 'Any signed-in caller',
+    agent: 'Agent token only'
   };
 </script>
 
