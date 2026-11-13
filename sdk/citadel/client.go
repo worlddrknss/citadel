@@ -1,11 +1,19 @@
-// Package citadel is a minimal native SDK for the Citadel /v1 API (PLAN.md §6
-// P9). It speaks the protocol-clean JSON surface — not the AWS dialect — and
-// authenticates with a native bearer token (a machine identity access key in
-// the form "<accessKeyId>:<secret>").
+// Package citadel is the Go SDK for Citadel's native /v1 API, the
+// protocol-clean JSON API described by docs/openapi.yaml (and served by every
+// Citadel server at GET /v1/openapi.yaml). It is separate from Citadel's
+// AWS-compatible APIs, for which the AWS SDK works unchanged.
 //
-// This is intentionally small: it demonstrates the native programmatic path and
-// gives downstream tools (including a future External Secrets Operator provider)
-// a typed client to build on, without pulling in the AWS SDK.
+// The client authenticates with an access key (created in the console under
+// Account, or with the createAccessKey operation), sent as
+// "Authorization: Bearer <accessKeyId>:<secret>". A key acts with its owner's
+// role in the key's account, never more.
+//
+// Every method takes a context for cancellation and deadlines. Failed
+// requests return an *APIError carrying the HTTP status and the API's stable
+// error code; see IsNotFound and the other helpers. Rate-limited (429) and
+// transient server failures are retried with exponential backoff and jitter.
+//
+// The package uses only the Go standard library.
 package citadel
 
 import (
@@ -15,119 +23,293 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// Client is a native Citadel API client.
-type Client struct {
-	BaseURL    string
-	Token      string
+// Version is the SDK version, sent in the User-Agent header.
+const Version = "2.1.0"
+
+// Environment variables read by New when the Config leaves a field empty.
+const (
+	EnvURL             = "CITADEL_URL"
+	EnvAccessKeyID     = "CITADEL_ACCESS_KEY_ID"
+	EnvSecretAccessKey = "CITADEL_SECRET_ACCESS_KEY"
+)
+
+// DefaultBaseURL is used when neither Config.BaseURL nor CITADEL_URL is set.
+const DefaultBaseURL = "http://localhost:8080"
+
+// Config configures a Client. The zero value reads everything from the
+// environment and uses the defaults.
+type Config struct {
+	// BaseURL is the Citadel server, e.g. "https://citadel.example.com".
+	// Defaults to $CITADEL_URL, then DefaultBaseURL.
+	BaseURL string
+	// AccessKeyID and SecretAccessKey are the access key to authenticate
+	// with. Default to $CITADEL_ACCESS_KEY_ID and $CITADEL_SECRET_ACCESS_KEY.
+	AccessKeyID     string
+	SecretAccessKey string
+	// Timeout bounds each HTTP attempt (default 30s). The context passed to
+	// a method bounds the whole call, retries included.
+	Timeout time.Duration
+	// MaxRetries is how many times a retryable failure is retried (default
+	// 3). Set a negative value to disable retries.
+	MaxRetries int
+	// RetryBaseDelay and RetryMaxDelay shape the exponential backoff
+	// (defaults 200ms and 5s). Delays use full jitter; a Retry-After header
+	// from the server takes precedence, capped at RetryMaxDelay.
+	RetryBaseDelay time.Duration
+	RetryMaxDelay  time.Duration
+	// HTTPClient replaces the default client. Its Timeout is left as is;
+	// Config.Timeout then applies per attempt through the request context.
 	HTTPClient *http.Client
+	// UserAgent is appended to the SDK's User-Agent.
+	UserAgent string
 }
 
-// New returns a Client for the given base URL (e.g. "https://citadel.example.com")
-// and native bearer token ("<accessKeyId>:<secret>").
-func New(baseURL, token string) *Client {
-	return &Client{
-		BaseURL:    strings.TrimRight(baseURL, "/"),
-		Token:      token,
-		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+// Client calls the Citadel native API. It is safe for concurrent use.
+type Client struct {
+	baseURL    string
+	token      string
+	timeout    time.Duration
+	maxRetries int
+	baseDelay  time.Duration
+	maxDelay   time.Duration
+	http       *http.Client
+	userAgent  string
+	// sleep waits between retries; tests replace it.
+	sleep func(context.Context, time.Duration) error
+}
+
+// ErrNoCredentials is returned by New when no access key is configured.
+var ErrNoCredentials = errors.New("citadel: no access key: set Config.AccessKeyID and Config.SecretAccessKey, or " + EnvAccessKeyID + " and " + EnvSecretAccessKey)
+
+// New returns a Client for cfg, filling empty fields from the environment
+// and defaults.
+func New(cfg Config) (*Client, error) {
+	base := firstNonEmpty(cfg.BaseURL, os.Getenv(EnvURL), DefaultBaseURL)
+	u, err := url.Parse(base)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, fmt.Errorf("citadel: invalid base URL %q", base)
 	}
+	id := firstNonEmpty(cfg.AccessKeyID, os.Getenv(EnvAccessKeyID))
+	secret := firstNonEmpty(cfg.SecretAccessKey, os.Getenv(EnvSecretAccessKey))
+	if id == "" || secret == "" {
+		return nil, ErrNoCredentials
+	}
+	if strings.Contains(id, ":") {
+		return nil, errors.New("citadel: access key ID must not contain ':'")
+	}
+	c := &Client{
+		baseURL:    strings.TrimRight(base, "/"),
+		token:      id + ":" + secret,
+		timeout:    cfg.Timeout,
+		maxRetries: cfg.MaxRetries,
+		baseDelay:  cfg.RetryBaseDelay,
+		maxDelay:   cfg.RetryMaxDelay,
+		http:       cfg.HTTPClient,
+		userAgent:  "citadel-go/" + Version,
+		sleep:      sleepContext,
+	}
+	if cfg.UserAgent != "" {
+		c.userAgent += " " + cfg.UserAgent
+	}
+	if c.timeout <= 0 {
+		c.timeout = 30 * time.Second
+	}
+	switch {
+	case c.maxRetries == 0:
+		c.maxRetries = 3
+	case c.maxRetries < 0:
+		c.maxRetries = 0
+	}
+	if c.baseDelay <= 0 {
+		c.baseDelay = 200 * time.Millisecond
+	}
+	if c.maxDelay <= 0 {
+		c.maxDelay = 5 * time.Second
+	}
+	if c.http == nil {
+		c.http = &http.Client{}
+	}
+	return c, nil
 }
 
-// APIError is returned for non-2xx responses from the native API.
-type APIError struct {
-	Status  int
-	Code    string
-	Message string
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
-func (e *APIError) Error() string {
-	return fmt.Sprintf("citadel: %d %s: %s", e.Status, e.Code, e.Message)
-}
+// BaseURL returns the server the client talks to.
+func (c *Client) BaseURL() string { return c.baseURL }
 
+// do sends one API call, retrying as described on Config, and decodes a 2xx
+// JSON response into out (when non-nil).
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body, out any) error {
-	u := c.BaseURL + path
+	var payload []byte
+	if body != nil {
+		var err error
+		if payload, err = json.Marshal(body); err != nil {
+			return fmt.Errorf("citadel: encode request: %w", err)
+		}
+	}
+	u := c.baseURL + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
-	var reader io.Reader
-	if body != nil {
-		buf, err := json.Marshal(body)
+	for attempt := 0; ; attempt++ {
+		resp, err := c.attempt(ctx, method, u, payload)
 		if err != nil {
-			return err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			// Transport failures may have reached the server; retry only
+			// requests that are safe to repeat.
+			if attempt < c.maxRetries && safeMethod(method) {
+				if werr := c.sleep(ctx, c.backoff(attempt, 0)); werr != nil {
+					return werr
+				}
+				continue
+			}
+			return fmt.Errorf("citadel: %s %s: %w", method, path, err)
 		}
-		reader = bytes.NewReader(buf)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, u, reader)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		var e struct {
-			Error   string `json:"error"`
-			Message string `json:"message"`
+		if resp.status/100 == 2 {
+			if out == nil || len(resp.body) == 0 {
+				return nil
+			}
+			if err := json.Unmarshal(resp.body, out); err != nil {
+				return fmt.Errorf("citadel: decode %s %s response: %w", method, path, err)
+			}
+			return nil
 		}
-		_ = json.NewDecoder(resp.Body).Decode(&e)
-		return &APIError{Status: resp.StatusCode, Code: e.Error, Message: e.Message}
+		apiErr := newAPIError(method, path, resp)
+		if attempt < c.maxRetries && retryable(method, resp.status) {
+			if werr := c.sleep(ctx, c.backoff(attempt, apiErr.RetryAfter)); werr != nil {
+				return werr
+			}
+			continue
+		}
+		return apiErr
 	}
-	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
-	}
-	return nil
 }
 
-// Project is a project and its environments.
-type Project struct {
-	Slug         string   `json:"slug"`
-	Environments []string `json:"environments"`
+type rawResponse struct {
+	status int
+	header http.Header
+	body   []byte
 }
 
-// ListProjects returns the projects visible to the token's account.
-func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
-	var out struct {
-		Projects []Project `json:"projects"`
+func (c *Client) attempt(ctx context.Context, method, u string, payload []byte) (*rawResponse, error) {
+	actx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	var rd io.Reader
+	if payload != nil {
+		rd = bytes.NewReader(payload)
 	}
-	if err := c.do(ctx, http.MethodGet, "/v1/projects", nil, nil, &out); err != nil {
+	req, err := http.NewRequestWithContext(actx, method, u, rd)
+	if err != nil {
 		return nil, err
 	}
-	return out.Projects, nil
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", c.userAgent)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return nil, err
+	}
+	return &rawResponse{status: resp.StatusCode, header: resp.Header, body: body}, nil
 }
 
-// PutSecret creates or updates a single item.
-func (c *Client) PutSecret(ctx context.Context, project, env, path, key, value string) error {
-	body := map[string]string{"project": project, "env": env, "path": path, "key": key, "value": value}
-	return c.do(ctx, http.MethodPost, "/v1/secrets", nil, body, nil)
+func safeMethod(m string) bool {
+	return m == http.MethodGet || m == http.MethodHead
 }
 
-// GetSecret reveals the value of a single item. When resolve is true, ${KEY}
-// references in the value are expanded server-side.
-func (c *Client) GetSecret(ctx context.Context, project, env, path, key string, resolve bool) (string, error) {
-	q := url.Values{"project": {project}, "env": {env}, "path": {path}, "key": {key}}
-	if resolve {
-		q.Set("resolve", "true")
+// retryable reports whether a failed response is worth retrying. 429, 502,
+// 503 and 504 mean the request was not processed and are retried for every
+// method; a 500 is retried only for reads, since a write may have happened.
+func retryable(method string, status int) bool {
+	switch status {
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	case http.StatusInternalServerError:
+		return safeMethod(method)
 	}
-	var out struct {
-		Value string `json:"value"`
-	}
-	if err := c.do(ctx, http.MethodGet, "/v1/secrets/value", q, nil, &out); err != nil {
-		return "", err
-	}
-	return out.Value, nil
+	return false
 }
 
-// ErrNotConfigured is returned by identity helpers that are scaffolded but not
-// yet wired to a concrete provider.
-var ErrNotConfigured = errors.New("citadel: native OIDC identity is not configured")
+// backoff is the delay before retry number attempt+1: full jitter over an
+// exponentially growing window, or the server's Retry-After when given.
+func (c *Client) backoff(attempt int, retryAfter time.Duration) time.Duration {
+	if retryAfter > 0 {
+		return min(retryAfter, c.maxDelay)
+	}
+	window := c.baseDelay << min(attempt, 16)
+	if window <= 0 || window > c.maxDelay {
+		window = c.maxDelay
+	}
+	return time.Duration(rand.Int64N(int64(window)) + 1)
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+func parseRetryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// Me describes the authenticated caller.
+type Me struct {
+	Username    string   `json:"username"`
+	DisplayName string   `json:"displayName"`
+	Role        string   `json:"role"`
+	AccountID   string   `json:"accountId"`
+	Accounts    []string `json:"accounts"`
+}
+
+// Me returns the caller the access key authenticates as (for an access key,
+// the username is the key ID and the role is its owner's role).
+func (c *Client) Me(ctx context.Context) (*Me, error) {
+	var out Me
+	if err := c.do(ctx, http.MethodGet, "/v1/me", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

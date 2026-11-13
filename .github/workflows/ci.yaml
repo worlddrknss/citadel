@@ -72,6 +72,53 @@ jobs:
       - name: Build
         run: npm run build
 
+  # TypeScript SDK (sdk/typescript): types regenerated from docs/openapi.yaml
+  # must match the committed ones; unit tests mock fetch, integration tests
+  # build and run the real server (memory store, and an empty Postgres for
+  # bearer access-key auth).
+  sdk-ts:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: citadel-sdk-ts-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CITADEL_SDK_TEST_DB_URL: postgres://postgres:citadel-sdk-ts-password@localhost:5432/postgres?sslmode=disable
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Generated types are current
+        run: |
+          npm run generate
+          git diff --exit-code -- src/generated/openapi.ts || { echo "src/generated/openapi.ts is stale: run npm run generate in sdk/typescript"; exit 1; }
+      - name: Lint
+        run: npm run lint
+      - name: Type check
+        run: npm run typecheck
+      - name: Tests (unit and integration)
+        run: npm test
+      - name: Build
+        run: npm run build
+
   e2e:
     runs-on: ubuntu-latest
     needs: web

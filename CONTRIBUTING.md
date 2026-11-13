@@ -127,6 +127,11 @@ existing databases.
 - Every handler authenticates, scopes data to the caller's account, and
   records an audit event with the authenticated identity.
 - Add or update tests next to the behaviour you changed.
+- When you add or change a `/v1` route, update
+  [docs/openapi.yaml](docs/openapi.yaml) (its header comment lists the YAML
+  subset it must stay in) and run `npm run generate` in `sdk/typescript`.
+  `internal/server/openapi_test.go` fails on routes, roles or audit actions
+  that drift from the document, and on stale generated TypeScript types.
 - Update the README or `docs/` when setup, configuration, API behaviour or
   operator workflows change.
 

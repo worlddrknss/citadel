@@ -263,6 +263,7 @@ func (s *Server) Handler() http.Handler {
 
 	s.registerAuthRoutes(mux)
 	s.registerIdentityRoutes(mux)
+	s.registerOpenAPIRoutes(mux)
 
 	// Modern Svelte single-page control plane, embedded into the binary.
 	mux.Handle("/app/", http.HandlerFunc(s.handleApp))

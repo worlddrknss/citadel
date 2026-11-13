@@ -79,6 +79,7 @@
   const paletteNav = $derived([
     ...groups.flatMap((g) => g.items.map((i) => ({ href: i.tab ? `${i.href}?tab=${i.tab}` : i.href, label: i.label, icon: i.icon, group: g.label || undefined }))),
     { href: '/account', label: 'My account', icon: 'user' as IconName, group: 'Settings' },
+    { href: '/api-reference', label: 'API reference', icon: 'code' as IconName, group: 'Help' },
     ...(session.can('admin') ? [{ href: '/admin', label: 'Administration', icon: 'building' as IconName, group: 'Settings' }] : [])
   ]);
 
@@ -348,6 +349,7 @@
             {#snippet trigger()}<Icon name="info" />{/snippet}
             {#snippet children(close)}
               <a role="menuitem" href={DOCS} target="_blank" rel="noopener noreferrer" onclick={close}><Icon name="file" />Documentation<Icon name="external-link" size={12} /></a>
+              <a role="menuitem" href="{base}/api-reference" onclick={close}><Icon name="code" />API reference</a>
               <button type="button" role="menuitem" onclick={() => { close(); shortcutsOpen = true; }}><Icon name="command" />Keyboard shortcuts</button>
               <a role="menuitem" href={SECURITY} target="_blank" rel="noopener noreferrer" onclick={close}><Icon name="shield" />Report a security issue<Icon name="external-link" size={12} /></a>
             {/snippet}

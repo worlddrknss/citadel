@@ -270,27 +270,3 @@ func (s *Store) ListAccountUsers(_ context.Context, accountID string) ([]struct{
 	})
 	return users, nil
 }
-
-func (s *Store) CreateAccessKey(_ context.Context, username, accountID string) (store.AccessKeySecret, error) {
-	return store.AccessKeySecret{}, store.ErrUnsupported
-}
-
-func (s *Store) ListAccessKeys(_ context.Context, username, accountID string) ([]store.AccessKeyInfo, error) {
-	return nil, store.ErrUnsupported
-}
-
-func (s *Store) GetAccessKeyByID(_ context.Context, keyID string) (username, accountID, secret string, status string, err error) {
-	return "", "", "", "", store.ErrUnsupported
-}
-
-func (s *Store) SetAccessKeyStatus(_ context.Context, keyID, newStatus string) error {
-	return store.ErrUnsupported
-}
-
-func (s *Store) DeleteAccessKey(_ context.Context, keyID string) error {
-	return store.ErrUnsupported
-}
-
-func (s *Store) TouchAccessKeyLastUsed(_ context.Context, keyID string) error {
-	return store.ErrUnsupported
-}
