@@ -123,8 +123,76 @@ of running. CI runs the full test suite in that mode.
 Every action records the authenticated actor, account, resource, source IP,
 user agent and result. Events form one HMAC chain per account; appends lock
 the chain head, so concurrent requests and replicas can't fork it. Editing or
-deleting events is detected by verification. If an audit write fails, Citadel
-refuses to return the result of a state-changing action or a secret reveal.
+deleting events is detected by verification.
+
+### No unaudited changes (write-ahead audit)
+
+No state change takes effect without an audit record. Before 2.1, the audit
+event was written after the change: if that write failed the response became
+a 500, but the change was already committed. Since 2.1:
+
+1. **Attempt.** Before a state-changing operation runs, Citadel appends an
+   *attempt* event: the action, actor, account, resource, source, result
+   `pending` and a new `correlationId`. If that append fails, the request is
+   refused (HTTP 500, `audit_unavailable` / `InternalFailure`, "nothing was
+   changed") before anything is touched.
+2. **Outcome.** The handler then records its outcome (`success`, `denied` or
+   `error`) as before, stamped with the same `correlationId`. A request that
+   records nothing of its own (a validation error, for example) gets an
+   outcome derived from its HTTP status (`HTTP400`, `AccessDenied`...).
+3. **Outcome retry.** If the outcome append fails, the change is already
+   covered by its attempt, so the response stands. The outcome goes to an
+   in-process retry queue (bounded at 50,000 events), flushed in order every
+   10 seconds by the `audit-outcome-retry` job and once more at shutdown.
+   Every failure is logged (`AUDIT WRITE FAILED ... outcome queued`), and
+   `citadel_audit_outcome_queue_depth` exposes the backlog on the metrics
+   listener; alert when it stays above zero.
+
+An attempt with no outcome means the outcome is unknown: the process stopped
+between the two appends, or a queued outcome was lost at shutdown. Treat such
+an action as possibly performed. Filter for them with `result=pending` and
+look up an attempt's outcome with `GET /v1/audit/events?correlation=<id>`.
+
+Where the attempt is written, per path:
+
+| Path | Attempt written | Action name on the attempt |
+|---|---|---|
+| AWS JSON APIs (KMS, Secrets Manager, SSM, ACM, ACM PCA) | after SigV4 verification, before dispatch | the `X-Amz-Target`, e.g. `TrentService.CreateKey` |
+| Native `/v1` API (console, bearer tokens) | when the session is resolved, for POST/PUT/PATCH/DELETE | the route, e.g. `POST /v1/secrets`; the outcome carries the handler's action name |
+| STS `AssumeRole`, `AssumeRoleWithWebIdentity` | after the trust check, before credentials are minted | `sts.AssumeRole...` |
+| Console login, SSO login, bootstrap, logout | after credentials are verified, before the session or account is created (or deleted) | `citadel.Login`, ... |
+| ACME server | before issuing, revoking, or binding an EAB key | `citadel.ACME...` |
+| Background jobs | per key for KMS rotation and deletion; before the workload signing-key rotation and the re-wrap; for the secrets purge (per account) and certificate expiry sweeps only when there is work, so idle runs write nothing | the job's action |
+
+The resource on an attempt comes from the query string, else from the
+identifying field of a JSON body (`SecretId`, `KeyId`, `name`, `arn`...).
+Value fields are never used.
+
+**What doesn't get an attempt.** Reads and operations that change nothing:
+metadata reads (`List*`, `Describe*`, most `Get*`) fail open as before.
+Cryptographic operations and secret disclosures (`Encrypt`, `Decrypt`,
+`Sign`, `GenerateDataKey*`, `GetSecretValue`, `GetParameter*`,
+`ExportCertificate`, the native encrypt/decrypt/sign/verify and reveal
+routes) stay fail-closed after the fact: when their event can't be written,
+the response, and so the result, is withheld. Nothing was changed, so no
+attempt is needed. Audit verification and connection tests write no attempt
+either.
+
+**Why not the same transaction?** Writing the event inside each operation's
+own database transaction was evaluated and not adopted. An audit append
+locks the account's chain head, so folding it into domain transactions would
+hold that lock for the whole operation, including key generation, and
+serialize every write in the account. Many operations also span several
+store calls, and the in-memory backend has no transactions at all. The
+write-ahead pattern costs one extra append per state-changing request and
+gives the same guarantee on every path.
+
+**Upgrades.** The attempt link is a `correlation_id` column (migration 1100,
+a catalog-only `ADD COLUMN` with a constant default, plus a small partial
+index). The chain MAC covers it only when set, so every earlier event keeps
+its MAC. During a rolling upgrade, a 2.0 replica that verifies the chain
+reports events written by 2.1 replicas with a correlation ID as having a bad
+MAC. Run verification only once all replicas run 2.1.
 
 Verification (`POST /v1/audit/verify`) continues from the last verified
 event; a platform admin can re-walk the whole chain with `?full=true` (the

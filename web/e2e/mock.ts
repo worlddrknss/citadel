@@ -180,8 +180,10 @@ const auditRows = Array.from({ length: 12 }, (_, i) => ({
   action: ['secretsmanager.GetSecretValue', 'kms.Encrypt', 'citadel.Login', 'citadel.IssueWorkloadToken'][i % 4],
   resource: i % 2 ? 'payments/prod/API_KEY' : 'alias/default',
   keyId: i % 2 ? undefined : 'alias/default',
-  // The server normalizes results to success | denied | error.
-  result: i === 4 ? 'denied' : 'success',
+  // The server normalizes results to success | denied | error | pending.
+  // Event 98 is a write-ahead attempt; event 99 is its outcome.
+  result: i === 4 ? 'denied' : i === 2 ? 'pending' : 'success',
+  correlationId: i === 1 || i === 2 ? '5f2a9c0d1e3b4a6f8091a2b3c4d5e6f7' : undefined,
   errorType: i === 4 ? 'AccessDeniedException' : undefined,
   sourceIp: '10.0.0.5',
   userAgent: i % 3 ? 'Mozilla/5.0 (Macintosh) Chrome/130' : 'aws-cli/2.17',
@@ -376,7 +378,10 @@ const GET: Record<string, Handler> = {
   '/v1/audit/events': (q) => {
     const limit = Number(q.get('limit') ?? 50);
     const offset = Number(q.get('offset') ?? 0);
-    return { events: auditRows.slice(offset, offset + limit), total: auditRows.length, limit, offset };
+    const corr = q.get('correlation');
+    const result = q.get('result');
+    const rows = auditRows.filter((r) => (!corr || r.correlationId === corr) && (!result || r.result === result));
+    return { events: rows.slice(offset, offset + limit), total: rows.length, limit, offset };
   },
   '/v1/audit/verify': () => ({ status: 'verified', verifiedThrough: 100, headHash: 'h100', checkedAt: ago(600_000), totalEvents: 100 }),
   '/v1/audit/stream': () => ({ enabled: false, url: '', format: 'json', hasToken: false }),

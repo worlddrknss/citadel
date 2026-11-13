@@ -27,7 +27,8 @@
     { id: '', label: 'any' },
     { id: 'success', label: 'Success' },
     { id: 'denied', label: 'Denied' },
-    { id: 'error', label: 'Error' }
+    { id: 'error', label: 'Error' },
+    { id: 'pending', label: 'Pending' }
   ];
 
   const range = $derived(param('range', '7d'));
@@ -37,6 +38,7 @@
   const action = $derived(param('action'));
   const result = $derived(param('result') as ResultFilter);
   const resource = $derived(param('resource'));
+  const correlation = $derived(param('correlation'));
   const pageNum = $derived(Math.max(1, Number(param('page', '1')) || 1));
   const openId = $derived(param('event'));
 
@@ -58,7 +60,7 @@
       // Round to the minute so the derived value is stable between renders.
       if (p.ms) from = new Date(Math.floor((Date.now() - p.ms) / 60_000) * 60_000).toISOString();
     }
-    return { from, to, actor, action, result: RESULTS.some((r) => r.id === result) ? result : '', resource };
+    return { from, to, actor, action, result: RESULTS.some((r) => r.id === result) ? result : '', resource, correlation: /^[0-9a-f]{1,64}$/.test(correlation) ? correlation : undefined };
   });
 
   const rangeLabel = $derived.by(() => {
@@ -100,7 +102,7 @@
 
   const rangeStart = $derived(data && data.total ? data.offset + 1 : 0);
   const rangeEnd = $derived(data ? data.offset + data.events.length : 0);
-  const hasFilters = $derived(!!(actor || action || result || resource));
+  const hasFilters = $derived(!!(actor || action || result || resource || correlation));
 
   // ---- chain verification -------------------------------------------------
   let chain = $state<ChainStatus | null>(null);
@@ -168,7 +170,7 @@
   // The event exactly as the API and the JSON export name its fields.
   const EVENT_FIELDS: (keyof AuditRow)[] = [
     'id', 'chainSeq', 'createdAt', 'actor', 'actorType', 'actorDisplayName', 'accessKeyId', 'action', 'resource',
-    'keyId', 'result', 'errorType', 'sourceIp', 'userAgent', 'prevHash', 'hash', 'hashValid'
+    'keyId', 'result', 'errorType', 'sourceIp', 'userAgent', 'prevHash', 'hash', 'hashValid', 'correlationId'
   ];
   function eventJson(e: AuditRow): string {
     const out: Record<string, unknown> = {};
@@ -221,7 +223,7 @@
   }
 
   let streamOpen = $state(false);
-  const resultTone = { success: 'success', denied: 'danger', error: 'warning' } as const;
+  const resultTone = { success: 'success', denied: 'danger', error: 'warning', pending: 'info' } as const;
 </script>
 
 <PageHeader title="Audit log" description="Append-only record of every API call and console action in account {session.me?.accountId ?? ''}.">
@@ -374,7 +376,8 @@
     {#if action}<span class="badge chip mono">action ~ {action}<button type="button" class="chip-x" aria-label="Remove filter: action" onclick={() => setFilter({ action: null })}><Icon name="x" size={10} /></button></span>{/if}
     {#if result}<span class="badge chip">Result is {RESULTS.find((r) => r.id === result)?.label}<button type="button" class="chip-x" aria-label="Remove filter: result" onclick={() => setFilter({ result: null })}><Icon name="x" size={10} /></button></span>{/if}
     {#if resource}<span class="badge chip mono">resource ~ {resource}<button type="button" class="chip-x" aria-label="Remove filter: resource" onclick={() => setFilter({ resource: null })}><Icon name="x" size={10} /></button></span>{/if}
-    <button type="button" class="btn btn-ghost btn-sm" onclick={() => setFilter({ actor: null, action: null, result: null, resource: null })}>Clear all</button>
+    {#if correlation}<span class="badge chip mono">correlation = {correlation.slice(0, 12)}…<button type="button" class="chip-x" aria-label="Remove filter: correlation" onclick={() => setFilter({ correlation: null })}><Icon name="x" size={10} /></button></span>{/if}
+    <button type="button" class="btn btn-ghost btn-sm" onclick={() => setFilter({ actor: null, action: null, result: null, resource: null, correlation: null })}>Clear all</button>
   </div>
 {/if}
 
@@ -392,7 +395,7 @@
     <div class="state">
       {#if hasFilters || range !== 'all'}
         <EmptyState icon="filter" title="No matching events" description="Nothing in this range matches the filters. Widen the date range or clear filters.">
-          <button type="button" class="btn btn-secondary" onclick={() => setFilter({ actor: null, action: null, result: null, resource: null, range: 'all', from: null, to: null })}>Show all events</button>
+          <button type="button" class="btn btn-secondary" onclick={() => setFilter({ actor: null, action: null, result: null, resource: null, correlation: null, range: 'all', from: null, to: null })}>Show all events</button>
         </EmptyState>
       {:else}
         <EmptyState icon="activity" title="No audit events yet" description="API calls and console actions are recorded here as they happen." />
@@ -436,8 +439,8 @@
                 <td class="mono sm res" title={e.resource || e.keyId}>{e.resource || e.keyId || '—'}</td>
                 <td>
                   <span class="badge badge-{resultTone[kind]}">
-                    <Icon name={kind === 'success' ? 'check-circle' : kind === 'denied' ? 'x' : 'alert-triangle'} size={12} />
-                    {kind === 'success' ? 'Success' : kind === 'denied' ? 'Denied' : e.errorType || 'Error'}
+                    <Icon name={kind === 'success' ? 'check-circle' : kind === 'denied' ? 'x' : kind === 'pending' ? 'clock' : 'alert-triangle'} size={12} />
+                    {kind === 'success' ? 'Success' : kind === 'denied' ? 'Denied' : kind === 'pending' ? 'Attempt' : e.errorType || 'Error'}
                   </span>
                 </td>
                 <td class="mono subtle sm">{e.sourceIp || '—'}</td>
@@ -457,8 +460,12 @@
                         <span class="detail-actions">
                           <button type="button" class="btn btn-ghost btn-sm" onclick={() => copyJson(e)}><Icon name="copy" size={14} />Copy JSON</button>
                           {#if e.actor}<button type="button" class="btn btn-ghost btn-sm" onclick={() => setFilter({ actor: e.actor })}><Icon name="filter" size={14} />Filter by actor</button>{/if}
+                          {#if e.correlationId}<button type="button" class="btn btn-ghost btn-sm" onclick={() => setFilter({ correlation: e.correlationId ?? null })}><Icon name="link" size={14} />{kind === 'pending' ? 'Show outcome' : 'Show attempt'}</button>{/if}
                         </span>
                       </div>
+                      {#if kind === 'pending'}
+                        <p class="subtle small attempt-note">Recorded before the change ran (write-ahead audit). Its outcome is a later event with the same correlation ID; an attempt without one means the outcome is unknown.</p>
+                      {/if}
                       <pre class="code">{#each tokens(json) as t, ti (ti)}{#if t.t === 'p'}{t.v}{:else}<span class="tok-{t.t}">{t.v}</span>{/if}{/each}</pre>
                     </div>
                   </td>
@@ -511,6 +518,9 @@
   }
   .legacy-note {
     margin-top: 8px;
+  }
+  .attempt-note {
+    margin: 0 0 8px;
   }
   .banner-success {
     background: var(--success-soft);

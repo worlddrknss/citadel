@@ -5,7 +5,7 @@
 import { api, req } from '#lib/api.ts';
 import { isNotImplemented, qs, rawRequest } from '../http';
 
-export type ResultFilter = '' | 'success' | 'denied' | 'error';
+export type ResultFilter = '' | 'success' | 'denied' | 'error' | 'pending';
 
 export interface AuditFilters {
   /** ISO-8601 instants, inclusive. */
@@ -15,6 +15,8 @@ export interface AuditFilters {
   action?: string;
   result?: ResultFilter;
   resource?: string;
+  /** Exact correlation ID: a write-ahead attempt and its outcomes. */
+  correlation?: string;
 }
 
 export interface AuditRow {
@@ -39,6 +41,11 @@ export interface AuditRow {
   hash?: string;
   /** Server recomputed this event's hash and it matched. */
   hashValid?: boolean;
+  /**
+   * Links a write-ahead attempt (result "pending", written before the change)
+   * to its outcome events.
+   */
+  correlationId?: string;
 }
 
 export interface AuditPage {
@@ -85,9 +92,10 @@ export interface StreamConfig {
   hasToken: boolean;
 }
 
-export function resultKind(r: Pick<AuditRow, 'result' | 'errorType'>): 'success' | 'denied' | 'error' {
+export function resultKind(r: Pick<AuditRow, 'result' | 'errorType'>): 'success' | 'denied' | 'error' | 'pending' {
   const v = (r.result || '').toLowerCase();
   if (v === 'ok' || v === 'success') return 'success';
+  if (v === 'pending') return 'pending';
   if (v === 'denied' || /denied|forbidden|unauthori[sz]ed/i.test(r.errorType ?? '')) return 'denied';
   return 'error';
 }
@@ -102,6 +110,7 @@ function matches(e: AuditRow, f: AuditFilters): boolean {
   if (!has(e.action, f.action)) return false;
   if (!has(`${e.resource ?? ''} ${e.keyId ?? ''}`, f.resource)) return false;
   if (f.result && resultKind(e) !== f.result) return false;
+  if (f.correlation && e.correlationId !== f.correlation) return false;
   return true;
 }
 
@@ -158,7 +167,7 @@ export const auditApi = {
   testStream: () => req<{ delivered: boolean; status?: number }>('/v1/audit/stream/test', { method: 'POST' })
 };
 
-const CSV_COLS: (keyof AuditRow)[] = ['id', 'createdAt', 'actor', 'action', 'resource', 'result', 'errorType', 'sourceIp', 'prevHash', 'hash'];
+const CSV_COLS: (keyof AuditRow)[] = ['id', 'createdAt', 'actor', 'action', 'resource', 'result', 'errorType', 'sourceIp', 'prevHash', 'hash', 'correlationId'];
 
 /** CSV for the legacy export fallback. Exported for tests. */
 export function toCsv(rows: AuditRow[]): string {

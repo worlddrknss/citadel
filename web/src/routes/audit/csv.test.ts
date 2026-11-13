@@ -19,9 +19,9 @@ describe('audit CSV export', () => {
   it('writes a header and quotes every cell, CRLF between records', () => {
     const csv = toCsv([row(), row({ id: 2 })]);
     const lines = csv.split('\r\n');
-    expect(lines[0]).toBe('id,createdAt,actor,action,resource,result,errorType,sourceIp,prevHash,hash');
+    expect(lines[0]).toBe('id,createdAt,actor,action,resource,result,errorType,sourceIp,prevHash,hash,correlationId');
     expect(lines).toHaveLength(3);
-    expect(lines[1]).toBe('"1","2026-11-12T13:04:51Z","alice","secretsmanager.GetSecretValue","","ok","","","",""');
+    expect(lines[1]).toBe('"1","2026-11-12T13:04:51Z","alice","secretsmanager.GetSecretValue","","ok","","","","",""');
   });
 
   it('doubles embedded quotes and keeps commas inside the cell', () => {
@@ -59,6 +59,7 @@ describe('resultKind', () => {
     [{ result: 'error', errorType: 'AccessDeniedException' }, 'denied'],
     [{ result: 'error', errorType: 'UnauthorizedOperation' }, 'denied'],
     [{ result: 'error', errorType: 'ThrottlingException' }, 'error'],
+    [{ result: 'pending' }, 'pending'],
     [{ result: '' }, 'error']
   ] as const)('%j → %s', (r, kind) => {
     expect(resultKind(r)).toBe(kind);
