@@ -23,18 +23,23 @@ func andAccount(ctx context.Context, column string, argPos int) (string, []any) 
 
 const caColumns = `ca_id, urn, type, kms_key_id, subject_dn, state, ca_cert_b64,
 	path_length, not_before, not_after, description, account, created_at, updated_at,
-	parent_ca_id, COALESCE(account_id, '')`
+	parent_ca_id, COALESCE(account_id, ''), restorable_until`
 
 func scanCA(row interface{ Scan(...any) error }) (store.PCACertificateAuthority, error) {
 	var ca store.PCACertificateAuthority
 	var pathLength sql.NullInt32
+	var restorableUntil sql.NullTime
 	err := row.Scan(
 		&ca.CAID, &ca.ARN, &ca.Type, &ca.KMSKeyID, &ca.SubjectDN, &ca.State, &ca.CACertB64,
 		&pathLength, &ca.NotBefore, &ca.NotAfter, &ca.Description, &ca.Account, &ca.CreatedAt, &ca.UpdatedAt,
-		&ca.ParentCAID, &ca.AccountID,
+		&ca.ParentCAID, &ca.AccountID, &restorableUntil,
 	)
 	if err != nil {
 		return ca, err
+	}
+	if restorableUntil.Valid {
+		t := restorableUntil.Time
+		ca.RestorableUntil = &t
 	}
 	if pathLength.Valid {
 		pl := int(pathLength.Int32)
@@ -121,19 +126,24 @@ func (s *Store) ListCertificateAuthorities(ctx context.Context) ([]store.PCACert
 
 const certColumns = `cert_id, ca_id, serial, csr_b64, cert_b64, status,
 	not_before, not_after, revoked_at, revocation_reason, template, created_at, updated_at,
-	COALESCE(account_id, '')`
+	COALESCE(account_id, ''), deleted_at`
 
 func scanCert(row interface{ Scan(...any) error }) (store.PCACertificate, error) {
 	var cert store.PCACertificate
 	var revokedAt sql.NullTime
 	var revocationReason sql.NullString
+	var deletedAt sql.NullTime
 	err := row.Scan(
 		&cert.CertID, &cert.CAID, &cert.Serial, &cert.CSRB64, &cert.CertB64, &cert.Status,
 		&cert.NotBefore, &cert.NotAfter, &revokedAt, &revocationReason, &cert.Template, &cert.CreatedAt, &cert.UpdatedAt,
-		&cert.AccountID,
+		&cert.AccountID, &deletedAt,
 	)
 	if err != nil {
 		return cert, err
+	}
+	if deletedAt.Valid {
+		t := deletedAt.Time
+		cert.DeletedAt = &t
 	}
 	if revokedAt.Valid {
 		t := revokedAt.Time

@@ -36,6 +36,22 @@ type ACMELECertificate struct {
 	NotAfter  time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	// AccountID is the owning tenant; set by the store on reads.
+	AccountID string
+	// ChallengeKind is how it was validated: http-01, dns-01, or "" for
+	// certificates issued before Citadel recorded it.
+	ChallengeKind string
+	// AutoRenew: renew automatically (HTTP-01 only) 30 days before expiry.
+	AutoRenew bool
+	// Automatic renewal state: failed attempts since the last success, when
+	// the next attempt may run, the last attempt and its error, and the
+	// certificate that replaced this one.
+	RenewAttempts      int
+	RenewNextAttemptAt *time.Time
+	RenewLastAttemptAt *time.Time
+	RenewLastError     string
+	RenewedBy          string
 }
 
 // ACMELEOrder is a Let's Encrypt order. Issuance runs in the background (it

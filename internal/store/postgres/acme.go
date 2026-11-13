@@ -172,12 +172,14 @@ func (s *Store) CreateACMELECertificate(ctx context.Context, cert store.ACMELECe
 	const q = `
 INSERT INTO acme_le_certificates (
 	cert_id, directory_url, domains, serial, cert_b64, chain_b64,
-	key_wrapped_b64, key_nonce_b64, status, not_before, not_after, created_at, updated_at, account_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW(), $12)
+	key_wrapped_b64, key_nonce_b64, status, not_before, not_after, created_at, updated_at, account_id,
+	challenge_kind, auto_renew
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW(), $12, $13, $14)
 `
 	if _, err := s.db.ExecContext(ctx, q,
 		cert.CertID, cert.DirectoryURL, cert.Domains, cert.Serial, cert.CertB64, cert.ChainB64,
 		wrappedB64, nonceB64, cert.Status, cert.NotBefore, cert.NotAfter, s.accountForContext(ctx),
+		cert.ChallengeKind, cert.AutoRenew,
 	); err != nil {
 		return fmt.Errorf("insert acme certificate: %w", err)
 	}
@@ -188,7 +190,8 @@ INSERT INTO acme_le_certificates (
 func (s *Store) GetACMELECertificate(ctx context.Context, certID string) (store.ACMELECertificate, error) {
 	q := `
 SELECT cert_id, directory_url, domains, serial, cert_b64, chain_b64,
-       key_wrapped_b64, key_nonce_b64, status, not_before, not_after, created_at, updated_at
+       key_wrapped_b64, key_nonce_b64, status, not_before, not_after, created_at, updated_at,
+       ` + leRenewalColumns + `
 FROM acme_le_certificates
 WHERE cert_id = $1`
 	cond, args := andAccount(ctx, "account_id", 2)
@@ -198,10 +201,11 @@ WHERE cert_id = $1`
 		wrappedB64 string
 		nonceB64   string
 	)
-	err := s.db.QueryRowContext(ctx, q, append([]any{certID}, args...)...).Scan(
+	dest, finish := leRenewalDest(&c)
+	err := s.db.QueryRowContext(ctx, q, append([]any{certID}, args...)...).Scan(append([]any{
 		&c.CertID, &c.DirectoryURL, &c.Domains, &c.Serial, &c.CertB64, &c.ChainB64,
 		&wrappedB64, &nonceB64, &c.Status, &c.NotBefore, &c.NotAfter, &c.CreatedAt, &c.UpdatedAt,
-	)
+	}, dest...)...)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return store.ACMELECertificate{}, fmt.Errorf("acme certificate not found")
@@ -214,6 +218,7 @@ WHERE cert_id = $1`
 			return store.ACMELECertificate{}, fmt.Errorf("unwrap acme cert key: %w", err)
 		}
 	}
+	finish()
 	return c, nil
 }
 
@@ -225,28 +230,10 @@ func (s *Store) ListACMELECertificates(ctx context.Context) ([]store.ACMELECerti
 		where = "WHERE " + where
 	}
 	q := `
-SELECT cert_id, directory_url, domains, serial, cert_b64, chain_b64,
-       status, not_before, not_after, created_at, updated_at
+SELECT ` + leListColumns + `
 FROM acme_le_certificates
 ` + where + `
 ORDER BY created_at DESC
 `
-	rows, err := s.db.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query acme certificates: %w", err)
-	}
-	defer rows.Close()
-
-	var out []store.ACMELECertificate
-	for rows.Next() {
-		var c store.ACMELECertificate
-		if err := rows.Scan(
-			&c.CertID, &c.DirectoryURL, &c.Domains, &c.Serial, &c.CertB64, &c.ChainB64,
-			&c.Status, &c.NotBefore, &c.NotAfter, &c.CreatedAt, &c.UpdatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan acme certificate: %w", err)
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
+	return s.queryLECerts(ctx, q, args...)
 }
