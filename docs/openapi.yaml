@@ -77,7 +77,7 @@ tags:
   - name: Agents
     description: AI agents, their tokens, federation bindings, grants and credential usage profiles
   - name: Agent API
-    description: Endpoints AI agents call with an agent token or federated token
+    description: Endpoints AI agents call with an agent token or federated token (identity, credentials, brokered HTTP, reveal); the MCP server at /mcp is described in docs/agents-mcp.md
   - name: Notifications
     description: Notification channels (signed webhooks, Slack, email) and their delivery log
   - name: Server
@@ -7128,6 +7128,110 @@ paths:
             $ref: "#/components/responses/NotFound"
           "500":
             $ref: "#/components/responses/InternalError"
+    /v1/agent/http:
+      post:
+        operationId: agentHttpRequest
+        tags: [Agent API]
+        summary: Make an HTTP request with a credential injected (brokered use)
+        description: |
+          Citadel performs the request with the named credential injected, so
+          the agent never holds the secret. The agent needs a grant with the
+          `use` action. The URL must be https (http only when the credential
+          allows it), its host one of the credential's `allowedHosts` (exact
+          or `*.suffix`; non-default ports only when listed), and the method and
+          path must be allowed by the credential. Destinations that resolve to
+          loopback, link-local, private or metadata addresses are refused
+          unless the credential's `allowedCIDRs` include them.
+
+          Agent headers that would collide with the credential (`Authorization`,
+          `Cookie`, `Proxy-*`, the credential's own header, hop-by-hop headers,
+          `Accept-Encoding`) are dropped. Same-host redirects are followed (at
+          most 3); others are returned as is. Limits: request body 1 MiB,
+          response body 5 MiB (`truncated: true` beyond), 30 s overall.
+          `Set-Cookie` and credential headers are removed from the response,
+          and every occurrence of the secret (also base64 and URL encoded) is
+          replaced with `[REDACTED]` (`redacted: true`). An upstream error
+          status is a successful brokered call: it comes back in `status`.
+
+          Errors carry a stable `reason` (for example `no_grant`,
+          `action_not_granted`, `host_not_allowed`, `path_not_allowed`,
+          `method_not_allowed`, `scheme_not_allowed`, `destination_blocked`,
+          `rate_limited`, `upstream_timeout`, `upstream_unreachable`). The
+          task ID (`taskId` or the `X-Citadel-Task-Id` header) is recorded in
+          the audit log.
+        x-citadel-role: agent
+        x-citadel-audit: citadel.AgentHTTP
+        security:
+          - agentToken: []
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentHttpRequest"
+        responses:
+          "200":
+            description: The upstream's response, filtered and redacted
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentHttpResponse"
+          "400":
+            $ref: "#/components/responses/AgentError"
+          "401":
+            $ref: "#/components/responses/AgentError"
+          "403":
+            $ref: "#/components/responses/AgentError"
+          "413":
+            $ref: "#/components/responses/AgentError"
+          "429":
+            $ref: "#/components/responses/AgentError"
+          "500":
+            $ref: "#/components/responses/AgentError"
+          "502":
+            $ref: "#/components/responses/AgentError"
+          "503":
+            $ref: "#/components/responses/AgentError"
+          "504":
+            $ref: "#/components/responses/AgentError"
+    /v1/agent/credentials/reveal:
+      post:
+        operationId: agentRevealCredential
+        tags: [Agent API]
+        summary: Reveal a credential's value (requires a reveal grant)
+        description: |
+          Returns the secret value behind a credential. Only works with a grant
+          that explicitly includes the `reveal` action; prefer brokered use.
+          For `http_basic` and `login` credentials the value is the stored
+          JSON document. The disclosure is audited (`citadel.AgentReveal`)
+          before the value is returned; the response is never cached.
+        x-citadel-role: agent
+        x-citadel-audit: citadel.AgentReveal
+        security:
+          - agentToken: []
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentRevealRequest"
+        responses:
+          "200":
+            description: The value
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentRevealResponse"
+          "400":
+            $ref: "#/components/responses/AgentError"
+          "401":
+            $ref: "#/components/responses/AgentError"
+          "403":
+            $ref: "#/components/responses/AgentError"
+          "429":
+            $ref: "#/components/responses/AgentError"
+          "500":
+            $ref: "#/components/responses/AgentError"
 components:
   securitySchemes:
     sessionCookie:
@@ -7153,6 +7257,12 @@ components:
         `X-Citadel-Agent-Id` when the identity is bound to more than one
         agent). Only the Agent API accepts it.
   responses:
+    AgentError:
+      description: An agent request failed; `reason` says why
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AgentError"
     BadRequest:
       description: The request was invalid (`invalid_request` or an operation-specific code)
       content:
@@ -10857,3 +10967,88 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/NotificationDelivery"
+    AgentError:
+      type: object
+      description: The error body of the agent endpoints
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: Stable code, e.g. `unauthorized`, `forbidden`, `invalid_request`, `rate_limited`, `upstream_error`
+        message:
+          type: string
+        reason:
+          type: string
+          description: Stable denial or failure reason, e.g. `no_grant`, `host_not_allowed`, `destination_blocked`
+    AgentHttpRequest:
+      type: object
+      required: [credential, url]
+      properties:
+        credential:
+          type: string
+          description: Name of the credential to inject
+        method:
+          type: string
+          enum: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS]
+          default: GET
+        url:
+          type: string
+          description: Absolute https URL (http only when the credential allows it)
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        body:
+          type: string
+          description: Request body, at most 1 MiB decoded
+        bodyEncoding:
+          type: string
+          enum: [text, base64]
+          default: text
+        taskId:
+          type: string
+          description: The caller's task or session ID, recorded in the audit log (1-128 of letters, digits and -_.:/@#+=)
+    AgentHttpResponse:
+      type: object
+      required: [status, headers, body, bodyEncoding, truncated, redacted]
+      properties:
+        status:
+          type: integer
+          description: The upstream's HTTP status
+        headers:
+          type: object
+          description: Response headers (multiple values joined with ", "), without Set-Cookie and credential headers
+          additionalProperties:
+            type: string
+        body:
+          type: string
+        bodyEncoding:
+          type: string
+          enum: [text, base64]
+          description: text for UTF-8 bodies, base64 otherwise
+        truncated:
+          type: boolean
+          description: The body was cut at 5 MiB
+        redacted:
+          type: boolean
+          description: Occurrences of the secret were replaced with [REDACTED]
+    AgentRevealRequest:
+      type: object
+      required: [credential]
+      properties:
+        credential:
+          type: string
+        taskId:
+          type: string
+    AgentRevealResponse:
+      type: object
+      required: [credential, kind, value]
+      properties:
+        credential:
+          type: string
+        kind:
+          type: string
+          description: The credential kind (http_header, http_basic, http_query, login, raw)
+        value:
+          type: string
+          description: The secret value
