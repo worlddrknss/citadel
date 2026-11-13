@@ -45,6 +45,7 @@ type Store struct {
 	mfa    *memMFA
 	rotSeq int64
 	parity memPKIParity
+	notif  *memNotifications
 }
 
 var _ store.Store = (*Store)(nil)

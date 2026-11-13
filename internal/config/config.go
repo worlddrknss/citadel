@@ -94,6 +94,10 @@ type Config struct {
 	// for the ACME server (whose JWS URLs must match exactly) and is used in
 	// CRL distribution points. Empty disables the ACME server.
 	PublicURL string
+
+	// SMTP is the outgoing mail server for email notification channels
+	// (KMS_SMTP_*); see smtp.go.
+	SMTP SMTPConfig
 }
 
 // MinAuditHMACKeyLen is the shortest KMS_AUDIT_HMAC_KEY_B64 accepted (128
@@ -212,6 +216,9 @@ func Load() (Config, error) {
 	}
 	cfg.PublicURL = publicURL
 	if err := loadIdentityEnv(&cfg); err != nil {
+		return Config{}, err
+	}
+	if err := loadSMTPEnv(&cfg); err != nil {
 		return Config{}, err
 	}
 
