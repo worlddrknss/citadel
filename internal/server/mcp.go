@@ -352,9 +352,16 @@ func (s *Server) mcpInitialize(ctx context.Context, w http.ResponseWriter, r *ht
 	}})
 }
 
-// serverVersion is the module version of the running build ("dev" for
-// local builds).
+// buildVersion is the release version, set at build time with
+// -ldflags "-X github.com/worlddrknss/citadel/internal/server.buildVersion=2.5.1".
+var buildVersion string
+
+// serverVersion is the release version of the running build: buildVersion
+// when the build set it, else the module version, else "dev".
 func serverVersion() string {
+	if v := strings.TrimPrefix(strings.TrimSpace(buildVersion), "v"); v != "" {
+		return v
+	}
 	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
 		return bi.Main.Version
 	}
