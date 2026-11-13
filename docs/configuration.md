@@ -67,7 +67,8 @@ their session token), or the static pair below.
 Rate limits have no settings. Each replica keeps token buckets in memory
 (per client IP for sign-in, first-run setup, SSO and the workload token
 endpoint; also per username for sign-in and per client ID for workload
-tokens), with a lockout after repeated failed sign-ins.
+tokens; per client IP and per user for MFA codes), with a lockout after
+repeated failed sign-ins and after repeated wrong MFA codes.
 
 With PostgreSQL the same endpoints are also limited **deployment-wide**, so
 adding replicas doesn't multiply the limits:
@@ -76,6 +77,8 @@ adding replicas doesn't multiply the limits:
 |---|---|---|
 | Sign-in | client IP | 40 per minute |
 | Sign-in | username (any case) | 20 per minute |
+| MFA code (sign-in, enrolment, re-authentication) | client IP | 40 per minute |
+| MFA code | username (any case) | 15 per 5 minutes |
 | First-run setup | client IP | 10 per 5 minutes |
 | SSO sign-in start | client IP | 90 per minute |
 | Workload token | client IP | 90 per minute |
