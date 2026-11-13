@@ -11,6 +11,7 @@
   import { session } from '#lib/stores/session.svelte.ts';
   import { toast } from '#lib/stores/toast.svelte.ts';
   import { confirm } from '#lib/stores/confirm.svelte.ts';
+  import { mfaApi } from '#lib/mfa.ts';
   import { param, setParams } from '#lib/url.ts';
   import UserModal from './UserModal.svelte';
   import MembershipModal from './MembershipModal.svelte';
@@ -101,6 +102,25 @@
       toast.error(e, 'Could not delete the user');
     }
   }
+
+  async function resetMfa(u: UserRow) {
+    const ok = await confirm({
+      title: `Reset two-step verification for ${u.username}?`,
+      message: `Their authenticator app and recovery codes stop working and they are signed out everywhere. They sign in with their password next time${requireMfaHint}.`,
+      confirmLabel: 'Reset MFA',
+      danger: true,
+      typeToConfirm: u.username
+    });
+    if (!ok) return;
+    try {
+      await mfaApi.adminReset(u.username);
+      toast.success(`Reset two-step verification for ${u.username}`);
+      await load();
+    } catch (e) {
+      toast.error(e, 'Could not reset two-step verification');
+    }
+  }
+  const requireMfaHint = ' (and set it up again if your organization requires it)';
 
   // ---- accounts ------------------------------------------------------------
   let accountOpen = $state(false);
@@ -314,7 +334,7 @@
             <span><span class="strong">{u.displayName || u.username}</span>{#if u.username === me?.username}<span class="subtle small"> (you)</span>{/if}<span class="mono subtle sub">{u.username}</span></span>
           </span>
         </td>
-        <td><Badge tone={roleTone(u.role)} dot={false}>{u.role}</Badge>{#if u.platformAdmin}<Badge tone="info" dot={false}>Platform admin</Badge>{/if}</td>
+        <td><Badge tone={roleTone(u.role)} dot={false}>{u.role}</Badge>{#if u.platformAdmin}<Badge tone="info" dot={false}>Platform admin</Badge>{/if}{#if u.mfaEnabled}<Badge tone="success" dot={false}><Icon name="shield-check" size={12} />MFA</Badge>{/if}</td>
         <td class="hide-sm">
           <span class="chips">
             {#each (u.accounts ?? []).slice(0, 3) as a (a)}<span class="badge">{accountName(a)}</span>{/each}
@@ -326,6 +346,9 @@
           {#if canManageUser(u)}
             <span class="cell-actions">
               <button type="button" class="btn-icon" aria-label="Edit {u.username}" title="Edit" onclick={() => { editingUser = u; userOpen = true; }}><Icon name="edit" size={14} /></button>
+              {#if u.mfaEnabled && u.username !== me?.username}
+                <button type="button" class="btn-icon" aria-label="Reset two-step verification for {u.username}" title="Reset MFA" onclick={() => resetMfa(u)}><Icon name="shield" size={14} /></button>
+              {/if}
               <button type="button" class="btn-icon danger" aria-label="Delete {u.username}" title={u.username === me?.username ? "You can't delete yourself" : 'Delete'} disabled={u.username === me?.username} onclick={() => deleteUser(u)}><Icon name="trash" size={14} /></button>
             </span>
           {/if}

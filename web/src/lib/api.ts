@@ -62,7 +62,7 @@ export async function req<T>(path: string, init?: RequestInit & { signal?: Abort
     }
     // A bare 404 means this server build doesn't have the endpoint yet.
     if (res.status === 404 && code === 'error') message = 'This feature is not available on this server yet.';
-    if (res.status === 401 && path !== '/v1/login') {
+    if (res.status === 401 && path !== '/v1/login' && path !== '/v1/login/mfa') {
       for (const fn of unauthorizedListeners) fn();
     }
     throw new ApiError(res.status, code, message);
@@ -105,6 +105,11 @@ export interface Me {
    * An account admin is `role: 'admin'` without this.
    */
   platformAdmin?: boolean;
+  /**
+   * Restricted session: the organization requires MFA and this user must
+   * enrol before anything else works.
+   */
+  mfaEnrollmentRequired?: boolean;
 }
 
 export interface Project {
@@ -292,6 +297,8 @@ export interface AdminUser {
   accounts: string[];
   /** Organization-wide admin; only platform admins can change such users. */
   platformAdmin?: boolean;
+  /** Whether the user has TOTP multi-factor authentication on. */
+  mfaEnabled?: boolean;
 }
 
 export interface Account {
@@ -361,7 +368,7 @@ const qs = (params: Record<string, string>) =>
 export const api = {
   me: () => req<Me>('/v1/me'),
   login: (accountId: string, username: string, password: string) =>
-    req<Me & { authOff?: boolean }>('/v1/login', {
+    req<(Me & { authOff?: boolean; mfaRequired?: false }) | { mfaRequired: true; mfaToken: string }>('/v1/login', {
       method: 'POST',
       body: JSON.stringify({ accountId, username, password })
     }),

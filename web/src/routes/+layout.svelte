@@ -13,6 +13,7 @@
   import Toaster from '#lib/components/Toaster.svelte';
   import ConfirmHost from '#lib/components/ConfirmHost.svelte';
   import LoginScreen from '#lib/components/LoginScreen.svelte';
+  import MfaRequiredScreen from '#lib/components/MfaRequiredScreen.svelte';
   import CommandPalette from './CommandPalette.svelte';
   import Menu from './Menu.svelte';
   import { density } from './prefs.svelte';
@@ -127,7 +128,7 @@
   }
 
   async function poll(force = false) {
-    if (session.status !== 'signed-in') return;
+    if (session.status !== 'signed-in' || session.me?.mfaEnrollmentRequired) return;
     if (!force && Date.now() - lastPoll < 30_000) return;
     lastPoll = Date.now();
     const [cr, certs] = await Promise.allSettled([api.changeRequests(), api.certificates()]);
@@ -142,7 +143,7 @@
 
   let shellFor = '';
   $effect(() => {
-    const key = session.status === 'signed-in' ? `${me?.username}@${me?.accountId}` : '';
+    const key = session.status === 'signed-in' && !me?.mfaEnrollmentRequired ? `${me?.username}@${me?.accountId}` : '';
     if (key && key !== shellFor) {
       shellFor = key;
       void loadShell();
@@ -261,6 +262,8 @@
   </main>
 {:else if session.status === 'signed-out'}
   <LoginScreen />
+{:else if session.me?.mfaEnrollmentRequired}
+  <MfaRequiredScreen />
 {:else}
   <a class="skip" href="#main">Skip to content</a>
   <div class="shell">

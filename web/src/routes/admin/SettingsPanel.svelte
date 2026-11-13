@@ -1,4 +1,4 @@
-<!-- Organization settings: change approval policy and console session
+<!-- Organization settings: change approval policy, two-step verification policy and console session
      lifetimes. SSO lives in its own card below (SsoPanel). -->
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -48,7 +48,8 @@
       approvalEnvironments: [...s.approvalEnvironments].sort(),
       approvalMinApprovers: s.approvalMinApprovers,
       sessionIdleMinutes: s.sessionIdleMinutes,
-      sessionMaxHours: s.sessionMaxHours
+      sessionMaxHours: s.sessionMaxHours,
+      requireMFA: !!s.requireMFA
     };
   }
 
@@ -76,6 +77,14 @@
         message: `Changes in ${removed.join(', ')} will apply immediately, without a second person reviewing them.`,
         confirmLabel: 'Remove approval',
         danger: true
+      });
+      if (!ok) return;
+    }
+    if (form.requireMFA && !saved?.requireMFA) {
+      const ok = await confirm({
+        title: 'Require two-step verification?',
+        message: 'Everyone who signs in with a password must set up an authenticator app before they can use the console. Single sign-on and access keys are not affected.',
+        confirmLabel: 'Require it'
       });
       if (!ok) return;
     }
@@ -155,6 +164,20 @@
               {#if maxError}<span class="field-error">{maxError}</span>{:else}<span class="field-hint">Sign in again after this long, active or not.</span>{/if}
             </div>
           </div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="gtext">
+          <h3>Two-step verification</h3>
+          <p class="muted small">Applies to password sign-ins. Single sign-on relies on your identity provider; access keys are not affected.</p>
+        </div>
+        <div class="gbody">
+          <label class="check">
+            <input type="checkbox" bind:checked={form.requireMFA} />
+            <span>Require an authenticator app for password sign-in</span>
+          </label>
+          <p class="subtle small">People without one are taken straight to set-up when they next sign in, and can't turn it off while this is on.</p>
         </div>
       </div>
 

@@ -16,6 +16,8 @@ export interface OrgSettings {
   approvalMinApprovers: number;
   sessionIdleMinutes: number;
   sessionMaxHours: number;
+  /** Password sign-ins must use MFA; users without it are made to enrol. */
+  requireMFA: boolean;
   updatedAt?: string;
   updatedBy?: string;
 }

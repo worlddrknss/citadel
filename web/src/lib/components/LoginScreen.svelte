@@ -15,6 +15,9 @@
                                         printed in the server log; 401
                                         invalid_bootstrap_token when wrong)
     GET  /v1/server/info             → { fips, sessionIdleMinutes?, ... }
+    POST /v1/login                   → Me, or { mfaRequired, mfaToken } when the
+                                        user has MFA (no cookie yet)
+    POST /v1/login/mfa               { mfaToken, code | recoveryCode } → Me
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -24,6 +27,7 @@
   import Logo from './Logo.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
   import CopyButton from './CopyButton.svelte';
+  import { mfaApi, cleanOtp, isOtp } from '../mfa.ts';
 
   interface Provider {
     id: string;
@@ -60,6 +64,12 @@
   let forgotOpen = $state(false);
   let error = $state('');
   let busy = $state(false);
+
+  // Second factor
+  let mfaToken = $state('');
+  let otp = $state('');
+  let useRecovery = $state(false);
+  let recoveryCode = $state('');
 
   // First run
   let step = $state<1 | 2>(1);
@@ -122,15 +132,54 @@
     error = '';
     busy = true;
     try {
-      await api.login(accountId.trim(), username.trim(), password);
+      const res = await api.login(accountId.trim(), username.trim(), password);
       password = '';
       remember(accountId.trim());
+      if (res.mfaRequired) {
+        mfaToken = res.mfaToken;
+        otp = '';
+        recoveryCode = '';
+        useRecovery = false;
+        return;
+      }
       await session.refresh();
     } catch (err) {
       error = errorMessage(err, 'Sign in failed');
     } finally {
       busy = false;
     }
+  }
+
+  async function submitMfa(e: SubmitEvent) {
+    e.preventDefault();
+    error = '';
+    if (!useRecovery && !isOtp(otp)) {
+      error = 'Enter the 6-digit code from your authenticator app.';
+      return;
+    }
+    if (useRecovery && !recoveryCode.trim()) {
+      error = 'Enter one of your recovery codes.';
+      return;
+    }
+    busy = true;
+    try {
+      await mfaApi.loginMfa(mfaToken, useRecovery ? { recoveryCode: recoveryCode.trim() } : { code: cleanOtp(otp) });
+      mfaToken = '';
+      await session.refresh();
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'mfa_token_invalid') {
+        mfaToken = '';
+      }
+      error = errorMessage(err, 'Verification failed');
+      otp = '';
+    } finally {
+      busy = false;
+    }
+  }
+
+  function backToPassword() {
+    mfaToken = '';
+    error = '';
   }
 
   // Rough strength: length dominates, variety helps.
@@ -304,6 +353,41 @@
               <button type="button" class="btn btn-primary btn-tall" onclick={finish}>Continue to console<Icon name="chevron-right" size={14} /></button>
             </div>
           {/if}
+        </section>
+      {:else if mfaToken}
+        <section class="card card-flush panel" aria-labelledby="mfa-title">
+          <div class="head">
+            <span class="label">Two-step verification</span>
+            <h2 id="mfa-title">{useRecovery ? 'Use a recovery code' : 'Enter your code'}</h2>
+            <p class="muted">
+              {useRecovery ? 'Each recovery code works once.' : 'Open your authenticator app and enter the 6-digit code for Citadel.'}
+            </p>
+          </div>
+          {#if error}
+            <div class="callout callout-danger" role="alert"><Icon name="alert-circle" /><span>{error}</span></div>
+          {/if}
+          <form class="form" onsubmit={submitMfa} novalidate>
+            {#if useRecovery}
+              <label class="field">
+                <span class="field-label">Recovery code</span>
+                <!-- svelte-ignore a11y_autofocus -->
+                <input class="input mono" bind:value={recoveryCode} autocomplete="off" spellcheck="false" placeholder="xxxx-xxxx-xxxx" autofocus required />
+              </label>
+            {:else}
+              <label class="field">
+                <span class="field-label">Authentication code</span>
+                <!-- svelte-ignore a11y_autofocus -->
+                <input class="input mono otp" bind:value={otp} inputmode="numeric" autocomplete="one-time-code" maxlength="7" pattern="[0-9 ]*" autofocus required />
+              </label>
+            {/if}
+            <button type="submit" class="btn btn-primary btn-tall" disabled={busy}>{busy ? 'Verifying…' : 'Verify'}</button>
+          </form>
+          <div class="mfa-links">
+            <button type="button" class="linkish" onclick={() => { useRecovery = !useRecovery; error = ''; }}>
+              {useRecovery ? 'Use your authenticator app' : 'Use a recovery code'}
+            </button>
+            <button type="button" class="linkish" onclick={backToPassword}>Back to sign in</button>
+          </div>
         </section>
       {:else}
         <section class="card card-flush panel" aria-labelledby="si-title">
@@ -587,6 +671,16 @@
   .pw .btn {
     position: absolute;
     right: 4px;
+  }
+  .otp {
+    letter-spacing: 0.3em;
+    font-size: 18px;
+    text-align: center;
+  }
+  .mfa-links {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
   }
   .center {
     margin: 0;
