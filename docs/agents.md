@@ -69,6 +69,10 @@ identity, grants, and the kill switch. Connecting MCP clients is in
 
 ## Set up an agent
 
+For a walkthrough with examples (a GitHub token, basic auth, a website
+login, a GitHub App) and a troubleshooting table, see
+[Getting started with AI agents](getting-started-agents.md).
+
 1. **Make a secret usable by agents.** Open the secret, go to its
    **Agent access** tab and choose **Make usable by agents**: give the
    credential a name, its kind and where it may be sent. Editors can do this.

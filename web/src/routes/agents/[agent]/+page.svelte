@@ -20,6 +20,7 @@
   import { agentMenu } from '../actions';
   import GrantModal from './GrantModal.svelte';
   import Anomalies from './Anomalies.svelte';
+  import { DOC_LINKS } from '#lib/docs-links.ts';
   import AccessDecisionModal from '../AccessDecisionModal.svelte';
   import {
     ACCESS_STATUS,
@@ -513,7 +514,7 @@
         <span>
           There are no agent credentials to grant yet. A credential is a secret with an agent usage profile: open a secret in
           <a href="{base}/secrets">Secrets</a>, go to its <strong>Agent access</strong> tab and add a profile (how it is sent and to which hosts).
-          It then appears here.
+          It then appears here. <a href="{base}{DOC_LINKS.usageProfiles}">Show me how</a>
         </span>
       </div>
     {/if}
@@ -542,7 +543,9 @@
         </td>
       {/snippet}
       {#snippet empty()}
-        <EmptyState icon="lock" title="No grants" description="The agent can't use any credential yet. Grant one; prefer use over reveal so the agent never holds the secret." />
+        <EmptyState icon="lock" title="No grants" description="The agent can't use any credential yet. Grant one; prefer use over reveal so the agent never holds the secret.">
+          <a class="btn btn-ghost btn-sm" href="{base}{DOC_LINKS.grants}"><Icon name="book" size={14} />Learn about grants</a>
+        </EmptyState>
       {/snippet}
     </DataTable>
   {:else if tab === 'requests'}

@@ -15,6 +15,7 @@
   import { relTime, fullTime } from '../time';
   import { agentMenu } from './actions';
   import AddLoginModal from './AddLoginModal.svelte';
+  import { DOC_LINKS } from '#lib/docs-links.ts';
   import { agentsApi, AGENT_NAME_RE, STATUS_LABEL, STATUS_TONE, type Agent, type AgentSettings } from './api';
 
   let agents = $state<Agent[]>([]);
@@ -88,6 +89,7 @@
   description="AI agents use credentials without holding them: Citadel injects secrets into the requests they make, within the hosts, times and limits you grant. Every use is audited."
 >
   {#snippet actions()}
+    <a class="btn btn-ghost" href="{base}{DOC_LINKS.agentsGuide}"><Icon name="book" size={16} />Learn more</a>
     {#if canCreate}
       <button type="button" class="btn btn-secondary" onclick={() => (addLoginOpen = true)}><Icon name="key" size={16} />Add login</button>
       <button type="button" class="btn btn-primary" onclick={openCreate}><Icon name="plus" size={16} />New agent</button>

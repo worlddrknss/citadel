@@ -12,6 +12,7 @@
   import { toast } from '#lib/stores/toast.svelte.ts';
   import CredentialModal from '../../../agents/CredentialModal.svelte';
   import LoginFields from './LoginFields.svelte';
+  import { DOC_LINKS } from '#lib/docs-links.ts';
   import { agentsApi, KIND_LABELS, type AgentCredential } from '../../../agents/api';
 
   let {
@@ -92,6 +93,7 @@
   <div class="wrap">
     <p class="muted small intro">
       A usage profile lets <a href="{base}/agents">agents</a> use this secret without holding it: Citadel injects it into requests to the hosts listed, and agents only ever see the profile's name.
+      <a href="{base}{DOC_LINKS.usageProfiles}">Learn more about usage profiles</a>
     </p>
     {#each creds as c (c.name)}
       <article class="cred" aria-label="Usage profile {c.name}">

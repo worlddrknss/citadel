@@ -45,6 +45,8 @@ export default defineConfig({
     svelteTesting()
   ],
   server: {
+    // The in-console docs bundle the repository's docs/*.md (routes/docs).
+    fs: { allow: ['.', '../docs'] },
     // During development the SPA runs on Vite (:5173) and proxies API calls to
     // the Go server (:8080) so we keep a single-origin model in production.
     proxy: {

@@ -13,6 +13,8 @@ test('grants tab explains how to add a credential when there are none', async ({
     await expect(hint).toContainText('no agent credentials to grant yet');
     await expect(hint.getByRole('link', { name: 'Secrets' })).toHaveAttribute('href', /\/secrets$/);
     await expect(page.getByRole('button', { name: 'Grant credential' })).toBeDisabled();
+    await hint.getByRole('link', { name: 'Show me how' }).click();
+    await expect(page).toHaveURL(/\/docs\/getting-started-agents#step-3-make-a-secret-usable-by-agents$/);
   } finally {
     fixtures.agentCredentials.push(...saved);
   }

@@ -21,10 +21,10 @@
   import { isNotImplemented } from './http';
   import { envTone } from './approvals/api';
   import { daysUntil } from './time';
+  import { NAV_DOCS } from './docs/nav';
 
   let { children } = $props();
 
-  const DOCS = 'https://github.com/worlddrknss/citadel/tree/main/docs';
   const SECURITY = 'https://github.com/worlddrknss/citadel/blob/main/SECURITY.md';
 
   interface NavItem {
@@ -62,11 +62,13 @@
         { href: '/audit', label: 'Audit log', icon: 'list' },
         { href: '/approvals', label: 'Approvals', icon: 'git-pull-request' }
       ]
-    }
+    },
+    { label: 'Help', items: [{ href: '/docs', label: 'Docs', icon: 'book' }] }
   ];
 
   const path = $derived(page.url.pathname.slice(base.length) || '/');
   const tab = $derived(page.url.searchParams.get('tab') ?? '');
+  const publicDocs = $derived(path === '/docs' || path.startsWith('/docs/'));
   function isActive(item: NavItem) {
     const onPath = item.href === '/' ? path === '/' : path === item.href || path.startsWith(item.href + '/');
     return onPath && (!item.tab || tab === item.tab);
@@ -82,6 +84,7 @@
     ...groups.flatMap((g) => g.items.map((i) => ({ href: i.tab ? `${i.href}?tab=${i.tab}` : i.href, label: i.label, icon: i.icon, group: g.label || undefined }))),
     { href: '/account', label: 'My account', icon: 'user' as IconName, group: 'Settings' },
     { href: '/api-reference', label: 'API reference', icon: 'code' as IconName, group: 'Help' },
+    ...NAV_DOCS.map((d) => ({ href: `/docs/${d.slug}`, label: d.label, icon: 'book' as IconName, group: 'Docs' })),
     ...(session.can('admin') ? [{ href: '/admin', label: 'Administration', icon: 'building' as IconName, group: 'Settings' }] : [])
   ]);
 
@@ -250,6 +253,20 @@
   <div class="boot" aria-busy="true" aria-label="Loading Citadel">
     <Logo compact />
   </div>
+{:else if publicDocs && (session.status === 'signed-out' || session.status === 'unreachable')}
+  <!-- The docs are part of the public console bundle and show nothing
+       account-specific, so they are readable without signing in. -->
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="pubshell">
+    <header class="topbar pubbar">
+      <a href="{base}/docs" class="brand" aria-label="Citadel docs home"><Logo /></a>
+      <span class="pubtag">Docs</span>
+      <a class="btn btn-secondary btn-sm pubsignin" href="{base}/">Sign in</a>
+    </header>
+    <main id="main" class="content" tabindex="-1">
+      {@render children()}
+    </main>
+  </div>
 {:else if session.status === 'unreachable'}
   <main class="boot">
     <div class="boot-msg">
@@ -352,7 +369,7 @@
           <Menu label="Help and docs" triggerClass="btn btn-ghost btn-icon tool" align="end" width={240}>
             {#snippet trigger()}<Icon name="info" />{/snippet}
             {#snippet children(close)}
-              <a role="menuitem" href={DOCS} target="_blank" rel="noopener noreferrer" onclick={close}><Icon name="file" />Documentation<Icon name="external-link" size={12} /></a>
+              <a role="menuitem" href="{base}/docs" onclick={close}><Icon name="book" />Documentation</a>
               <a role="menuitem" href="{base}/api-reference" onclick={close}><Icon name="code" />API reference</a>
               <button type="button" role="menuitem" onclick={() => { close(); shortcutsOpen = true; }}><Icon name="command" />Keyboard shortcuts</button>
               <a role="menuitem" href={SECURITY} target="_blank" rel="noopener noreferrer" onclick={close}><Icon name="shield" />Report a security issue<Icon name="external-link" size={12} /></a>
@@ -492,6 +509,24 @@
   }
   .skip:focus {
     left: var(--space-2);
+  }
+
+  .pubshell {
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+  .pubbar .brand {
+    padding: 0;
+  }
+  .pubtag {
+    padding-left: 12px;
+    border-left: 1px solid var(--border);
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+  .pubsignin {
+    margin-left: auto;
   }
 
   .shell {
