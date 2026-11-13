@@ -895,4 +895,3 @@ func leFailure(op string, err error) error {
 	log.Printf("pki: %s: %v", op, err)
 	return &pkiError{status: http.StatusBadGateway, code: "letsencrypt_failed", awsType: "InternalFailure", msg: op + " failed; see the server log for details"}
 }
-
