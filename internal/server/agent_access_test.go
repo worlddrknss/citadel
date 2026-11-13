@@ -335,7 +335,9 @@ func TestAgentRequestAccessEndpoint(t *testing.T) {
 	}
 }
 
-func itoa3(i int) string { return string([]byte{'0' + byte(i/100%10), '0' + byte(i/10%10), '0' + byte(i%10)}) }
+func itoa3(i int) string {
+	return string([]byte{'0' + byte(i/100%10), '0' + byte(i/10%10), '0' + byte(i%10)})
+}
 
 func TestAgentLeaseTTLGrant(t *testing.T) {
 	e := newAuthEnv(t)
