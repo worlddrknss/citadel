@@ -53,7 +53,8 @@ export const PAGES = [
   { path: '/account', heading: 'My account' },
   { path: '/audit', heading: 'Audit log' },
   { path: '/approvals', heading: 'Approvals' },
-  { path: '/admin', heading: 'Administration' }
+  { path: '/admin', heading: 'Administration' },
+  { path: '/api-reference', heading: 'API reference' }
 ] as const;
 
 /** Opens a console page and waits for its first heading. */

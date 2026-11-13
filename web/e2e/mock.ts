@@ -488,8 +488,174 @@ const WRITE: Record<string, Handler> = {
   'DELETE /v1/workload-identity/clients': () => ({ deleted: true })
 };
 
+/** A small OpenAPI document in the docs/openapi.yaml subset, for /api-reference. */
+export const openapiYaml = `openapi: 3.1.0
+info:
+  title: Citadel native API
+  version: 2.1.0
+security:
+  - sessionCookie: []
+  - bearerAccessKey: []
+tags:
+  - name: Secrets
+    description: Items in project, environment and folder paths.
+  - name: KMS
+  - name: Server
+paths:
+  /v1/secrets:
+    get:
+      operationId: listSecrets
+      tags: [Secrets]
+      summary: List the items in a folder
+      description: |
+        Values are never included; use getSecretValue.
+      x-citadel-role: viewer
+      parameters:
+        - name: project
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: env
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The folder listing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecretListing"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: putSecret
+      tags: [Secrets]
+      summary: Create or update an item
+      x-citadel-role: editor
+      x-citadel-audit: citadel.PutItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutSecretRequest"
+      responses:
+        "200":
+          description: Saved
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/kms/encrypt:
+    post:
+      operationId: kmsEncrypt
+      tags: [KMS]
+      summary: Encrypt with a KMS key
+      x-citadel-role: editor
+      x-citadel-audit: citadel.KMSEncrypt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [keyId, plaintext]
+              properties:
+                keyId:
+                  type: string
+                plaintext:
+                  type: string
+                  format: byte
+      responses:
+        "200":
+          description: The ciphertext
+  /v1/openapi.yaml:
+    get:
+      operationId: getOpenAPISpec
+      tags: [Server]
+      summary: This document
+      x-citadel-role: public
+      security: []
+      responses:
+        "200":
+          description: The OpenAPI document
+          content:
+            application/yaml:
+              schema:
+                type: string
+components:
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: Stable machine-readable code
+        message:
+          type: string
+    Tag:
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          type: string
+    SecretItem:
+      type: object
+      required: [key, updatedAt]
+      properties:
+        key:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
+        tags:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tag"
+    SecretListing:
+      type: object
+      properties:
+        folders:
+          type: array
+          items:
+            type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SecretItem"
+    PutSecretRequest:
+      type: object
+      required: [project, env, key]
+      properties:
+        project:
+          type: string
+        env:
+          type: string
+        key:
+          type: string
+        value:
+          type: string
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Approval required
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+`;
+
 /** Non-JSON GET responses (downloads). */
 const RAW: Record<string, (q: URLSearchParams) => { contentType: string; body: string }> = {
+  '/v1/openapi.yaml': () => ({ contentType: 'application/yaml', body: openapiYaml }),
   '/v1/audit/export': (q) =>
     q.get('format') === 'json'
       ? { contentType: 'application/json', body: JSON.stringify(auditRows) }
@@ -500,7 +666,7 @@ const RAW: Record<string, (q: URLSearchParams) => { contentType: string; body: s
 };
 
 /** Endpoints that answer without a session. */
-const PUBLIC = new Set(['/v1/server/info', '/v1/auth/providers', '/v1/bootstrap', '/v1/login']);
+const PUBLIC = new Set(['/v1/openapi.yaml', '/v1/server/info', '/v1/auth/providers', '/v1/bootstrap', '/v1/login']);
 
 export interface MockOptions {
   /** Start with a valid session cookie (default true). */
