@@ -125,6 +125,7 @@ func New(ctx context.Context, cfg config.Config, st store.Store, webFS fs.FS) (*
 	s.jobs.Every("sts-session-purge", 15*time.Minute, s.purgeExpiredSTSSessions)
 	s.jobs.Every("secrets-purge", secretsPurgeInterval, s.purgeExpiredSecretsJob)
 	s.jobs.Every("rate-limit-purge", 5*time.Minute, s.purgeSharedLimitsJob)
+	s.jobs.Every("audit-outcome-retry", auditOutcomeRetryInterval, s.flushAuditOutcomes)
 	s.startAuditStreamJob()
 	return s, nil
 }
@@ -133,8 +134,18 @@ func New(ctx context.Context, cfg config.Config, st store.Store, webFS fs.FS) (*
 func (s *Server) Start(ctx context.Context) { s.jobs.Start(ctx) }
 
 // Wait blocks until the background jobs have stopped after the Start
-// context was cancelled.
-func (s *Server) Wait() { s.jobs.Wait() }
+// context was cancelled, then makes a last attempt to write queued audit
+// outcome events.
+func (s *Server) Wait() {
+	s.jobs.Wait()
+	if n := s.auditOutcomeBacklog(); n > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.flushAuditOutcomes(ctx); err != nil {
+			log.Printf("AUDIT OUTCOMES LOST AT SHUTDOWN: %d event(s) could not be written; their write-ahead attempts are recorded", s.auditOutcomeBacklog())
+		}
+	}
+}
 
 // bootstrapURL is the console URL logged in bootstrap mode.
 func bootstrapURL(cfg config.Config) string {

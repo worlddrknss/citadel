@@ -270,6 +270,16 @@ func (s *Server) handleKMS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	target := r.Header.Get("X-Amz-Target")
+	// Write-ahead audit: a state-changing action is recorded as attempted
+	// before it runs, or refused (audit_writeahead.go).
+	if awsWriteAhead(target) {
+		origin := s.auditOrigin(r)
+		origin.Resource = resourceFromBody(r)
+		if err := s.beginAuditAttempt(r.Context(), store.AuditEvent{Action: target, AuditOrigin: origin}); err != nil {
+			writeAWSJSONError(w, http.StatusInternalServerError, "InternalFailure", "the audit log could not be written; nothing was changed")
+			return
+		}
+	}
 	if s.servePKITarget(w, r, target) {
 		return
 	}

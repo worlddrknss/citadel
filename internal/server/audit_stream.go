@@ -36,6 +36,9 @@ type auditRuntime struct {
 	jobStop chan struct{}
 	jobDone chan struct{}
 
+	// outcomes holds write-ahead outcome events awaiting retry.
+	outcomes auditOutcomeQueue
+
 	// client overrides the webhook HTTP client (tests).
 	client *http.Client
 }

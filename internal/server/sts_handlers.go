@@ -141,6 +141,11 @@ func (s *Server) handleSTSAssumeRole(w http.ResponseWriter, r *http.Request, bod
 		return
 	}
 
+	actx := store.WithCallerAccount(r.Context(), role.AccountID)
+	if err := s.beginAuditAttempt(actx, store.AuditEvent{Action: "sts.AssumeRole", AuditOrigin: s.stsAuditOrigin(r, store.AuditActorAccessKey, callerARN, role.RoleARN, "")}); err != nil {
+		writeSTSError(w, http.StatusInternalServerError, "InternalFailure", "the audit log could not be written")
+		return
+	}
 	duration := clampDuration(r.PostForm.Get("DurationSeconds"), role.MaxSessionSecs)
 	creds, assumedARN, assumedUserID, err := s.mintTempCredentials(ctx, role, sessionName, "", duration)
 	if err != nil {
@@ -148,7 +153,7 @@ func (s *Server) handleSTSAssumeRole(w http.ResponseWriter, r *http.Request, bod
 		writeSTSError(w, http.StatusInternalServerError, "InternalFailure", "failed to issue credentials")
 		return
 	}
-	s.recordAudit(store.WithCallerAccount(r.Context(), role.AccountID), store.AuditEvent{Action: "sts.AssumeRole", Result: "ok", AuditOrigin: s.stsAuditOrigin(r, store.AuditActorAccessKey, callerARN, assumedARN, creds.AccessKeyID)})
+	s.recordAudit(actx, store.AuditEvent{Action: "sts.AssumeRole", Result: "ok", AuditOrigin: s.stsAuditOrigin(r, store.AuditActorAccessKey, callerARN, assumedARN, creds.AccessKeyID)})
 
 	resp := stsAssumeRoleResponse{}
 	resp.XMLNS = stsXMLNamespace
@@ -206,6 +211,11 @@ func (s *Server) handleSTSAssumeRoleWithWebIdentity(w http.ResponseWriter, r *ht
 		return
 	}
 
+	actx := store.WithCallerAccount(r.Context(), role.AccountID)
+	if err := s.beginAuditAttempt(actx, store.AuditEvent{Action: "sts.AssumeRoleWithWebIdentity", AuditOrigin: s.stsAuditOrigin(r, store.AuditActorWebIdentity, claims.Issuer+"#"+claims.Subject, role.RoleARN, "")}); err != nil {
+		writeSTSError(w, http.StatusInternalServerError, "InternalFailure", "the audit log could not be written")
+		return
+	}
 	duration := clampDuration(r.PostForm.Get("DurationSeconds"), role.MaxSessionSecs)
 	creds, assumedARN, assumedUserID, err := s.mintTempCredentials(ctx, role, sessionName, claims.Subject, duration)
 	if err != nil {
@@ -213,7 +223,7 @@ func (s *Server) handleSTSAssumeRoleWithWebIdentity(w http.ResponseWriter, r *ht
 		writeSTSError(w, http.StatusInternalServerError, "InternalFailure", "failed to issue credentials")
 		return
 	}
-	s.recordAudit(store.WithCallerAccount(r.Context(), role.AccountID), store.AuditEvent{Action: "sts.AssumeRoleWithWebIdentity", Result: "ok", AuditOrigin: s.stsAuditOrigin(r, store.AuditActorWebIdentity, claims.Issuer+"#"+claims.Subject, assumedARN, creds.AccessKeyID)})
+	s.recordAudit(actx, store.AuditEvent{Action: "sts.AssumeRoleWithWebIdentity", Result: "ok", AuditOrigin: s.stsAuditOrigin(r, store.AuditActorWebIdentity, claims.Issuer+"#"+claims.Subject, assumedARN, creds.AccessKeyID)})
 
 	resp := stsAssumeRoleWithWebIdentityResponse{}
 	resp.XMLNS = stsXMLNamespace

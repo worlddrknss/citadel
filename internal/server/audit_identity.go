@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"path"
 	"strings"
 	"sync"
@@ -41,6 +42,8 @@ type auditRequestInfo struct {
 	mu        sync.Mutex
 	principal *auditPrincipal
 	failed    bool
+	// attempt is the request's write-ahead attempt (audit_writeahead.go).
+	attempt *auditAttempt
 }
 
 type auditInfoCtxKey struct{}
@@ -89,7 +92,16 @@ func (s *Server) nativeSession(w http.ResponseWriter, r *http.Request, minRole s
 	if ctx == nil {
 		ctx = r.Context()
 	}
-	return sess, context.WithValue(ctx, auditPrincipalCtxKey{}, p), true
+	ctx = context.WithValue(ctx, auditPrincipalCtxKey{}, p)
+	if nativeWriteAhead(r) {
+		origin := s.auditOrigin(r)
+		origin.Resource = requestResource(r)
+		if err := s.beginAuditAttempt(ctx, store.AuditEvent{Action: nativeAttemptAction(r), AuditOrigin: origin}); err != nil {
+			writeNativeError(w, http.StatusInternalServerError, "audit_unavailable", "the audit log could not be written; nothing was changed")
+			return nil, nil, false
+		}
+	}
+	return sess, ctx, true
 }
 
 // principalForSession describes a native session. Bearer-token sessions carry
@@ -169,7 +181,14 @@ func resourceFromQuery(r *http.Request) string {
 	if r.URL == nil || r.URL.RawQuery == "" {
 		return ""
 	}
-	q := r.URL.Query()
+	return resourceFromValues(r.URL.Query(), queryResourceKeys)
+}
+
+var queryResourceKeys = []string{"providerArn", "arn", "keyId", "aliasName", "roleName", "username", "accessKeyId", "accountId", "name", "id"}
+
+// resourceFromValues names a resource from request parameters: the secrets
+// hierarchy path when a project is given, else the first of keys present.
+func resourceFromValues(q url.Values, keys []string) string {
 	if project := strings.TrimSpace(q.Get("project")); project != "" {
 		parts := []string{project}
 		for _, k := range []string{"env", "path", "key", "name"} {
@@ -179,7 +198,7 @@ func resourceFromQuery(r *http.Request) string {
 		}
 		return path.Clean(strings.Join(parts, "/"))
 	}
-	for _, k := range []string{"providerArn", "arn", "keyId", "aliasName", "roleName", "username", "accessKeyId", "accountId", "name", "id"} {
+	for _, k := range keys {
 		if v := strings.TrimSpace(q.Get(k)); v != "" {
 			return v
 		}
@@ -260,25 +279,49 @@ func auditFailClosed(action string) bool {
 	return true
 }
 
-// recordAudit appends event to the audit log. When the write fails it logs
-// loudly and, for fail-closed actions, flags the request so withAuditContext
-// replaces the response with a 500 (when it has not been sent yet).
+// recordAudit appends event to the audit log. Under a write-ahead attempt
+// (audit_writeahead.go) the event is the attempt's outcome: it carries the
+// attempt's correlation ID, and a failed write is queued for retry rather
+// than failing the request, because the attempt already records the change.
+// Without an attempt, a failed write logs loudly and, for fail-closed
+// actions, flags the request so withAuditContext replaces the response with
+// a 500 (when it has not been sent yet).
 func (s *Server) recordAudit(ctx context.Context, event store.AuditEvent) {
-	if err := s.writeAudit(ctx, event); err != nil {
-		closed := auditFailClosed(event.Action) && store.NormalizeAuditResult(event.Result, event.ErrorType) == store.AuditResultSuccess
-		// Nothing request-scoped is logged here; the request log line for the
-		// same request (status 500 when fail-closed) carries the request ID.
-		log.Printf("AUDIT WRITE FAILED action=%s result=%s fail_closed=%t: %v", event.Action, event.Result, closed, err)
-		if closed {
-			if info := auditInfoFrom(ctx); info != nil {
-				info.markFailed()
-			}
+	var correlation string
+	if info := auditInfoFrom(ctx); info != nil {
+		correlation = info.linkOutcome()
+	}
+	if correlation != "" && event.CorrelationID == "" {
+		event.CorrelationID = correlation
+	}
+	event = s.completeAudit(ctx, event)
+	err := s.store.RecordAudit(ctx, event)
+	if err == nil {
+		return
+	}
+	if correlation != "" {
+		s.queueAuditOutcome(event, err)
+		return
+	}
+	closed := auditFailClosed(event.Action) && store.NormalizeAuditResult(event.Result, event.ErrorType) == store.AuditResultSuccess
+	// Nothing request-scoped is logged here; the request log line for the
+	// same request (status 500 when fail-closed) carries the request ID.
+	log.Printf("AUDIT WRITE FAILED action=%s result=%s fail_closed=%t: %v", event.Action, event.Result, closed, err)
+	if closed {
+		if info := auditInfoFrom(ctx); info != nil {
+			info.markFailed()
 		}
 	}
 }
 
 // writeAudit completes event from ctx and appends it.
 func (s *Server) writeAudit(ctx context.Context, event store.AuditEvent) error {
+	return s.store.RecordAudit(ctx, s.completeAudit(ctx, event))
+}
+
+// completeAudit fills in what the handler's event could not know: the
+// principal, the account and the resource.
+func (s *Server) completeAudit(ctx context.Context, event store.AuditEvent) store.AuditEvent {
 	if event.Actor == "" {
 		if p, ok := ctx.Value(auditPrincipalCtxKey{}).(*auditPrincipal); ok {
 			p.apply(&event.AuditOrigin)
@@ -304,17 +347,23 @@ func (s *Server) writeAudit(ctx context.Context, event store.AuditEvent) error {
 	if event.Resource == "" {
 		event.Resource = event.KeyID
 	}
-	return s.store.RecordAudit(ctx, event)
+	return event
 }
 
 // withAuditContext installs the per-request audit state and enforces
 // fail-closed: if a fail-closed audit write failed before the handler started
-// its response, the response is replaced with a 500.
+// its response, the response is replaced with a 500. When the request wrote
+// a write-ahead attempt but no outcome, it records one from the status.
 func (s *Server) withAuditContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		info := &auditRequestInfo{}
 		aw := &auditFailWriter{ResponseWriter: w, info: info, native: strings.HasPrefix(r.URL.Path, "/v1/")}
-		next.ServeHTTP(aw, r.WithContext(context.WithValue(r.Context(), auditInfoCtxKey{}, info)))
+		ctx := context.WithValue(r.Context(), auditInfoCtxKey{}, info)
+		next.ServeHTTP(aw, r.WithContext(ctx))
+		if a, ok := info.attemptState(); ok && a.outcomes == 0 {
+			result, errType := outcomeForStatus(aw.status)
+			s.finishAudit(ctx, result, errType)
+		}
 	})
 }
 
@@ -324,6 +373,7 @@ type auditFailWriter struct {
 	native      bool
 	wroteHeader bool
 	suppressed  bool
+	status      int
 }
 
 func (w *auditFailWriter) WriteHeader(code int) {
@@ -331,8 +381,10 @@ func (w *auditFailWriter) WriteHeader(code int) {
 		return
 	}
 	w.wroteHeader = true
+	w.status = code
 	if w.info.hasFailed() {
 		w.suppressed = true
+		w.status = http.StatusInternalServerError
 		h := w.ResponseWriter.Header()
 		for k := range h {
 			delete(h, k)

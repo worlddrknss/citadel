@@ -16,10 +16,13 @@ type AuditQuery struct {
 	Actor    string
 	Action   string
 	Resource string
-	// Result is "", success, denied or error.
+	// Result is "", success, denied, error or pending.
 	Result string
-	Limit  int
-	Offset int
+	// Correlation, when set, matches events with exactly this CorrelationID
+	// (a write-ahead attempt and its outcomes).
+	Correlation string
+	Limit       int
+	Offset      int
 	// BeforeID, when > 0, returns only events with a smaller ID (keyset
 	// paging for exports). Offset is applied after it.
 	BeforeID int64
