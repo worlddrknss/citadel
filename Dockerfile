@@ -12,6 +12,8 @@ WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY web/ ./
+# The console's /docs pages are built from the repository's docs/*.md.
+COPY docs/ /docs/
 RUN npm run build
 
 # Cross-compile on the build machine's own architecture (no emulation).
