@@ -232,6 +232,8 @@ export interface CertificateDetail {
   signatureAlgorithm?: string;
   sans?: string[];
   isCA: boolean;
+  /** A CA's pathLenConstraint; absent when unlimited or not a CA. */
+  pathLen?: number;
   caType?: string;
   template?: string;
   kmsKeyId?: string;

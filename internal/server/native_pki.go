@@ -114,6 +114,12 @@ type nativeCertificate struct {
 	IssuerCAID   string `json:"issuerCaId,omitempty"`
 	Template     string `json:"template,omitempty"`
 	RevokedAt    string `json:"revokedAt,omitempty"`
+	// IsCA marks certificate authorities (pca-ca rows).
+	IsCA bool `json:"isCA,omitempty"`
+	// PathLen is a CA's basic-constraints pathLenConstraint: how many CAs
+	// may follow it in a chain (0: it may only issue end-entity
+	// certificates). Absent on a CA without a limit.
+	PathLen *int `json:"pathLen,omitempty"`
 	// ExpiringSoon: still valid but expires within 30 days.
 	ExpiringSoon bool `json:"expiringSoon"`
 }
@@ -166,8 +172,10 @@ func (s *Server) handleV1ListCertificates(w http.ResponseWriter, r *http.Request
 			Status: displayStatus(ca.State, ca.NotAfter, now), NotBefore: fmtTime(ca.NotBefore), NotAfter: fmtTime(ca.NotAfter),
 			CAType: ca.Type, ParentCAID: ca.ParentCAID, ExpiringSoon: expiringSoon(ca.State, ca.NotAfter, now),
 		}
+		row.IsCA = true
 		if cert, err := parseCertificateB64(ca.CACertB64); err == nil {
 			row.Serial = cert.SerialNumber.String()
+			row.PathLen = caPathLength(cert)
 		}
 		out = append(out, row)
 		certs, err := s.store.ListCertificates(ctx, ca.CAID)

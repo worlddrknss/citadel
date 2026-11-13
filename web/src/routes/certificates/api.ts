@@ -16,6 +16,10 @@ export interface CertRow extends Certificate {
   keyAlgorithm?: string;
   parentCaId?: string;
   revokedAt?: string;
+  /** Set on certificate authorities. */
+  isCA?: boolean;
+  /** A CA's pathLenConstraint; absent when unlimited. */
+  pathLen?: number;
 }
 
 export type KeyAlgorithm = 'EC_prime256v1' | 'EC_secp384r1' | 'RSA_2048' | 'RSA_3072' | 'RSA_4096';

@@ -29,6 +29,14 @@ test('root CA, subordinate CA, issue with a generated key, revoke', async ({ pag
   drawer = page.getByRole('dialog').filter({ hasText: 'Live Issuing CA' });
   await expect(drawer.getByRole('button', { name: 'Issue from this CA' })).toBeVisible();
   await expect(drawer.getByRole('button', { name: 'New subordinate' })).toHaveCount(0);
+  // The path length constraint shows in the drawer and the CA tree.
+  await expect(drawer.getByTestId('ca-pathlen')).toHaveText(/^0 — issues end-entity certificates only/);
+  const tree = page.getByRole('region', { name: 'CA hierarchy' });
+  await expect(tree.getByRole('button', { name: /Live Issuing CA/ })).toContainText('pathLen: 0');
+  await expect(tree.getByRole('button', { name: /Live Root CA/ })).toContainText('pathLen: unlimited');
+  const { certificates } = await (await page.request.get('/v1/certificates')).json();
+  const issuing = certificates.find((c: { subject: string }) => c.subject.includes('Live Issuing CA'));
+  expect(issuing).toMatchObject({ isCA: true, pathLen: 0 });
   await checkA11y(page);
   await drawer.getByRole('button', { name: 'Issue from this CA' }).click();
 

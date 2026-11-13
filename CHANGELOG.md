@@ -11,6 +11,11 @@ All notable changes to Citadel are documented here. The format follows
 - Images are published for `linux/arm64` as well as `linux/amd64`, built by
   cross-compiling (both are FIPS builds).
 
+- Certificate authorities in `GET /v1/certificates` and
+  `GET /v1/certificates/detail` carry `isCA` and `pathLen` (the
+  basic-constraints path length; absent when unlimited). The CA tree shows it
+  for each CA and the CA drawer explains it.
+
 ### Fixed
 
 - Parameter names follow AWS's rules when a parameter is created or

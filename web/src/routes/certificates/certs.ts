@@ -90,6 +90,23 @@ export function keyAlgLabel(k?: string): string {
   return map[k] ?? k;
 }
 
+/**
+ * A CA's basic-constraints path length for display. pathLen is how many CAs
+ * may follow it in a chain; the server omits it when there is no limit.
+ */
+export function pathLenLabel(c: { isCA?: boolean; pathLen?: number }): string {
+  if (!c.isCA) return '';
+  if (c.pathLen === undefined || c.pathLen === null) return 'pathLen: unlimited';
+  return `pathLen: ${c.pathLen}`;
+}
+
+/** Longer wording for the details panel. */
+export function pathLenDescription(pathLen?: number): string {
+  if (pathLen === undefined || pathLen === null) return 'Unlimited — subordinate CAs may be created below it';
+  if (pathLen === 0) return '0 — issues end-entity certificates only, no subordinate CAs';
+  return `${pathLen} — up to ${pathLen} more CA level${pathLen === 1 ? '' : 's'} below it`;
+}
+
 export function rowKey(c: { source: string; id: string }): string {
   return `${c.source}:${c.id}`;
 }

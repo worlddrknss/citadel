@@ -4,7 +4,7 @@
   import Icon from '#lib/components/Icon.svelte';
   import Badge from '#lib/components/Badge.svelte';
   import type { CertRow } from './api';
-  import { cnOf, keyAlgLabel, yearOf, titleCase, rowKey } from './certs';
+  import { cnOf, keyAlgLabel, yearOf, titleCase, rowKey, pathLenLabel } from './certs';
 
   let {
     cas,
@@ -69,6 +69,8 @@
     const parts = [ca.caType === 'SUBORDINATE' ? 'Subordinate' : 'Root'];
     const k = keyAlgLabel(ca.keyAlgorithm);
     if (k) parts.push(k);
+    // Older servers don't send isCA; every row in this tree is a CA.
+    parts.push(pathLenLabel({ isCA: true, pathLen: ca.pathLen }));
     const y = yearOf(ca.notAfter);
     if (y) parts.push(`valid to ${y}`);
     return parts.join(' · ');

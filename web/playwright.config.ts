@@ -3,7 +3,7 @@ import { defineConfig, devices } from '@playwright/test';
 // Smoke tests against the built SPA served by `vite preview`. The Go server
 // is not needed: every /v1 call is answered by route interception in
 // e2e/mock.ts.
-const PORT = 4173;
+const PORT = Number(process.env.CITADEL_E2E_PORT ?? 4173);
 
 export default defineConfig({
   testDir: 'e2e',
