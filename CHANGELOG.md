@@ -6,6 +6,12 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-13
+
+Credentials for AI agents: agents use secrets through Citadel without holding
+them (brokered HTTP, MCP). This release also ships the notification channels
+and the provider token library that 2.3 and 2.4 build on.
+
 ### Added
 
 - AI agents (2.2, foundation): agents as principals in an account, with an
