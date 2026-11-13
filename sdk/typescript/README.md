@@ -211,6 +211,38 @@ const detail = await citadel.request<Detail>({
 });
 ```
 
+## MCP stdio bridge for AI agents
+
+Citadel (2.2+) serves the Model Context Protocol at `/mcp`, authenticated with an agent token (`cagt_...`). For MCP clients that only start local stdio servers, the package includes a bridge (Node.js 20+):
+
+```sh
+CITADEL_URL=https://citadel.example.com CITADEL_AGENT_TOKEN=cagt_... npx -y @worlddrknss/citadel mcp
+```
+
+It reads JSON-RPC messages from stdin, one per line, forwards each to `<CITADEL_URL>/mcp` over Streamable HTTP (carrying the `Mcp-Session-Id` from `initialize`, and handling both JSON and server-sent event replies), and writes the replies to stdout, one per line. Transport and HTTP failures become JSON-RPC errors for the request that caused them. Only protocol messages go to stdout; diagnostics go to stderr, and the token is never printed. When stdin closes, it ends the session with `DELETE /mcp`.
+
+| Setting | Meaning |
+| --- | --- |
+| `--url <url>` / `CITADEL_URL` | Citadel's base URL. Must be `https` (plain `http` only for localhost). |
+| `--token-env <name>` | Variable holding the token (default `CITADEL_AGENT_TOKEN`). Tokens are never accepted on the command line. |
+| `CITADEL_CA_FILE` | Extra CA (PEM) to trust, for a private CA. Applied through `NODE_EXTRA_CA_CERTS`; TLS verification stays on. |
+
+Example for Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "citadel": {
+      "command": "npx",
+      "args": ["-y", "@worlddrknss/citadel", "mcp"],
+      "env": { "CITADEL_URL": "https://citadel.example.com", "CITADEL_AGENT_TOKEN": "cagt_..." }
+    }
+  }
+}
+```
+
+Clients that support Streamable HTTP with custom headers (Claude Code, Cursor, VS Code) can connect to `/mcp` directly, without the bridge. See [docs/agents-mcp.md](https://github.com/worlddrknss/citadel/blob/main/docs/agents-mcp.md) for copy-paste configuration for each client.
+
 ## Errors, retries and timeouts
 
 Every failure throws a `CitadelError`:

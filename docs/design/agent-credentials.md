@@ -111,7 +111,7 @@ agent token (Bearer). Tools:
 The TypeScript SDK ships a stdio bridge (`npx @worlddrknss/citadel mcp`) for
 MCP clients that only speak stdio; it forwards to `/mcp` with the token from
 `CITADEL_AGENT_TOKEN`. Docs give copy-paste config for Claude Code, Claude
-Desktop, Cursor and VS Code.
+Desktop, Cursor and VS Code (`docs/agents-mcp.md`).
 
 ## Just-in-time access and approvals (2.3)
 

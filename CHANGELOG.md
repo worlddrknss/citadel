@@ -6,6 +6,20 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- TypeScript SDK: an MCP stdio bridge, `npx @worlddrknss/citadel mcp`, for
+  MCP clients that only start local servers (such as Claude Desktop). It
+  forwards newline-delimited JSON-RPC from stdin to Citadel's `/mcp` endpoint
+  over Streamable HTTP with the agent token from `CITADEL_AGENT_TOKEN`
+  (`--url`, `--token-env`), handles JSON and server-sent event replies and the
+  `Mcp-Session-Id` session, turns transport errors into JSON-RPC errors, and
+  ends the session on exit. `CITADEL_CA_FILE` trusts a private CA without
+  turning off TLS verification. No new dependencies; Node.js 20+.
+- docs/agents-mcp.md: copy-paste MCP configuration for Claude Code, Claude
+  Desktop, Cursor and VS Code, connecting directly over HTTP where the client
+  supports it, or through the bridge.
+
 ## [2.1.2]
 
 ### Fixed
