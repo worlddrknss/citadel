@@ -6,6 +6,11 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-13
+
+Just-in-time access for AI agents: human approvals, short-lived leases and
+federation-only agents.
+
 ### Added
 
 - Agent approvals and leases (2.3): grants with `requiresApproval` refuse
