@@ -31,7 +31,7 @@ test('overview, command palette and notifications with real data', async ({ page
   await expect(palette).toBeVisible();
   const search = palette.getByRole('combobox');
   await search.fill('audit');
-  await expect(palette.getByRole('option', { name: /Audit log/ })).toBeVisible();
+  await expect(palette.getByRole('option', { name: /^Audit log Governance/ })).toBeVisible();
   await search.fill('overview-demo');
   await expect(palette.getByRole('option', { name: /overview-demo \/ dev/ })).toBeVisible();
   await checkA11y(page);
