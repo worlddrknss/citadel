@@ -6,10 +6,14 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.3]
+
 ### Added
 
 - Images are published for `linux/arm64` as well as `linux/amd64`, built by
   cross-compiling (both are FIPS builds).
+- Console dependencies on SvelteKit 3, Vite 8 and vitest 4 (TypeScript stays
+  on 6 until SvelteKit supports 7).
 - Certificate authorities in `GET /v1/certificates` and
   `GET /v1/certificates/detail` carry `isCA` and `pathLen` (the
   basic-constraints path length; absent when unlimited). The CA tree shows it
