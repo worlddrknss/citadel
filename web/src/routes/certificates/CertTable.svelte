@@ -5,7 +5,7 @@
   import Badge from '#lib/components/Badge.svelte';
   import EmptyState from '#lib/components/EmptyState.svelte';
   import Seg from './Seg.svelte';
-  import RowMenu, { type MenuItem } from './RowMenu.svelte';
+  import ActionMenu, { type MenuItem } from '#lib/components/ActionMenu.svelte';
   import type { CertRow } from './api';
   import { certStatus, daysLeft, lifetimeDays, isRevoked, isExpiring, canRenewOrRevoke, sourceLabel, fmtDate, rowKey, type Filter, type SortKey } from './certs';
 
@@ -192,7 +192,7 @@
                     </div>
                   {/if}
                 </td>
-                <td class="act"><RowMenu label="More actions for {nameOf(c)}" items={menu(c)} /></td>
+                <td class="act"><ActionMenu label="More actions for {nameOf(c)}" items={menu(c)} /></td>
               </tr>
             {:else}
               <tr>

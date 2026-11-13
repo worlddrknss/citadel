@@ -12,7 +12,7 @@
   import Modal from '#lib/components/Modal.svelte';
   import Icon from '#lib/components/Icon.svelte';
   import CopyButton from '#lib/components/CopyButton.svelte';
-  import ActionMenu, { type MenuItem } from './ActionMenu.svelte';
+  import ActionMenu, { type MenuItem } from '#lib/components/ActionMenu.svelte';
   import StatusBadge from './StatusBadge.svelte';
   import KeyPanel from './KeyPanel.svelte';
   import DeletionDialog from './DeletionDialog.svelte';

@@ -1,8 +1,9 @@
 <!--
   Menu button: a trigger with aria-haspopup="menu" and a popup of menu items.
   Arrow keys move, Home/End jump, Esc closes and returns focus to the trigger.
-  The popup is position: fixed so a table's scroll box can't clip it.
-  Page-local for now; a candidate for #lib/components (Parameters uses it too).
+  The popup is position: fixed so a table's scroll box or a card can't clip
+  it; it opens upward when there isn't room below, and follows the trigger
+  when any ancestor scrolls.
 -->
 <script lang="ts" module>
   import type { IconName } from '#lib/components/Icon.svelte';
@@ -41,19 +42,34 @@
   let open = $state(false);
   let trigger = $state<HTMLButtonElement>();
   let menu = $state<HTMLDivElement>();
-  let pos = $state({ top: 0, left: 0, right: 0 });
+  let pos = $state<{ top?: number; bottom?: number; left: number; right: number }>({ top: 0, left: 0, right: 0 });
   const id = `menu-${Math.random().toString(36).slice(2, 9)}`;
 
   function place() {
     if (!trigger) return;
     const r = trigger.getBoundingClientRect();
-    pos = { top: r.bottom + 4, left: r.left, right: window.innerWidth - r.right };
+    // Estimated height until the menu has rendered; measured after.
+    const height = menu?.offsetHeight ?? 16 + items.length * 34;
+    const below = window.innerHeight - r.bottom;
+    const up = below < height + 8 && r.top > below;
+    pos = up
+      ? { bottom: window.innerHeight - r.top + 4, left: r.left, right: window.innerWidth - r.right }
+      : { top: r.bottom + 4, left: r.left, right: window.innerWidth - r.right };
   }
+
+  // Follow the trigger when the page or any scroll box around it scrolls.
+  $effect(() => {
+    if (!open) return;
+    const onScroll = () => place();
+    document.addEventListener('scroll', onScroll, true);
+    return () => document.removeEventListener('scroll', onScroll, true);
+  });
 
   async function show(focus: 'first' | 'last' = 'first') {
     place();
     open = true;
     await tick();
+    place(); // now with the measured height
     const els = itemEls();
     (focus === 'first' ? els[0] : els[els.length - 1])?.focus();
   }
@@ -113,7 +129,7 @@
   }
 </script>
 
-<svelte:window onpointerdown={onWindowPointer} onresize={() => open && hide(false)} onscroll={() => open && place()} />
+<svelte:window onpointerdown={onWindowPointer} onresize={() => open && hide(false)} />
 
 <button
   bind:this={trigger}
@@ -138,7 +154,8 @@
     class="menu"
     role="menu"
     aria-label={label}
-    style:top="{pos.top}px"
+    style:top={pos.top !== undefined ? `${pos.top}px` : undefined}
+    style:bottom={pos.bottom !== undefined ? `${pos.bottom}px` : undefined}
     style:left={align === 'start' ? `${pos.left}px` : undefined}
     style:right={align === 'end' ? `${pos.right}px` : undefined}
     onkeydown={onMenuKey}

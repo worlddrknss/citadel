@@ -12,7 +12,7 @@
   import Badge from '#lib/components/Badge.svelte';
   import Icon from '#lib/components/Icon.svelte';
   import SecretValue from '#lib/components/SecretValue.svelte';
-  import ActionMenu, { type MenuItem } from '../kms/ActionMenu.svelte';
+  import ActionMenu, { type MenuItem } from '#lib/components/ActionMenu.svelte';
   import InlineValue from './InlineValue.svelte';
   import ParamPanel from './ParamPanel.svelte';
   import ParamForm from './ParamForm.svelte';
