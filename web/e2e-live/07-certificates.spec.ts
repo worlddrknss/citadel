@@ -141,3 +141,52 @@ test('viewer sees the ACME policy read-only', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Save policy' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Create key' })).toHaveCount(0);
 });
+
+test('full chain in the detail; delete a revoked certificate; disable, delete and restore a CA', async ({ page }) => {
+  await signIn(page, ORG.admin);
+  const { certificates } = await (await page.request.get('/v1/certificates')).json();
+  type Row = { source: string; id: string; subject: string; commonName?: string };
+  const revoked = (certificates as Row[]).find((c) => c.source === 'pca-cert' && c.commonName === 'orders.live.example.com');
+  expect(revoked).toBeTruthy();
+
+  // The detail carries the chain from the leaf to the root.
+  const detail = await (await page.request.get(`/v1/certificates/detail?${new URLSearchParams({ source: 'pca-cert', id: revoked!.id })}`)).json();
+  expect(detail.chain.map((c: { role: string }) => c.role)).toEqual(['leaf', 'intermediate', 'root']);
+  expect(detail.chain[1].subject).toContain('Live Issuing CA');
+  expect(detail.chain[2].subject).toContain('Live Root CA');
+  await open(page, `/certificates?cert=pca-cert:${revoked!.id}&view=chain`);
+  await expect(page.getByTestId('chain-cert')).toHaveCount(3);
+
+  // A revoked certificate is deleted without typing its name.
+  await open(page, '/certificates?filter=revoked');
+  const row = page.locator('section.certs').getByRole('row', { name: /orders\.live\.example\.com/ });
+  await row.getByRole('button', { name: 'More actions for orders.live.example.com' }).click();
+  await page.getByRole('menuitem', { name: 'Delete' }).click();
+  const confirm = page.getByRole('dialog', { name: 'Delete certificate?' });
+  await expect(confirm.getByRole('textbox')).toHaveCount(0);
+  await confirm.getByRole('button', { name: 'Delete' }).click();
+  await expect(page.getByText('Certificate deleted')).toBeVisible();
+  await expect(row).toHaveCount(0);
+
+  // A CA: disable, delete with a 7-day window, restore.
+  await open(page, '/certificates');
+  await page.getByRole('button', { name: 'New CA' }).or(page.getByRole('button', { name: 'Create root CA' })).first().click();
+  let dlg = page.getByRole('dialog', { name: 'New certificate authority' });
+  await dlg.getByLabel('Common name').fill('Live Disposable CA');
+  await dlg.getByRole('button', { name: /Create/ }).click();
+  await expect(dlg).toBeHidden();
+  const drawer = page.getByRole('dialog').filter({ hasText: 'Live Disposable CA' });
+  await expect(drawer.getByTestId('ca-lifecycle')).toContainText('Disable the CA before deleting it.');
+  await drawer.getByRole('button', { name: 'Disable' }).click();
+  await expect(drawer.getByTestId('ca-lifecycle')).toContainText('It can be deleted');
+  await drawer.getByRole('button', { name: 'Delete' }).click();
+  dlg = page.getByRole('dialog', { name: 'Delete this certificate authority?' });
+  await dlg.getByLabel('Restore window (days)').fill('7');
+  await dlg.getByLabel(/to confirm/).fill('Live Disposable CA');
+  await dlg.getByRole('button', { name: 'Delete CA' }).click();
+  await expect(dlg).toBeHidden();
+  await expect(drawer.getByTestId('ca-lifecycle')).toContainText(/It can be restored until .* \(7 days left\)/);
+  await drawer.getByRole('button', { name: 'Restore' }).click();
+  await expect(drawer.getByTestId('ca-lifecycle')).toContainText('It can be deleted');
+  await expect(drawer.getByRole('button', { name: 'Enable' })).toBeVisible();
+});
