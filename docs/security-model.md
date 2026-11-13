@@ -153,11 +153,17 @@ rests on the 1.x deployment. Events from 2.0 on are fully verified.
 ## Outbound requests
 
 Citadel makes outbound requests for OIDC discovery and keys, ACME HTTP-01
-validation, Let's Encrypt, SIEM streaming and Kubernetes TokenReview. ACME
+validation, Let's Encrypt, SIEM streaming, Kubernetes TokenReview and secret
+rotation (PostgreSQL servers and rotation webhooks). ACME
 HTTP-01 validation refuses loopback, link-local, multicast and cloud metadata
 addresses, checked after DNS resolution and on redirects, unless an account
 explicitly allows a range. SIEM delivery refuses loopback, link-local and
-multicast addresses and doesn't follow redirects.
+multicast addresses and doesn't follow redirects. Rotation webhooks (https
+only, HMAC-signed with a timestamp) and the PostgreSQL rotator refuse
+loopback, link-local, multicast and cloud metadata addresses, checked on the
+resolved address at dial time; webhooks don't follow redirects. Webhook
+signing secrets are sealed at rest with a key derived from the deployment
+root secret. See [rotation.md](rotation.md).
 
 ## What you are responsible for
 
@@ -181,5 +187,6 @@ multicast addresses and doesn't follow redirects.
   request can reach a replica that doesn't have the response; use manual
   DNS-01, or route `/.well-known/acme-challenge/` to one replica while
   issuing.
-- Rotation for Secrets Manager secrets records the schedule but runs no
-  rotation function; Citadel shows when rotation is due.
+- Secrets Manager rotation runs only Citadel's built-in rotators (random,
+  PostgreSQL, webhook); a schedule naming a Lambda function is recorded but
+  runs nothing, and Citadel shows when it is due.

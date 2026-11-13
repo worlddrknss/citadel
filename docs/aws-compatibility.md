@@ -82,7 +82,7 @@ returns `InvalidAction`)
 | Action | Status | Notes |
 |---|---|---|
 | CreateSecret | 🟡 | Supports `SecretString`/`SecretBinary`, `KmsKeyId`, `Description`, `ClientRequestToken` and `Tags` (up to 50). `AddReplicaRegions` is rejected. A name that shadows a folder projection is rejected. |
-| DescribeSecret | ✅ | Includes `Tags`, `VersionIdsToStages` and rotation fields. |
+| DescribeSecret | ✅ | Includes `Tags`, `VersionIdsToStages` and rotation fields (`RotationRules`, `NextRotationDate`, `LastRotatedDate`). |
 | GetSecretValue | ✅ | By name or ARN, with `VersionId` or `VersionStage`. Folder JSON projection is a Citadel extension. |
 | BatchGetSecretValue | ✅ | `SecretIdList` (up to 20) or `Filters` with `MaxResults`/`NextToken`. Errors for individual secrets go in `Errors`. |
 | PutSecretValue / UpdateSecret | ✅ | `VersionStages` on PutSecretValue isn't honoured: new versions become `AWSCURRENT`. |
@@ -93,7 +93,7 @@ returns `InvalidAction`)
 | TagResource / UntagResource | ✅ | |
 | GetResourcePolicy / PutResourcePolicy / ValidateResourcePolicy | 🟡 | Policies are evaluated by Citadel's IAM subset. `BlockPublicPolicy` is ignored. |
 | DeleteResourcePolicy | ❌ | |
-| RotateSecret / CancelRotateSecret | 🟡 | `RotationRules.AutomaticallyAfterDays` sets the schedule. `ScheduleExpression` is rejected. No Lambda is invoked: rotating immediately creates an `AWSPENDING` copy of the current value. |
+| RotateSecret / CancelRotateSecret | 🟡 | `RotationRules` `AutomaticallyAfterDays`, `ScheduleExpression` (`rate()` and `cron()`) and `Duration`, with AWS's window semantics. Lambda functions can't run: a `RotationLambdaARN` of the form `arn:citadel:rotator:<region>:<account>:<type>[/<config-id>]` selects a built-in rotator (`random`, `postgresql`, `webhook`) that runs the four rotation steps with `AWSPENDING`/`AWSCURRENT`/`AWSPREVIOUS`, in the background, with `VersionId` as its token; a real Lambda ARN is recorded but nothing runs (schedule only). An unfinished rotation returns `InvalidRequestException` and is reattempted. Built-in rotators are refused (`AccessDeniedException`) in environments that require approval. `CancelRotateSecret` keeps an unfinished `AWSPENDING` version, as AWS does. See [rotation.md](rotation.md). |
 | GetRandomPassword | ✅ | Uses `crypto/rand` with AWS character classes and defaults (32 characters, `RequireEachIncludedType`). |
 | Replication (ReplicateSecretToRegions etc.), StopReplicationToReplica | ❌ | |
 

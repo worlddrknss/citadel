@@ -8,6 +8,25 @@ All notable changes to Citadel are documented here. The format follows
 
 ### Added
 
+- **Built-in secret rotation.** Rotation schedules now rotate: Citadel runs
+  AWS's four rotation steps (createSecret, setSecret, testSecret,
+  finishSecret, with `AWSPENDING`/`AWSCURRENT`/`AWSPREVIOUS`) with built-in
+  rotators: `random` (a new password, or one field of a JSON secret),
+  `postgresql` (a database user's password, single-user or alternating-users
+  as in AWS's templates, over TLS by default) and `webhook` (each step POSTed
+  to an https endpoint, HMAC-SHA256 signed with a timestamp, with SSRF
+  protections). `RotateSecret` selects one with
+  `RotationLambdaARN = arn:citadel:rotator:<region>:<account>:<type>[/<config-id>]`
+  and now accepts `ScheduleExpression` (`rate()`, `cron()`) and `Duration`.
+  A job on every replica runs due rotations under a lease, retries failures
+  with backoff while keeping `AWSPENDING`, records history and audits every
+  step. New native routes: `GET /v1/secrets/rotation`,
+  `POST /v1/secrets/rotation/rotate` and
+  `POST /v1/secrets/rotation/signing-secret`; `POST /v1/secrets/rotation`
+  configures rotators. The secret drawer has a **Rotation** tab, and the
+  secrets table flags due and failed rotations. See
+  [docs/rotation.md](docs/rotation.md). Migration 1200 adds two new tables.
+
 - An OpenAPI 3.1 description of the native `/v1` API,
   [`docs/openapi.yaml`](docs/openapi.yaml), covering all 151 operations with
   their parameters, request and response schemas, the `{error, message}` error
@@ -72,6 +91,12 @@ All notable changes to Citadel are documented here. The format follows
   override is possible; the plugin uses it only to merge Svelte config at
   build time.
 ||||||| parent of 78292cb (docs: two-step verification (TOTP), requireMFA, MFA rate limits; changelog)
+
+### Changed
+
+- `RotateSecret` with a Lambda ARN (or none) and `RotateImmediately` no longer
+  creates an `AWSPENDING` copy of the current value, and `CancelRotateSecret`
+  no longer removes `AWSPENDING` (both now match AWS).
 
 ## [2.0.3]
 
