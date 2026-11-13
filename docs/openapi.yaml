@@ -6723,6 +6723,338 @@ paths:
             $ref: "#/components/responses/Conflict"
           "500":
             $ref: "#/components/responses/InternalError"
+    /v1/agents/access-requests:
+      get:
+        operationId: listAgentAccessRequests
+        tags: [Agents]
+        summary: List agents' access requests (the Approvals inbox)
+        description: |
+          Newest first. `status=pending` keeps the requests still waiting for a
+          decision (not expired). Each row says whether the caller may decide it
+          (`canDecide`: a console session of the agent's owner or an account
+          admin, never an access key) and whether approving needs an MFA code.
+        x-citadel-role: viewer
+        parameters:
+          - name: agentId
+            in: query
+            required: false
+            schema:
+              type: string
+          - name: status
+            in: query
+            required: false
+            schema:
+              type: string
+              enum: [pending, all]
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentAccessRequestList"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/access-requests/approve:
+      post:
+        operationId: approveAgentAccess
+        tags: [Agents]
+        summary: Approve an agent's access request
+        description: |
+          Console sessions only (access keys are refused), by the agent's owner
+          (an editor) or an account admin. Creates a lease: `once` (one use),
+          `duration` (until it expires) or `task` (only for the request's task
+          ID). durationSeconds defaults to the requested duration or one hour and
+          may not exceed 24 hours, the grant's leaseTtlSeconds or its notAfter.
+          When the organization requires MFA, a password session must send a
+          current `mfaCode` (or a `recoveryCode`); the error is `mfa_required`
+          or `invalid_mfa_code`. Raises `agent.access_decided`.
+        x-citadel-role: editor
+        x-citadel-audit: citadel.ApproveAgentAccess
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentAccessDecisionRequest"
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentAccessApproval"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "429":
+            $ref: "#/components/responses/TooManyRequests"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/access-requests/deny:
+      post:
+        operationId: denyAgentAccess
+        tags: [Agents]
+        summary: Deny an agent's access request
+        description: |
+          Same callers as approving; `comment` (the reason, shown to the agent)
+          is required. Raises `agent.access_decided`.
+        x-citadel-role: editor
+        x-citadel-audit: citadel.DenyAgentAccess
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentAccessDecisionRequest"
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentAccessDenial"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/leases:
+      get:
+        operationId: listAgentLeases
+        tags: [Agents]
+        summary: List agents' leases
+        description: Active leases by default; `active=false` includes ended, used and expired ones.
+        x-citadel-role: viewer
+        parameters:
+          - name: agentId
+            in: query
+            required: false
+            schema:
+              type: string
+          - name: active
+            in: query
+            required: false
+            schema:
+              type: boolean
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentLeaseList"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/leases/revoke:
+      post:
+        operationId: revokeAgentLease
+        tags: [Agents]
+        summary: Revoke an active lease
+        x-citadel-role: editor
+        x-citadel-audit: citadel.RevokeAgentLease
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentLeaseRevokeRequest"
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentLease"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agent/access-requests:
+      post:
+        operationId: agentRequestAccess
+        tags: [Agent API]
+        summary: Ask a person for access to a credential
+        description: |
+          Opens an access request (201), or returns the pending one for the same
+          credential, actions and task ID (200). The task ID defaults to
+          X-Citadel-Task-Id. A request waits one hour for a decision. A request
+          for a credential that doesn't exist is accepted like any other (so an
+          agent can't discover names) and can only be denied. An agent has at
+          most 20 pending requests (429 too_many_requests).
+        x-citadel-role: agent
+        x-citadel-audit: citadel.AgentRequestAccess
+        security:
+          - agentToken: []
+        parameters:
+          - name: X-Citadel-Task-Id
+            in: header
+            required: false
+            description: The agent's task or session ID, recorded on audit events
+            schema:
+              type: string
+              maxLength: 128
+          - name: X-Citadel-Agent-Id
+            in: header
+            required: false
+            description: Names the agent when a federated identity is bound to more than one
+            schema:
+              type: string
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentAccessRequestInput"
+        responses:
+          "200":
+            description: The pending request for the same credential, actions and task
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentAccessRequest"
+          "201":
+            description: Request opened
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentAccessRequest"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "429":
+            $ref: "#/components/responses/TooManyRequests"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agent/access-requests/{id}:
+      get:
+        operationId: agentGetAccessRequest
+        tags: [Agent API]
+        summary: Poll one of the calling agent's access requests
+        x-citadel-role: agent
+        x-citadel-audit: citadel.AgentGetAccessRequest
+        security:
+          - agentToken: []
+        parameters:
+          - name: id
+            in: path
+            required: true
+            schema:
+              type: string
+          - name: X-Citadel-Task-Id
+            in: header
+            required: false
+            description: The agent's task or session ID, recorded on audit events
+            schema:
+              type: string
+              maxLength: 128
+          - name: X-Citadel-Agent-Id
+            in: header
+            required: false
+            description: Names the agent when a federated identity is bound to more than one
+            schema:
+              type: string
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentAccessRequest"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "429":
+            $ref: "#/components/responses/TooManyRequests"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agent/leases:
+      get:
+        operationId: agentListLeases
+        tags: [Agent API]
+        summary: List the calling agent's active leases
+        x-citadel-role: agent
+        x-citadel-audit: citadel.AgentListLeases
+        security:
+          - agentToken: []
+        parameters:
+          - name: credential
+            in: query
+            required: false
+            schema:
+              type: string
+          - name: X-Citadel-Task-Id
+            in: header
+            required: false
+            description: The agent's task or session ID, recorded on audit events
+            schema:
+              type: string
+              maxLength: 128
+          - name: X-Citadel-Agent-Id
+            in: header
+            required: false
+            description: Names the agent when a federated identity is bound to more than one
+            schema:
+              type: string
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentLeaseList"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "429":
+            $ref: "#/components/responses/TooManyRequests"
+          "500":
+            $ref: "#/components/responses/InternalError"
     /v1/agents/settings:
       get:
         operationId: getAgentSettings
@@ -10272,7 +10604,7 @@ components:
           description: The webhook's HTTP status, when one was received
     Agent:
       type: object
-      required: [agentId, name, description, owner, status, labels, createdAt, updatedAt, grantCount, activeTokenCount, bindingCount, canManage]
+      required: [agentId, name, description, owner, status, labels, createdAt, updatedAt, grantCount, activeTokenCount, bindingCount, requireFederation, canManage]
       properties:
         agentId:
           type: string
@@ -10313,6 +10645,9 @@ components:
           type: integer
         bindingCount:
           type: integer
+        requireFederation:
+          type: boolean
+          description: Agent tokens are refused (403 federation_required); the agent authenticates with workload identity federation only
         canManage:
           type: boolean
           description: Whether the caller may change the agent (account admin or owner)
@@ -10347,6 +10682,9 @@ components:
           type: object
           additionalProperties:
             type: string
+        requireFederation:
+          type: boolean
+          description: Refuse agent tokens (workload identity federation only); left unchanged on update when omitted
     AgentStatusRequest:
       type: object
       required: [agentId]
@@ -10496,12 +10834,12 @@ components:
         maxUsesPerHour:
           type: integer
         requiresApproval:
-          description: Reserved for 2.3
+          description: Every use needs a lease from an approved access request (null when not set)
           oneOf:
             - type: boolean
             - type: "null"
         leaseTtlSeconds:
-          description: Reserved for 2.3
+          description: Caps approvals; without requiresApproval, the first use opens a lease of this length (null when not set)
           oneOf:
             - type: integer
             - type: "null"
@@ -10545,6 +10883,12 @@ components:
           type: integer
           minimum: 0
           maximum: 100000
+        requiresApproval:
+          type: boolean
+          description: Uses need a lease from an approved access request (2.3)
+        leaseTtlSeconds:
+          type: integer
+          description: 0 (not set) or 60 to 86400. Caps approvals; without requiresApproval, the first use opens a lease of this length
     AgentDetail:
       type: object
       required: [agent, tokens, bindings, grants]
@@ -10743,7 +11087,7 @@ components:
           type: string
     AgentUsableCredential:
       type: object
-      required: [name, kind, description, allowedHosts, allowedMethods, allowedPathPrefixes, actions, maxUsesPerHour, usable]
+      required: [name, kind, description, allowedHosts, allowedMethods, allowedPathPrefixes, actions, maxUsesPerHour, requiresApproval, usable]
       properties:
         name:
           type: string
@@ -10772,6 +11116,9 @@ components:
         notAfter:
           type: string
           format: date-time
+        requiresApproval:
+          type: boolean
+          description: Uses need an approved access request (approval_required otherwise)
         usable:
           type: boolean
         reason:
@@ -10784,13 +11131,249 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AgentUsableCredential"
+    AgentLease:
+      type: object
+      required: [leaseId, agentId, credential, actions, scope, usesLeft, useCount, expiresAt, createdAt, createdBy, status]
+      properties:
+        leaseId:
+          type: string
+        agentId:
+          type: string
+        agentName:
+          type: string
+        credential:
+          type: string
+        actions:
+          type: array
+          items:
+            type: string
+            enum: [use, reveal, totp]
+        scope:
+          type: string
+          enum: [once, duration, task]
+        taskId:
+          type: string
+        usesLeft:
+          description: null for unlimited uses until expiry
+          oneOf:
+            - type: integer
+            - type: "null"
+        useCount:
+          type: integer
+        expiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+          description: The approver, or `policy` for a lease opened by a grant's leaseTtlSeconds
+        requestId:
+          type: string
+        status:
+          type: string
+          enum: [active, expired, used, ended]
+        lastUsedAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+        endedBy:
+          type: string
+        endedReason:
+          type: string
+        canRevoke:
+          type: boolean
+    AgentLeaseList:
+      type: object
+      required: [leases]
+      properties:
+        leases:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentLease"
+    AgentLeaseRevokeRequest:
+      type: object
+      required: [leaseId]
+      properties:
+        leaseId:
+          type: string
+        reason:
+          type: string
+          maxLength: 256
+    AgentAccessRequestInput:
+      type: object
+      required: [credential, reason]
+      properties:
+        credential:
+          type: string
+        actions:
+          type: array
+          description: Defaults to [use]
+          items:
+            type: string
+            enum: [use, reveal, totp]
+        reason:
+          type: string
+          maxLength: 512
+          description: Why the access is needed, shown to approvers
+        duration:
+          type: string
+          description: How long the access is wanted, as a duration such as 15m or 2h (1 minute to 24 hours)
+        durationSeconds:
+          type: integer
+          minimum: 60
+          maximum: 86400
+        taskId:
+          type: string
+          maxLength: 128
+          description: Defaults to X-Citadel-Task-Id; a task-scoped approval is bound to it
+    AgentAccessRequest:
+      type: object
+      required: [requestId, credential, actions, origin, status, createdAt, expiresAt]
+      properties:
+        requestId:
+          type: string
+        credential:
+          type: string
+        actions:
+          type: array
+          items:
+            type: string
+            enum: [use, reveal, totp]
+        reason:
+          type: string
+        taskId:
+          type: string
+        durationSeconds:
+          type: integer
+        origin:
+          type: string
+          enum: [policy, agent]
+          description: policy when a requiresApproval grant was used without a lease; agent when the agent asked
+        status:
+          type: string
+          enum: [pending, approved, denied, expired, cancelled]
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          description: When a pending request lapses
+        decidedAt:
+          type: string
+          format: date-time
+        decidedBy:
+          type: string
+        decisionComment:
+          type: string
+          description: The approver's comment, or the reason for a denial
+        scope:
+          type: string
+          enum: [once, duration, task]
+        lease:
+          $ref: "#/components/schemas/AgentLease"
+    AgentAccessGrantSummary:
+      type: object
+      required: [actions, requiresApproval]
+      properties:
+        actions:
+          type: array
+          items:
+            type: string
+        requiresApproval:
+          type: boolean
+        leaseTtlSeconds:
+          type: integer
+        notAfter:
+          type: string
+          format: date-time
+    AgentAccessRequestRow:
+      allOf:
+        - $ref: "#/components/schemas/AgentAccessRequest"
+        - type: object
+          required: [agentId, agentName, agentOwner, agentStatus, grant, maxDurationSeconds, canDecide]
+          properties:
+            agentId:
+              type: string
+            agentName:
+              type: string
+            agentOwner:
+              type: string
+            agentStatus:
+              type: string
+            leaseId:
+              type: string
+            credentialKind:
+              type: string
+              description: Empty when no credential has the requested name
+            grant:
+              description: The agent's grant for the credential; null when it has none
+              oneOf:
+                - $ref: "#/components/schemas/AgentAccessGrantSummary"
+                - type: "null"
+            maxDurationSeconds:
+              type: integer
+            canDecide:
+              type: boolean
+            cannotDecideReason:
+              type: string
+            mfaRequired:
+              type: boolean
+    AgentAccessRequestList:
+      type: object
+      required: [requests]
+      properties:
+        requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentAccessRequestRow"
+    AgentAccessDecisionRequest:
+      type: object
+      required: [requestId]
+      properties:
+        requestId:
+          type: string
+        scope:
+          type: string
+          enum: [once, duration, task]
+          description: Required to approve
+        durationSeconds:
+          type: integer
+          minimum: 60
+          maximum: 86400
+        comment:
+          type: string
+          maxLength: 512
+          description: The approver's note; required to deny (the reason)
+        mfaCode:
+          type: string
+        recoveryCode:
+          type: string
+    AgentAccessApproval:
+      type: object
+      required: [request, lease]
+      properties:
+        request:
+          $ref: "#/components/schemas/AgentAccessRequestRow"
+        lease:
+          $ref: "#/components/schemas/AgentLease"
+    AgentAccessDenial:
+      type: object
+      required: [request]
+      properties:
+        request:
+          $ref: "#/components/schemas/AgentAccessRequestRow"
     NotificationEventType:
       type: object
       required: [type, title, description, severity]
       properties:
         type:
           type: string
-          description: e.g. `agent.approval_requested`, `agent.suspended`, `agent.anomaly`, `security.kill_switch`, `test`
+          description: e.g. `agent.approval_requested`, `agent.access_decided`, `agent.suspended`, `agent.anomaly`, `security.kill_switch`, `test`
         title:
           type: string
         description:
