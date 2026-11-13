@@ -285,6 +285,7 @@ func (s *Server) Handler() http.Handler {
 
 	// PKI: ACME server (RFC 8555), ACME settings and EAB keys, generated-key issuance.
 	s.registerPKIRoutes(mux)
+	s.registerPKIDisplayRoutes(mux)
 
 	// Public HTTP-01 validation endpoint for the Let's Encrypt ACME *client*.
 	// Must be reachable unauthenticated so the ACME CA can verify domain control.

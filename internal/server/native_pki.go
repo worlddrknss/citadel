@@ -114,6 +114,9 @@ type nativeCertificate struct {
 	IssuerCAID   string `json:"issuerCaId,omitempty"`
 	Template     string `json:"template,omitempty"`
 	RevokedAt    string `json:"revokedAt,omitempty"`
+	// Issuer is the issuer DN of certificates Citadel did not issue
+	// (acm-imported rows).
+	Issuer string `json:"issuer,omitempty"`
 	// IsCA marks certificate authorities (pca-ca rows).
 	IsCA bool `json:"isCA,omitempty"`
 	// PathLen is a CA's basic-constraints pathLenConstraint: how many CAs
@@ -152,7 +155,8 @@ func certInfo(b64 string) (cn, keyAlg string) {
 }
 
 // handleV1ListCertificates returns the account's CAs, the certificates they
-// issued, and its Let's Encrypt certificates.
+// issued, its Let's Encrypt certificates and the certificates imported
+// through ACM.
 func (s *Server) handleV1ListCertificates(w http.ResponseWriter, r *http.Request) {
 	_, ctx, ok := s.nativeSession(w, r, "viewer")
 	if !ok {
@@ -210,6 +214,11 @@ func (s *Server) handleV1ListCertificates(w http.ResponseWriter, r *http.Request
 		}
 	} else if !errors.Is(err, store.ErrUnsupported) {
 		log.Printf("pki: list Let's Encrypt certificates: %v", err)
+	}
+	if imported, err := s.importedCertificateRows(ctx, now); err == nil {
+		out = append(out, imported...)
+	} else if !errors.Is(err, store.ErrUnsupported) {
+		log.Printf("pki: list imported certificates: %v", err)
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{"certificates": out})
 }

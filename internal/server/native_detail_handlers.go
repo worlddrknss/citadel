@@ -297,6 +297,9 @@ type nativeCertificateDetail struct {
 	RevocationReason string `json:"revocationReason,omitempty"`
 	PEM              string `json:"pem,omitempty"`
 	ChainPEM         string `json:"chainPem,omitempty"`
+	// Chain is the full chain, leaf (this certificate) first and the root
+	// last, as far as Citadel holds the issuers.
+	Chain []nativeChainCert `json:"chain,omitempty"`
 }
 
 // handleV1CertificateDetail returns the full metadata and PEM material for a
@@ -340,6 +343,7 @@ func (s *Server) handleV1CertificateDetail(w http.ResponseWriter, r *http.Reques
 				detail.PEM = pemStr
 				detail.ChainPEM = pemStr
 				applyParsedCert(&detail, cert)
+				detail.Chain = s.certificateChain(ctx, cert, "")
 			}
 			writeNativeJSON(w, http.StatusOK, detail)
 			return
@@ -366,9 +370,11 @@ func (s *Server) handleV1CertificateDetail(w http.ResponseWriter, r *http.Reques
 		if cert.RevokedAt != nil {
 			detail.RevokedAt = fmtTime(*cert.RevokedAt)
 		}
+		var parsedLeaf *x509.Certificate
 		if pemStr, parsed, perr := decodeCertB64(cert.CertB64); perr == nil {
 			detail.PEM = pemStr
 			applyParsedCert(&detail, parsed)
+			parsedLeaf = parsed
 		}
 		// The issuing CA certificate forms the chain.
 		if cas, cerr := s.store.ListCertificateAuthorities(ctx); cerr == nil {
@@ -381,6 +387,7 @@ func (s *Server) handleV1CertificateDetail(w http.ResponseWriter, r *http.Reques
 				}
 			}
 		}
+		detail.Chain = s.certificateChain(ctx, parsedLeaf, "")
 		writeNativeJSON(w, http.StatusOK, detail)
 		return
 
@@ -399,12 +406,24 @@ func (s *Server) handleV1CertificateDetail(w http.ResponseWriter, r *http.Reques
 			NotAfter:  fmtTime(cert.NotAfter),
 			Domains:   cert.Domains,
 		}
+		var leaf *x509.Certificate
 		if pemStr, parsed, perr := decodeCertB64(cert.CertB64); perr == nil {
 			detail.PEM = pemStr
 			applyParsedCert(&detail, parsed)
+			leaf = parsed
 		}
 		if raw, derr := base64.StdEncoding.DecodeString(strings.TrimSpace(cert.ChainB64)); derr == nil {
 			detail.ChainPEM = string(raw)
+		}
+		detail.Chain = s.certificateChain(ctx, leaf, detail.ChainPEM)
+		writeNativeJSON(w, http.StatusOK, detail)
+		return
+
+	case sourceACMImported:
+		detail, ok := s.importedCertificateDetail(ctx, id)
+		if !ok {
+			writeNativeError(w, http.StatusNotFound, "not_found", "certificate not found")
+			return
 		}
 		writeNativeJSON(w, http.StatusOK, detail)
 		return
