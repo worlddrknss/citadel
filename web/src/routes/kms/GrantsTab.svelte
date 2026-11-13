@@ -1,11 +1,11 @@
 <!-- Grants on a key: list, create (modal) and revoke. -->
 <script lang="ts">
-  import Icon from '$lib/components/Icon.svelte';
-  import Modal from '$lib/components/Modal.svelte';
-  import CopyButton from '$lib/components/CopyButton.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
-  import { errorMessage } from '$lib/api';
+  import Icon from '#lib/components/Icon.svelte';
+  import Modal from '#lib/components/Modal.svelte';
+  import CopyButton from '#lib/components/CopyButton.svelte';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
+  import { errorMessage } from '#lib/api.ts';
   import { kms, grantOperations, fmtDate, type KeyDetail } from './api';
 
   let { detail, canEdit, onchanged }: { detail: KeyDetail; canEdit: boolean; onchanged: () => void } = $props();

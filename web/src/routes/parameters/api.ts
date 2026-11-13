@@ -1,7 +1,7 @@
-// Page-local Parameter Store client: calls $lib/api doesn't have yet (real
+// Page-local Parameter Store client: calls #lib/api doesn't have yet (real
 // edit, reading an old version, removing labels) and display helpers.
 
-import type { Parameter, ParameterTier, ParameterType } from '$lib/api';
+import type { Parameter, ParameterTier, ParameterType } from '#lib/api.ts';
 import { req } from '../kms/api';
 
 const qs = (p: Record<string, string>) => new URLSearchParams(p).toString();

@@ -1,8 +1,8 @@
 <!-- CA hierarchy card: roots with their subordinates nested beneath, then the
      public issuer (Let's Encrypt). -->
 <script lang="ts">
-  import Icon from '$lib/components/Icon.svelte';
-  import Badge from '$lib/components/Badge.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import Badge from '#lib/components/Badge.svelte';
   import type { CertRow } from './api';
   import { cnOf, keyAlgLabel, yearOf, titleCase, rowKey } from './certs';
 

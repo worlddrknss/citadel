@@ -2,10 +2,10 @@
   Action menu (button + popover, ARIA menu pattern). The popover is fixed-
   positioned from the trigger so it isn't clipped by a scrolling table.
   Arrow keys move, Esc closes and returns focus to the trigger.
-  Page-local because $lib has no menu component yet.
+  Page-local because #lib has no menu component yet.
 -->
 <script lang="ts" module>
-  import type { IconName } from '$lib/components/Icon.svelte';
+  import type { IconName } from '#lib/components/Icon.svelte';
   export interface MenuItem {
     label: string;
     icon?: IconName;
@@ -20,7 +20,7 @@
 
 <script lang="ts">
   import { tick } from 'svelte';
-  import Icon from '$lib/components/Icon.svelte';
+  import Icon from '#lib/components/Icon.svelte';
 
   let {
     items,

@@ -2,7 +2,7 @@
 // the native shape ({type, providerUrl, audiences, subjects} or
 // {type, principals}); the editor shows and validates exactly that JSON.
 
-import type { OIDCProvider, Role, TrustPolicy } from '$lib/api';
+import type { OIDCProvider, Role, TrustPolicy } from '#lib/api.ts';
 
 export interface TrustErrors {
   json?: string;

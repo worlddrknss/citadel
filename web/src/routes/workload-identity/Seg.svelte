@@ -1,6 +1,6 @@
 <!--
   Segmented control (toggle-button group) from the Verdigris design system.
-  Page-local until a shared version exists in $lib/components.
+  Page-local until a shared version exists in #lib/components.
 -->
 <script lang="ts" generics="V extends string">
   let {

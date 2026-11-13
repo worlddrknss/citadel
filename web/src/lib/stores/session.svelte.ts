@@ -2,7 +2,7 @@
 // instead of each fetching /v1/me, and use `can()` to hide actions the role
 // can't perform.
 
-import { api, onUnauthorized, type Me } from '$lib/api';
+import { api, onUnauthorized, type Me } from '#lib/api.ts';
 
 export type Role = 'viewer' | 'editor' | 'admin';
 type Status = 'loading' | 'signed-in' | 'signed-out' | 'unreachable';

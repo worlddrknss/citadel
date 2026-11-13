@@ -1,5 +1,5 @@
 // Secrets-area client additions. Everything that already exists goes through
-// `api` from $lib/api; this file adds:
+// `api` from #lib/api; this file adds:
 //   - optional response fields the pages read when the backend provides them
 //     (they degrade to "—" or are hidden when absent), and
 //   - calls for endpoints this area needs that the backend doesn't have yet.
@@ -16,7 +16,7 @@ import {
   type ListResult,
   type Project,
   type SecretTag
-} from '$lib/api';
+} from '#lib/api.ts';
 import { envTier, type Tier } from './lib';
 
 /** A row of GET /v1/secrets, plus optional fields the backend may add. */

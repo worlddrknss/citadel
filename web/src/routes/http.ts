@@ -1,12 +1,12 @@
 // Helpers for page-local API modules (JSON calls go through req() in
-// $lib/api). isNotImplemented() lets pages fall back to older endpoints on
+// #lib/api). isNotImplemented() lets pages fall back to older endpoints on
 // servers that don't have a newer one yet: unknown /v1 paths currently get
 // redirected to the SPA's HTML shell, so req() fails parsing JSON
 // (SyntaxError) or the server answers 404/405/501. rawRequest() is only for
 // file downloads, where the body isn't JSON.
 
-import { ApiError } from '$lib/api';
-import { session } from '$lib/stores/session.svelte';
+import { ApiError } from '#lib/api.ts';
+import { session } from '#lib/stores/session.svelte.ts';
 
 const TIMEOUT_MS = 30_000;
 

@@ -1,9 +1,9 @@
 <!-- Import an externally generated CA certificate with its private key. -->
 <script lang="ts">
-  import Modal from '$lib/components/Modal.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import { api, errorMessage } from '$lib/api';
-  import { toast } from '$lib/stores/toast.svelte';
+  import Modal from '#lib/components/Modal.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import { api, errorMessage } from '#lib/api.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
 
   let { open = $bindable(false), onimported }: { open?: boolean; onimported: (caId: string) => void } = $props();
 

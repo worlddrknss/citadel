@@ -1,9 +1,9 @@
 <!-- Create or edit a parameter. Edit is a real in-place update with a version guard. -->
 <script lang="ts">
-  import { api, ApiError, errorMessage, type KMSKey, type ParameterTier, type ParameterType } from '$lib/api';
-  import Modal from '$lib/components/Modal.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
+  import { api, ApiError, errorMessage, type KMSKey, type ParameterTier, type ParameterType } from '#lib/api.ts';
+  import Modal from '#lib/components/Modal.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import { params, TYPES, validateName, valueLimit, byteLength, leaf, type Param } from './api';
 
   let {

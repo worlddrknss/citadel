@@ -1,11 +1,11 @@
 <!-- Role detail: trust summary, the policy document, and copy-paste examples
      for assuming the role. -->
 <script lang="ts">
-  import Drawer from '$lib/components/Drawer.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import CopyButton from '$lib/components/CopyButton.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import type { Role } from '$lib/api';
+  import Drawer from '#lib/components/Drawer.svelte';
+  import Badge from '#lib/components/Badge.svelte';
+  import CopyButton from '#lib/components/CopyButton.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import type { Role } from '#lib/api.ts';
   import Seg from './Seg.svelte';
   import { trustToJson, usage, sessionLabel, fmtDate } from './trust';
 

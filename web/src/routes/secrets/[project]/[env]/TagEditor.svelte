@@ -1,8 +1,8 @@
 <!-- Tags as key=value chips; editors can remove chips and add new tags. -->
 <script lang="ts">
-  import { api, type SecretTag } from '$lib/api';
-  import Icon from '$lib/components/Icon.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
+  import { api, type SecretTag } from '#lib/api.ts';
+  import Icon from '#lib/components/Icon.svelte';
+  import { toast } from '#lib/stores/toast.svelte.ts';
 
   let {
     coord,

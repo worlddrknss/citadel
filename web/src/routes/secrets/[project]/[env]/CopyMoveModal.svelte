@@ -1,8 +1,8 @@
 <!-- Copy selected secrets to another environment, or move them to another
      folder of this one. -->
 <script lang="ts">
-  import Icon from '$lib/components/Icon.svelte';
-  import Modal from '$lib/components/Modal.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import Modal from '#lib/components/Modal.svelte';
   import { envLabel, normPath } from '../../lib';
 
   let {

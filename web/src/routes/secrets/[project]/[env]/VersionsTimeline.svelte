@@ -26,7 +26,7 @@
 </script>
 
 <script lang="ts">
-  import SecretValue from '$lib/components/SecretValue.svelte';
+  import SecretValue from '#lib/components/SecretValue.svelte';
   import { fullDate } from '../../lib';
 
   let {

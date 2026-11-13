@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { OIDCProvider, Role, TrustPolicy } from '$lib/api';
+import type { OIDCProvider, Role, TrustPolicy } from '#lib/api.ts';
 import { hasErrors, parseTrustJson, sessionLabel, splitList, trustToJson, usage, validateTrust } from './trust';
 
 const providers: OIDCProvider[] = [

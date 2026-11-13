@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import PageHeader from '$lib/components/PageHeader.svelte';
-  import Tabs from '$lib/components/Tabs.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import { errorMessage } from '$lib/api';
-  import { api } from '$lib/api';
-  import { session } from '$lib/stores/session.svelte';
-  import { param, setParams } from '$lib/url';
+  import PageHeader from '#lib/components/PageHeader.svelte';
+  import Tabs from '#lib/components/Tabs.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import { errorMessage } from '#lib/api.ts';
+  import { api } from '#lib/api.ts';
+  import { session } from '#lib/stores/session.svelte.ts';
+  import { param, setParams } from '#lib/url.ts';
   import { certApi, type CertRow } from './api';
   import { cnOf, firstDomain, rowKey, safeFileName, type Filter, type SortKey } from './certs';
   import CATree from './CATree.svelte';

@@ -1,11 +1,11 @@
 <!-- Aliases of a key: add, move to another key (update), delete. alias/default is immutable. -->
 <script lang="ts">
-  import { api, errorMessage } from '$lib/api';
-  import Icon from '$lib/components/Icon.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import Modal from '$lib/components/Modal.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
+  import { api, errorMessage } from '#lib/api.ts';
+  import Icon from '#lib/components/Icon.svelte';
+  import Badge from '#lib/components/Badge.svelte';
+  import Modal from '#lib/components/Modal.svelte';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
   import { DEFAULT_ALIAS, primaryAlias, shortId, statusOf, type Key, type KeyDetail } from './api';
 
   let {

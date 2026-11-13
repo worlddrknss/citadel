@@ -1,9 +1,9 @@
-// Page-local client for certificate features the shared $lib/api client does
+// Page-local client for certificate features the shared #lib/api client does
 // not cover yet. Every call here targets a contract documented in the console
 // redesign report; the server rejects unknown JSON fields, so optional new
 // fields are only sent when they carry a value.
 
-import { req, api, type Certificate, type CertificateDetail } from '$lib/api';
+import { req, api, type Certificate, type CertificateDetail } from '#lib/api.ts';
 
 /**
  * A row of GET /v1/certificates. The extra fields are part of the extended

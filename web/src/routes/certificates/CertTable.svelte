@@ -1,9 +1,9 @@
 <!-- Certificates card: leaf certificates from every private CA and from
      Let's Encrypt, with a lifetime-remaining bar. -->
 <script lang="ts">
-  import Icon from '$lib/components/Icon.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import EmptyState from '$lib/components/EmptyState.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import Badge from '#lib/components/Badge.svelte';
+  import EmptyState from '#lib/components/EmptyState.svelte';
   import Seg from './Seg.svelte';
   import RowMenu, { type MenuItem } from './RowMenu.svelte';
   import type { CertRow } from './api';

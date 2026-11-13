@@ -1,7 +1,7 @@
 <!-- Resource policy JSON for a secret, with format and save for editors. -->
 <script lang="ts">
-  import { api } from '$lib/api';
-  import { toast } from '$lib/stores/toast.svelte';
+  import { api } from '#lib/api.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
 
   let {
     coord,

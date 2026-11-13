@@ -1,8 +1,8 @@
-// Page-local client for self-service features the shared $lib/api client
+// Page-local client for self-service features the shared #lib/api client
 // lacks (profile edits and sign-in sessions). Contracts are documented in
 // the console redesign report.
 
-import { req } from '$lib/api';
+import { req } from '#lib/api.ts';
 
 export interface SignInSession {
   id: string;

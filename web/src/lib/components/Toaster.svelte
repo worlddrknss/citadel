@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { toast } from '$lib/stores/toast.svelte';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import Icon from './Icon.svelte';
 
   const icons = { success: 'check-circle', error: 'alert-circle', info: 'info' } as const;

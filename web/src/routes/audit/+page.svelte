@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { errorMessage } from '$lib/api';
-  import { session } from '$lib/stores/session.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { param, setParams } from '$lib/url';
-  import Icon from '$lib/components/Icon.svelte';
-  import PageHeader from '$lib/components/PageHeader.svelte';
-  import EmptyState from '$lib/components/EmptyState.svelte';
+  import { errorMessage } from '#lib/api.ts';
+  import { session } from '#lib/stores/session.svelte.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { param, setParams } from '#lib/url.ts';
+  import Icon from '#lib/components/Icon.svelte';
+  import PageHeader from '#lib/components/PageHeader.svelte';
+  import EmptyState from '#lib/components/EmptyState.svelte';
   import Menu from '../Menu.svelte';
   import { isNotImplemented, saveBlob } from '../http';
   import { fullTime, initials, relTime, utcStamp } from '../time';

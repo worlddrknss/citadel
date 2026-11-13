@@ -10,10 +10,10 @@
 
 <script lang="ts">
   import { untrack } from 'svelte';
-  import Modal from '$lib/components/Modal.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { errorMessage } from '$lib/api';
+  import Modal from '#lib/components/Modal.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { errorMessage } from '#lib/api.ts';
   import { certApi, type CertRow, type KeyAlgorithm, type Template } from './api';
   import { cnOf, keyAlgLabel, yearOf, KEY_ALGORITHMS } from './certs';
 

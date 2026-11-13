@@ -16,11 +16,11 @@ export function param(name: string, fallback = ''): string {
  * such as entering a folder.
  */
 export function setParams(updates: Record<string, string | null | undefined>, opts: { push?: boolean } = {}) {
-  const url = new URL(page.url);
+  const url = new URL(page.url.href);
   for (const [k, v] of Object.entries(updates)) {
     if (v === null || v === undefined || v === '') url.searchParams.delete(k);
     else url.searchParams.set(k, v);
   }
   if (url.search === page.url.search) return;
-  return goto(url, { replaceState: !opts.push, keepFocus: true, noScroll: true });
+  return goto(url, { replace: !opts.push, reset: false });
 }

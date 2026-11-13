@@ -91,6 +91,9 @@ test('reveal, versions and restore', async ({ page }) => {
   await expect(drawer.getByText(/fingerprint/)).toBeVisible();
   await expect(drawer.getByText(/hmac:[0-9a-f]{12}/)).toBeVisible();
   await drawer.getByRole('tab', { name: /Versions/ }).click();
+  // The Details tab also lists recent versions, so wait for the switch (a
+  // URL navigation) before looking for v2, or both copies match.
+  await expect(drawer.getByRole('tabpanel', { name: 'versions' })).toBeVisible();
   await expect(drawer.getByText('v2', { exact: true })).toBeVisible();
   await expect(drawer.getByText('v1', { exact: true })).toBeVisible();
   await checkA11y(page);

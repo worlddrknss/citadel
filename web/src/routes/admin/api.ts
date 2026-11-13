@@ -1,8 +1,8 @@
-// Page-local client for administration features the shared $lib/api client
+// Page-local client for administration features the shared #lib/api client
 // lacks: per-account membership roles, organization settings and console SSO.
 // Contracts are documented in the console redesign report.
 
-import { req, type AdminUser } from '$lib/api';
+import { req, type AdminUser } from '#lib/api.ts';
 
 export type RoleName = 'viewer' | 'editor' | 'admin';
 

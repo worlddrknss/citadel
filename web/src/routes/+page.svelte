@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { base } from '$app/paths';
-  import { api, errorMessage, type Certificate, type ChangeRequest, type KMSKey, type Project } from '$lib/api';
-  import { session } from '$lib/stores/session.svelte';
-  import Icon, { type IconName } from '$lib/components/Icon.svelte';
-  import PageHeader from '$lib/components/PageHeader.svelte';
+  import { base } from '#lib/paths.ts';
+  import { api, errorMessage, type Certificate, type ChangeRequest, type KMSKey, type Project } from '#lib/api.ts';
+  import { session } from '#lib/stores/session.svelte.ts';
+  import Icon, { type IconName } from '#lib/components/Icon.svelte';
+  import PageHeader from '#lib/components/PageHeader.svelte';
   import Menu from './Menu.svelte';
   import { shellApi } from './api';
   import { isNotImplemented } from './http';

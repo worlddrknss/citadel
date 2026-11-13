@@ -2,12 +2,12 @@
      secret is write-only: blank on edit keeps the stored one. -->
 <script lang="ts">
   import { untrack } from 'svelte';
-  import Modal from '$lib/components/Modal.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import CopyButton from '$lib/components/CopyButton.svelte';
-  import { errorMessage, type Account } from '$lib/api';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { session } from '$lib/stores/session.svelte';
+  import Modal from '#lib/components/Modal.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import CopyButton from '#lib/components/CopyButton.svelte';
+  import { errorMessage, type Account } from '#lib/api.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { session } from '#lib/stores/session.svelte.ts';
   import { adminApi, ROLES, type RoleMapping, type RoleName, type SsoProvider } from './api';
 
   let {

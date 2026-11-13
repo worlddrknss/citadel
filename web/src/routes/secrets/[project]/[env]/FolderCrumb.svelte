@@ -1,7 +1,7 @@
 <!-- Folder path control from the board's toolbar: "/ › stripe › …" with
      each ancestor a link. Paths live in the URL (`?path=`). -->
 <script lang="ts">
-  import Icon from '$lib/components/Icon.svelte';
+  import Icon from '#lib/components/Icon.svelte';
 
   let {
     path,

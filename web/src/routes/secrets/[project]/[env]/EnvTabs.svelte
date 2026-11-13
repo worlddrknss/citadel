@@ -5,8 +5,8 @@
   since switching environments is navigation.
 -->
 <script lang="ts">
-  import { base } from '$app/paths';
-  import Icon from '$lib/components/Icon.svelte';
+  import { base } from '#lib/paths.ts';
+  import Icon from '#lib/components/Icon.svelte';
   import { envLabel, tierTone, type Tier } from '../../lib';
 
   let {

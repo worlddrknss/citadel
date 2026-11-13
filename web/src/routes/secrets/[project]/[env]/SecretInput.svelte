@@ -4,7 +4,7 @@
   text instead, so the value is never shown in the clear by default.
 -->
 <script lang="ts">
-  import Icon from '$lib/components/Icon.svelte';
+  import Icon from '#lib/components/Icon.svelte';
 
   let {
     value = $bindable(''),

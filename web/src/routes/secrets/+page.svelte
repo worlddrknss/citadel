@@ -1,17 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { base } from '$app/paths';
-  import { api } from '$lib/api';
-  import DataTable, { type Column } from '$lib/components/DataTable.svelte';
-  import EmptyState from '$lib/components/EmptyState.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import Modal from '$lib/components/Modal.svelte';
-  import PageHeader from '$lib/components/PageHeader.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
-  import { session } from '$lib/stores/session.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { revealPolicy } from '$lib/stores/revealPolicy.svelte';
-  import { param, setParams } from '$lib/url';
+  import { base } from '#lib/paths.ts';
+  import { api } from '#lib/api.ts';
+  import DataTable, { type Column } from '#lib/components/DataTable.svelte';
+  import EmptyState from '#lib/components/EmptyState.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import Modal from '#lib/components/Modal.svelte';
+  import PageHeader from '#lib/components/PageHeader.svelte';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
+  import { session } from '#lib/stores/session.svelte.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { revealPolicy } from '#lib/stores/revealPolicy.svelte.ts';
+  import { param, setParams } from '#lib/url.ts';
   import { secretsApi, type ProjectInfo, type SecretSettings } from './api';
   import { envLabel, envTier, sortEnvs, tierTone } from './lib';
 

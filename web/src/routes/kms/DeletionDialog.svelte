@@ -3,9 +3,9 @@
   alias (or ID) to confirm. Irreversible once the period ends.
 -->
 <script lang="ts">
-  import { api, errorMessage } from '$lib/api';
-  import Modal from '$lib/components/Modal.svelte';
-  import Icon from '$lib/components/Icon.svelte';
+  import { api, errorMessage } from '#lib/api.ts';
+  import Modal from '#lib/components/Modal.svelte';
+  import Icon from '#lib/components/Icon.svelte';
   import { primaryAlias, fmtDate, type Key } from './api';
 
   let {

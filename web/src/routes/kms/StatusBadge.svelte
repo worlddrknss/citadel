@@ -1,7 +1,7 @@
 <!-- Key state as icon + text + color, never color alone. -->
 <script lang="ts">
-  import Badge from '$lib/components/Badge.svelte';
-  import Icon from '$lib/components/Icon.svelte';
+  import Badge from '#lib/components/Badge.svelte';
+  import Icon from '#lib/components/Icon.svelte';
   import type { Status } from './api';
 
   let { status }: { status: Status } = $props();

@@ -11,8 +11,8 @@
 
 <script lang="ts">
   import type { Snippet } from 'svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import SecretValue from '$lib/components/SecretValue.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import SecretValue from '#lib/components/SecretValue.svelte';
   import type { SecretRow } from '../../api';
   import { fullDate, initials, relTime, shortDate } from '../../lib';
   import Menu, { type MenuItem } from './Menu.svelte';

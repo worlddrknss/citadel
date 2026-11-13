@@ -1,13 +1,13 @@
-// Page-local KMS client: the calls the console needs that $lib/api doesn't
+// Page-local KMS client: the calls the console needs that #lib/api doesn't
 // have yet (grants, rotation, tags, and the "Try it" crypto operations), plus
 // display helpers shared by the KMS components. The contracts are documented
 // next to each call; the server implements them under /v1/kms.
 
-import type { KMSKey, KMSKeyDetail } from '$lib/api';
+import type { KMSKey, KMSKeyDetail } from '#lib/api.ts';
 
 // Transport (timeouts, CSRF header, 401 handling) is the shared one.
-export { req } from '$lib/api';
-import { req } from '$lib/api';
+export { req } from '#lib/api.ts';
+import { req } from '#lib/api.ts';
 
 const qs = (p: Record<string, string>) => new URLSearchParams(p).toString();
 const post = <T>(path: string, body: unknown) => req<T>(path, { method: 'POST', body: JSON.stringify(body) });

@@ -4,10 +4,10 @@
   environments that require approval).
 -->
 <script lang="ts">
-  import { api } from '$lib/api';
-  import Icon from '$lib/components/Icon.svelte';
-  import Modal from '$lib/components/Modal.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
+  import { api } from '#lib/api.ts';
+  import Icon from '#lib/components/Icon.svelte';
+  import Modal from '#lib/components/Modal.svelte';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import { parseDotenv } from './dotenv';
   import SecretInput from './SecretInput.svelte';
 

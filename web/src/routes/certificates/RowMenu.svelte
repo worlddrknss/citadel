@@ -1,9 +1,9 @@
 <!--
   Row "more actions" menu: a menu button with arrow-key navigation, Esc to
-  close and focus return. Page-local until $lib has a shared menu.
+  close and focus return. Page-local until #lib has a shared menu.
 -->
 <script lang="ts" module>
-  import type { IconName } from '$lib/components/Icon.svelte';
+  import type { IconName } from '#lib/components/Icon.svelte';
 
   export interface MenuItem {
     label: string;
@@ -14,7 +14,7 @@
 </script>
 
 <script lang="ts">
-  import Icon from '$lib/components/Icon.svelte';
+  import Icon from '#lib/components/Icon.svelte';
 
   let { items, label }: { items: MenuItem[]; label: string } = $props();
 

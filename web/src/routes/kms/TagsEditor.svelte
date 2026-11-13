@@ -1,11 +1,11 @@
 <!--
   Key/value tag list with add and remove. Used by the KMS key panel and by
-  Parameters; a candidate for $lib/components.
+  Parameters; a candidate for #lib/components.
 -->
 <script lang="ts">
-  import Icon from '$lib/components/Icon.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
 
   let {
     tags,

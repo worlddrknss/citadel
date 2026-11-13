@@ -1,14 +1,14 @@
 <!-- Console single sign-on: OIDC providers users can sign in with. -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import EmptyState from '$lib/components/EmptyState.svelte';
-  import { errorMessage, type Account } from '$lib/api';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import Badge from '#lib/components/Badge.svelte';
+  import EmptyState from '#lib/components/EmptyState.svelte';
+  import { errorMessage, type Account } from '#lib/api.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
   import SsoEditor from './SsoEditor.svelte';
-  import { session } from '$lib/stores/session.svelte';
+  import { session } from '#lib/stores/session.svelte.ts';
   import { adminApi, fmtDate, ssoOrgWide, type SsoProvider } from './api';
 
   let { accounts }: { accounts: Account[] } = $props();

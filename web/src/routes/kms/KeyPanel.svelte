@@ -4,12 +4,12 @@
 -->
 <script lang="ts">
   import { tick } from 'svelte';
-  import { api, errorMessage } from '$lib/api';
-  import { session } from '$lib/stores/session.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import Tabs from '$lib/components/Tabs.svelte';
-  import CopyButton from '$lib/components/CopyButton.svelte';
+  import { api, errorMessage } from '#lib/api.ts';
+  import { session } from '#lib/stores/session.svelte.ts';
+  import Icon from '#lib/components/Icon.svelte';
+  import Badge from '#lib/components/Badge.svelte';
+  import Tabs from '#lib/components/Tabs.svelte';
+  import CopyButton from '#lib/components/CopyButton.svelte';
   import StatusBadge from './StatusBadge.svelte';
   import TryIt from './TryIt.svelte';
   import PolicyEditor from './PolicyEditor.svelte';

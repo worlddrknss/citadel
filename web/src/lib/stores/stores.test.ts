@@ -58,7 +58,7 @@ describe('toast', () => {
 
   it('error() accepts strings, errors and a fallback', async () => {
     const { toast } = await import('./toast.svelte');
-    const { ApiError } = await import('$lib/api');
+    const { ApiError } = await import('#lib/api.ts');
     toast.error('plain');
     toast.error(new ApiError(500, 'x', 'from api'));
     toast.error({}, 'fallback');
@@ -104,7 +104,7 @@ describe('session', () => {
   async function load(fetchImpl: (path: string, init?: RequestInit) => Promise<Response>) {
     vi.stubGlobal('fetch', vi.fn(fetchImpl));
     const { session } = await import('./session.svelte');
-    const api = await import('$lib/api');
+    const api = await import('#lib/api.ts');
     return { session, api };
   }
 

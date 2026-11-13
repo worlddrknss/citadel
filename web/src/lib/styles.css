@@ -3,7 +3,7 @@
  *
  * Tokens first (light, then dark), then base elements, then the small set of
  * global component classes (buttons, inputs, cards, tables, badges). Anything
- * more specific lives in a component under $lib/components.
+ * more specific lives in a component under #lib/components.
  *
  * Theme: follows the OS preference unless the user picks one, which sets
  * data-theme on <html> (see app.html and ThemeToggle).
@@ -671,10 +671,9 @@ input[type='radio'] {
   background: var(--warning-soft);
   color: var(--text);
 }
-.callout-warning > :global(svg),
-.callout-warning > svg {
-  color: var(--warning);
-}
+/* No icon tint for warnings: the old `.callout-warning > svg` rule shared a
+   selector list with `:global(svg)` (invalid outside a component), so
+   browsers always dropped it. Removed rather than fixed to keep the look. */
 .callout-danger {
   border-color: transparent;
   background: var(--danger-soft);

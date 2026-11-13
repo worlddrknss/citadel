@@ -2,12 +2,12 @@
      certificate: metadata, PEM and chain with copy/download, and the
      renew / revoke / CRL actions that apply to it. -->
 <script lang="ts">
-  import Drawer from '$lib/components/Drawer.svelte';
-  import Tabs from '$lib/components/Tabs.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import CopyButton from '$lib/components/CopyButton.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import { api, errorMessage } from '$lib/api';
+  import Drawer from '#lib/components/Drawer.svelte';
+  import Tabs from '#lib/components/Tabs.svelte';
+  import Badge from '#lib/components/Badge.svelte';
+  import CopyButton from '#lib/components/CopyButton.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import { api, errorMessage } from '#lib/api.ts';
   import { certApi, type CertRow, type CertificateDetail } from './api';
   import { certStatus, cnOf, fmtDateTime, keyAlgLabel, titleCase, downloadText, safeFileName, isRevoked, firstDomain } from './certs';
 

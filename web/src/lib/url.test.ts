@@ -30,14 +30,14 @@ describe('setParams', () => {
     const [url, opts] = nav.goto.mock.calls[0] as unknown as [URL, Record<string, boolean>];
     expect(url.pathname).toBe('/app/secrets');
     expect(Object.fromEntries(url.searchParams)).toEqual({ tab: 'keys', page: '2' });
-    expect(opts).toEqual({ replaceState: true, keepFocus: true, noScroll: true });
+    expect(opts).toEqual({ replace: true, reset: false });
   });
 
   it('pushes a history entry when asked', () => {
     setParams({ path: '/db' }, { push: true });
     const [url, opts] = nav.goto.mock.calls[0] as unknown as [URL, Record<string, boolean>];
     expect(url.searchParams.get('path')).toBe('/db');
-    expect(opts.replaceState).toBe(false);
+    expect(opts.replace).toBe(false);
   });
 
   it('does nothing when the query would not change', () => {

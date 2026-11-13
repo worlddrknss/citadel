@@ -2,7 +2,7 @@
 // mints ID tokens for machines, signed by Citadel KMS keys. Shapes follow
 // internal/server/workload_identity.go.
 
-import { req, type AuditEvent } from '$lib/api';
+import { req, type AuditEvent } from '#lib/api.ts';
 
 export type SigningAlg = 'ES256' | 'ES384' | 'RS256' | 'PS256';
 

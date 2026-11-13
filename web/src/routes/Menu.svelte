@@ -2,7 +2,7 @@
   Disclosure menu: a trigger button plus a popover. Closes on outside click,
   Escape (focus returns to the trigger) and after choosing an item. Arrow
   keys move between [role=menuitem] / [role=menuitemradio] elements.
-  Page-local to the shell; candidate for $lib/components.
+  Page-local to the shell; candidate for #lib/components.
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';

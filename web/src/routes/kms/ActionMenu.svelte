@@ -2,10 +2,10 @@
   Menu button: a trigger with aria-haspopup="menu" and a popup of menu items.
   Arrow keys move, Home/End jump, Esc closes and returns focus to the trigger.
   The popup is position: fixed so a table's scroll box can't clip it.
-  Page-local for now; a candidate for $lib/components (Parameters uses it too).
+  Page-local for now; a candidate for #lib/components (Parameters uses it too).
 -->
 <script lang="ts" module>
-  import type { IconName } from '$lib/components/Icon.svelte';
+  import type { IconName } from '#lib/components/Icon.svelte';
   export interface MenuItem {
     label: string;
     icon?: IconName;
@@ -20,7 +20,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { tick } from 'svelte';
-  import Icon from '$lib/components/Icon.svelte';
+  import Icon from '#lib/components/Icon.svelte';
 
   let {
     items,
