@@ -104,6 +104,10 @@ With a federated token, send `X-Citadel-Agent-Id: agt_...` when the same
 identity is bound to more than one agent; otherwise the request is refused as
 ambiguous.
 
+Because they never accept a session cookie, access key or SigV4, the agent
+endpoints (`/v1/agent/*` and `/mcp`) skip the console's CSRF checks: a
+cross-site request carries no ambient credential.
+
 ### Refusals
 
 Errors are JSON `{"error", "message", "reason"}`:
@@ -120,6 +124,131 @@ don't exist, so an agent can't discover them), `action_not_granted`,
 `not_yet_valid`, `grant_expired`, `outside_window`, `rate_limited` or
 `credential_unavailable` (the secret was deleted or is scheduled for
 deletion).
+
+## Using a credential: brokered HTTP
+
+```http
+POST /v1/agent/http
+Authorization: Bearer cagt_...
+Content-Type: application/json
+
+{ "credential": "github-pat", "method": "GET",
+  "url": "https://api.github.com/user/repos",
+  "headers": { "Accept": "application/vnd.github+json" },
+  "taskId": "fix-issue-1234" }
+```
+
+Citadel checks the agent's grant (it needs the `use` action), performs the
+request with the credential injected, and returns the upstream's answer:
+
+```json
+{ "status": 200, "headers": { "Content-Type": "application/json; charset=utf-8" },
+  "body": "[...]", "bodyEncoding": "text", "truncated": false, "redacted": false }
+```
+
+| Field | Meaning |
+| --- | --- |
+| `credential` | The credential's name (MCP: `list_credentials` lists them). |
+| `method` | `GET` (default), `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` or `OPTIONS`; the credential's `allowedMethods` may narrow this. |
+| `url` | Absolute `https` URL. Plain `http` only when the credential allows it. |
+| `headers` | Extra request headers (string values). |
+| `body`, `bodyEncoding` | Request body, `text` (default) or `base64`; at most 1 MiB decoded. |
+| `taskId` | Optional task or session ID for the audit log (also accepted as the `X-Citadel-Task-Id` header; they must agree). |
+
+An upstream error status (404, 500...) is a successful brokered call: it
+comes back in `status`. A text (UTF-8) body is returned as is, anything else
+base64 encoded.
+
+### How the credential is injected
+
+| Kind | On the wire |
+| --- | --- |
+| `http_header` | `<headerName>: <headerPrefix><value>`; by default `Authorization: Bearer <value>`. |
+| `http_basic` | `Authorization: Basic ...` from the stored JSON `{"username": "...", "password": "..."}`. |
+| `http_query` | The query parameter `<queryParam>=<value>`, replacing any the agent sent. |
+
+`login` and `raw` credentials can't be brokered (`kind_not_brokerable`); they
+are only usable through reveal.
+
+### What the broker refuses
+
+- **Hosts.** The URL's host must match the credential's `allowedHosts`: an
+  exact host (`api.github.com`) or a suffix wildcard (`*.example.com`, which
+  doesn't match `example.com` itself). Hosts are compared in lowercase without
+  a trailing dot; internationalized names must be written in their punycode
+  (`xn--`) form, so a look-alike Unicode name never matches. A URL with
+  userinfo is refused. Only the scheme's default port is allowed unless the
+  entry names one (`api.example.com:8443`).
+- **Paths.** With `allowedPathPrefixes`, the path must fall under one of them
+  by whole segments (`/repos` allows `/repos` and `/repos/x`, not `/reposx`).
+  Dot segments (`/a/../b`, also percent-encoded) and backslashes are refused
+  for every credential.
+- **Addresses.** The resolved address of every connection is checked: loopback,
+  link-local, private (RFC 1918, unique local, CGNAT, and NAT64/6to4 addresses
+  that embed them), multicast and cloud metadata addresses are refused
+  (`destination_blocked`) unless the credential's `allowedCIDRs` include
+  them. DNS rebinding can't get around this; environment proxies are never
+  used.
+- **Headers.** Headers that could carry or override a credential are dropped
+  from the agent's request: `Authorization`, `Proxy-*`, `Cookie`, the
+  credential's own header, `Host`, hop-by-hop and framing headers,
+  `Forwarded`/`X-Forwarded-*`, and `Accept-Encoding` (Citadel negotiates
+  compression itself so that it can inspect the response).
+
+### What comes back
+
+- Redirects to the same host (and port; an http to https upgrade is fine) are
+  followed, at most three, each re-checked against the credential. A redirect
+  elsewhere is returned to the agent as is, with its `Location`.
+- `Set-Cookie`, `Authorization`, `Proxy-Authenticate` and hop-by-hop headers
+  are removed; `WWW-Authenticate` is kept. Repeated headers are joined with
+  `, `.
+- Every occurrence of the secret in the response headers and body, also
+  base64, base64url, URL-escaped and JSON-escaped, is replaced with
+  `[REDACTED]` and `redacted` is `true`. (Values shorter than four characters
+  are not redacted; don't broker them.)
+- The body is cut at 5 MiB (`truncated: true`); a secret cut off at the end
+  is removed too. A response in a content encoding Citadel can't decode is
+  refused (`unsupported_content_encoding`).
+- Timeouts: 5 s to connect, 30 s overall (`upstream_timeout`).
+
+### Errors
+
+Errors are JSON with a stable `reason`:
+
+```json
+{ "error": "forbidden", "reason": "host_not_allowed", "message": "this credential may not be sent to that host" }
+```
+
+| Status | Reasons |
+| --- | --- |
+| 400 | `invalid_request`, `invalid_url`, `invalid_header`, `invalid_task_id`, `kind_not_brokerable`, `method_not_allowed` (a method the broker never sends) |
+| 401 | the agent token is missing, wrong, expired or revoked |
+| 403 | `no_grant`, `action_not_granted`, `not_yet_valid`, `grant_expired`, `outside_window`, `credential_unavailable`, `host_not_allowed`, `path_not_allowed`, `method_not_allowed`, `scheme_not_allowed`, `destination_blocked`, `agent_suspended` |
+| 413 | `body_too_large` |
+| 429 | `rate_limited` (with `Retry-After`) |
+| 502 | `upstream_unreachable`, `unsupported_content_encoding`, `credential_invalid` (the stored value doesn't fit the credential's kind) |
+| 503 | `broker_busy`: too many brokered requests in flight (32 per replica, 4 per agent) |
+| 504 | `upstream_timeout` |
+
+A credential the agent has no grant for and one that doesn't exist both
+answer `no_grant`, so an agent can't discover credentials.
+
+## Revealing a credential
+
+```http
+POST /v1/agent/credentials/reveal
+Authorization: Bearer cagt_...
+
+{ "credential": "deploy-key", "taskId": "release-42" }
+```
+
+returns `{"credential": "deploy-key", "kind": "raw", "value": "..."}`, only
+when the agent's grant explicitly includes `reveal`. For `http_basic` and
+`login` credentials the value is the stored JSON document. The response is
+never cached, and the disclosure is written to the audit log before the
+value is returned: if the audit log can't be written, the value is withheld.
+Prefer brokered use whenever the agent only needs to call an API.
 
 ## Tokens
 
@@ -170,6 +299,28 @@ Actions: `citadel.CreateAgent`, `UpdateAgent`, `DeleteAgent`, `SuspendAgent`,
 `DeleteAgentCredential`, `SuspendAllAgents`, `ResumeAllAgents`,
 `AgentWhoAmI`, `AgentListCredentials`, and `AgentAuth` (refused requests of
 an identified agent, with the reason as the error type).
+
+### Brokered use, reveal and MCP
+
+| Action | Recorded |
+| --- | --- |
+| `citadel.AgentHTTP` | Every brokered request, allowed or not: the agent, its owner and task ID (actor fields), the credential (`keyId`), and in `resource` the method, host, path without query string, upstream status, response and request bytes, redirects, `truncated`/`redacted`, and `via=api` or `via=mcp`. Denials carry the reason as the error type. |
+| `citadel.AgentReveal` | Every reveal, allowed or not. |
+| `citadel.AgentListCredentials` | The MCP `list_credentials` tool. |
+| `citadel.MCPInitialize`, `citadel.MCPEndSession` | An MCP session started (with the protocol version and client name) or ended. |
+
+Secret values, request and response bodies, headers and query strings are
+never recorded.
+
+Prometheus metrics (labels are bounded codes, never credential names, agents,
+hosts or values):
+
+- `citadel_agent_http_requests_total{via, result, reason}`
+- `citadel_agent_http_upstream_responses_total{class}` (`2xx`, `4xx`...)
+- `citadel_agent_http_duration_seconds{via}`
+- `citadel_agent_reveals_total{via, result, reason}`
+- `citadel_mcp_requests_total{method, outcome}`
+- `citadel_mcp_sessions_total{event}`
 
 ## Management API
 
