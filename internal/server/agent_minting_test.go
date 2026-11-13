@@ -131,7 +131,6 @@ func TestAgentMintedOAuth2(t *testing.T) {
 	}
 }
 
-
 func testRSAKeyPEM(t *testing.T) string {
 	t.Helper()
 	k, err := rsa.GenerateKey(rand.Reader, 2048)
