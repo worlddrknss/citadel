@@ -54,10 +54,13 @@ export const PAGES = [
   { path: '/agents', heading: 'Agents' },
   { path: '/agents/agt_abcdefghijklmnopqrst', heading: 'claude-code' },
   { path: '/agents/agt_abcdefghijklmnopqrst?tab=grants', heading: 'claude-code' },
+  { path: '/agents/agt_abcdefghijklmnopqrst?tab=requests', heading: 'claude-code' },
+  { path: '/agents/agt_abcdefghijklmnopqrst?tab=leases', heading: 'claude-code' },
   { path: '/secrets/payments/dev?secret=STRIPE_KEY&tab=agents', heading: /Payments/ },
   { path: '/account', heading: 'My account' },
   { path: '/audit', heading: 'Audit log' },
   { path: '/approvals', heading: 'Approvals' },
+  { path: '/approvals?type=agent_access&id=aar_bbbbbbbbbbbbbbbb', heading: 'Approvals' },
   { path: '/admin', heading: 'Administration' },
   { path: '/admin?tab=notifications', heading: 'Administration' },
   { path: '/api-reference', heading: 'API reference' }

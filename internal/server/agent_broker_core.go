@@ -44,15 +44,20 @@ func (a serverAgentAccess) principal(c *agentCaller) *AgentPrincipal {
 
 func (a serverAgentAccess) evaluate(ctx context.Context, c *agentCaller, credential, action string) agentUse {
 	p := a.principal(c)
+	// The principal carries this call's task ID (task-scoped leases and
+	// access requests match it).
+	ctx = withAgentPrincipal(ctx, p)
 	grant, cred, ref, d := a.s.evaluateAgentAccess(ctx, p.Agent, credential, action, time.Now().UTC())
 	if !d.Allowed {
-		return agentUse{Reason: d.Reason, RetryAfter: d.RetryAfter}
+		return agentUse{Reason: d.Reason, RetryAfter: d.RetryAfter, RequestID: d.RequestID}
 	}
 	return agentUse{
-		Allowed:    true,
-		Credential: credentialInfo(cred, grant, ""),
-		Profile:    brokerProfile(cred),
-		ref:        agentCoreUse{ref: ref},
+		Allowed:        true,
+		LeaseID:        d.LeaseID,
+		LeaseExpiresAt: d.LeaseExpiresAt,
+		Credential:     credentialInfo(cred, grant, ""),
+		Profile:        brokerProfile(cred),
+		ref:            agentCoreUse{ref: ref},
 	}
 }
 

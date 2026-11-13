@@ -12,10 +12,15 @@
   import { isNotImplemented } from '../http';
   import { fullTime, initials, relTime } from '../time';
   import PoliciesModal from './PoliciesModal.svelte';
+  import AgentRequestPanel from './AgentRequestPanel.svelte';
+  import { agentsApi, ACCESS_STATUS, type AccessRequest } from '../agents/api';
   import { approvalsApi, envTone, fingerprint, roleMayApprove, shortId, type ChangeRequestDetail, type ChangeRequestRow } from './api';
 
   type ChangeRequest = ChangeRequestRow;
   type View = 'forme' | 'open' | 'closed';
+  type Kind = 'all' | 'change' | 'agent';
+  // One inbox row: a change request or an agent access request.
+  type Entry = { kind: 'cr'; id: string; createdAt: string; cr: ChangeRequest } | { kind: 'agent'; id: string; createdAt: string; ar: AccessRequest };
 
   const me = $derived(session.me);
   // Editors can approve where a policy lists the editor role; the server
@@ -23,17 +28,33 @@
   const mayReview = $derived(session.can('editor'));
   const view = $derived((param('view') || (mayReview ? 'forme' : 'open')) as View);
   const selectedId = $derived(param('cr'));
+  // Agent requests are linked as ?type=agent_access&id=aar_... (notifications use it).
+  const selectedAgentId = $derived(param('type') === 'agent_access' ? param('id') : '');
+  const kind = $derived((['all', 'change', 'agent'].includes(param('kind')) ? param('kind') : 'all') as Kind);
   const policiesOpen = $derived(param('policies') === '1');
 
   // ---- list ---------------------------------------------------------------
   let list = $state<ChangeRequest[]>([]);
   let listState = $state<'loading' | 'ok' | 'error'>('loading');
   let listError = $state('');
+  let agentList = $state<AccessRequest[]>([]);
+
+  // Agent access requests ride along; an older server without them (or a
+  // failure) just leaves them out of the inbox.
+  async function loadAgentList(): Promise<AccessRequest[]> {
+    try {
+      return await agentsApi.accessRequests({ status: 'all' });
+    } catch {
+      return [];
+    }
+  }
 
   async function loadList() {
     if (listState !== 'ok') listState = 'loading';
     try {
-      list = (await approvalsApi.list()).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+      const [crs, ars] = await Promise.all([approvalsApi.list(), loadAgentList()]);
+      list = crs.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+      agentList = ars;
       listState = 'ok';
     } catch (e) {
       listError = errorMessage(e, "Couldn't load change requests");
@@ -46,13 +67,33 @@
   // Older servers don't send canApprove on list rows: fall back to the role.
   const canApproveRow = (c: ChangeRequest) =>
     c.status === 'pending' && !mine(c) && (c.canApprove ?? roleMayApprove(me?.role, c.approverRoles));
-  const forMe = $derived(list.filter(canApproveRow));
-  const openList = $derived(list.filter((c) => c.status === 'pending'));
-  const closed = $derived(list.filter((c) => c.status !== 'pending'));
+  const crEntry = (cr: ChangeRequest): Entry => ({ kind: 'cr', id: cr.id, createdAt: cr.createdAt, cr });
+  const arEntry = (ar: AccessRequest): Entry => ({ kind: 'agent', id: ar.requestId, createdAt: ar.createdAt, ar });
+  const entries = $derived<Entry[]>(
+    [...(kind === 'agent' ? [] : list.map(crEntry)), ...(kind === 'change' ? [] : agentList.map(arEntry))].sort(
+      (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)
+    )
+  );
+  const entryPending = (e: Entry) => (e.kind === 'cr' ? e.cr.status === 'pending' : e.ar.status === 'pending');
+  const entryForMe = (e: Entry) => (e.kind === 'cr' ? canApproveRow(e.cr) : e.ar.status === 'pending' && e.ar.canDecide);
+  const forMe = $derived(entries.filter(entryForMe));
+  const openList = $derived(entries.filter(entryPending));
+  const closed = $derived(entries.filter((e) => !entryPending(e)));
   const shown = $derived(view === 'forme' ? forMe : view === 'open' ? openList : closed);
 
   // Select the first request in the view when nothing (valid) is selected.
-  const current = $derived(list.find((c) => c.id === selectedId) ?? shown[0] ?? null);
+  const currentEntry = $derived.by<Entry | null>(() => {
+    if (selectedAgentId) {
+      const ar = agentList.find((a) => a.requestId === selectedAgentId);
+      if (ar) return arEntry(ar);
+    } else if (selectedId) {
+      const cr = list.find((c) => c.id === selectedId);
+      if (cr) return crEntry(cr);
+    }
+    return shown[0] ?? null;
+  });
+  const current = $derived(currentEntry?.kind === 'cr' ? currentEntry.cr : null);
+  const currentAgent = $derived(currentEntry?.kind === 'agent' ? currentEntry.ar : null);
 
   function status(c: ChangeRequest): { text: string; tone: 'accent' | 'neutral' | 'success' | 'danger' | 'info' } {
     if (c.status === 'approved') return { text: 'Approved', tone: 'success' };
@@ -247,8 +288,23 @@
 
   function select(c: ChangeRequest, e: MouseEvent) {
     e.preventDefault();
-    setParams({ cr: c.id });
+    setParams({ cr: c.id, type: null, id: null });
   }
+  function selectAgent(a: AccessRequest, e: MouseEvent) {
+    e.preventDefault();
+    setParams({ type: 'agent_access', id: a.requestId, cr: null });
+  }
+  async function agentDecided() {
+    changed();
+    await loadList();
+  }
+  const kinds: { id: Kind; label: string }[] = [
+    { id: 'all', label: 'All' },
+    { id: 'change', label: 'Change requests' },
+    { id: 'agent', label: 'Agent access' }
+  ];
+  const agentTone = (a: AccessRequest) => (a.status === 'pending' && a.canDecide ? 'accent' : ACCESS_STATUS[a.status].tone);
+  const agentLabel = (a: AccessRequest) => (a.status === 'pending' && a.canDecide ? 'Needs your review' : ACCESS_STATUS[a.status].label);
 
   const views: { id: View; label: string; count?: () => number }[] = [
     { id: 'forme', label: 'For me', count: () => forMe.length },
@@ -257,7 +313,7 @@
   ];
 </script>
 
-<PageHeader title="Approvals" description="Change requests for protected environments and keys. Every decision is written to the audit log.">
+<PageHeader title="Approvals" description="Change requests for protected environments and keys, and AI agents asking for access. Every decision is written to the audit log.">
   {#snippet actions()}
     <button type="button" class="btn btn-secondary" onclick={() => setParams({ policies: '1' })}><Icon name="settings" />Approval policies</button>
   {/snippet}
@@ -269,11 +325,18 @@
       <h2 id="ib-title" class="sr-only">Change requests</h2>
       <div class="seg" role="group" aria-label="Inbox filter">
         {#each views.filter((v) => v.id !== 'forme' || mayReview) as v (v.id)}
-          <button type="button" aria-pressed={view === v.id} onclick={() => setParams({ view: v.id, cr: null })}>
+          <button type="button" aria-pressed={view === v.id} onclick={() => setParams({ view: v.id, cr: null, type: null, id: null })}>
             {v.label}{#if v.count && listState === 'ok'}<span class="count">{v.count()}</span>{/if}
           </button>
         {/each}
       </div>
+      {#if agentList.length}
+        <div class="seg" role="group" aria-label="Request type">
+          {#each kinds as k (k.id)}
+            <button type="button" aria-pressed={kind === k.id} onclick={() => setParams({ kind: k.id === 'all' ? null : k.id, cr: null, type: null, id: null })}>{k.label}</button>
+          {/each}
+        </div>
+      {/if}
     </div>
     {#if listState === 'loading'}
       <ul class="items" aria-busy="true" aria-label="Loading change requests">
@@ -290,13 +353,31 @@
       <div class="pad">
         <EmptyState
           icon={view === 'closed' ? 'history' : 'check-circle'}
-          title={view === 'forme' ? 'Nothing needs your review' : view === 'open' ? 'No open change requests' : 'No closed change requests'}
+          title={view === 'forme' ? 'Nothing needs your review' : view === 'open' ? (kind === 'agent' ? 'No open agent requests' : 'No open change requests') : kind === 'agent' ? 'No closed agent requests' : 'No closed change requests'}
           description={view === 'closed' ? 'Approved and rejected requests show up here.' : 'Edits to protected environments wait here for a second person.'}
         />
       </div>
     {:else}
       <ul class="items">
-        {#each shown as c (c.id)}
+        {#each shown as en (en.kind + en.id)}
+          {#if en.kind === 'agent'}
+            {@const a = en.ar}
+            {@const sel = currentAgent?.requestId === a.requestId}
+            <li>
+              <a href="?{new URLSearchParams({ view, type: 'agent_access', id: a.requestId })}" class="item" class:sel aria-current={sel ? 'true' : undefined} onclick={(e) => selectAgent(a, e)}>
+                <span class="item-top"><span class="badge mini">Agent access</span><time class="subtle small" datetime={a.createdAt} title={fullTime(a.createdAt)}>{relTime(a.createdAt)}</time></span>
+                <span class="item-title">{a.agentName || a.agentId}: {a.actions.join(', ')} <span class="mono">{a.credential}</span></span>
+                {#if a.reason}<span class="muted small reason-line">{a.reason}</span>{/if}
+                <span class="item-meta">
+                  <span class="avatar" aria-hidden="true"><Icon name="bot" size={13} /></span>
+                  <span class="muted small">owner {a.agentOwner === me?.username ? 'you' : a.agentOwner}</span>
+                  {#if a.actions.includes('reveal')}<span class="badge badge-danger mini">reveal</span>{/if}
+                  <span class="badge badge-{agentTone(a)} push">{agentLabel(a)}</span>
+                </span>
+              </a>
+            </li>
+          {:else}
+          {@const c = en.cr}
           {@const s = status(c)}
           {@const sel = current?.id === c.id}
           <li>
@@ -314,13 +395,18 @@
               {/if}
             </a>
           </li>
+          {/if}
         {/each}
       </ul>
     {/if}
   </section>
 
-  <section class="detail" aria-labelledby="cr-title" aria-busy={detailState === 'loading'}>
-    {#if detailState === 'idle'}
+  <section class="detail" aria-labelledby="cr-title" aria-busy={!currentAgent && detailState === 'loading'}>
+    {#if currentAgent}
+      {#key currentAgent.requestId}
+        <AgentRequestPanel request={currentAgent} ondecided={agentDecided} />
+      {/key}
+    {:else if detailState === 'idle'}
       {#if listState === 'ok'}
         <div class="card card-flush pad-lg">
           <EmptyState icon="git-pull-request" title="Select a change request" description="Pick a request on the left to see what it changes." />
@@ -590,6 +676,12 @@
   }
   .item-title {
     font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  .reason-line {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .item-meta {
     display: flex;

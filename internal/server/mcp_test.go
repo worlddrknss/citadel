@@ -285,11 +285,11 @@ func TestMCPTools(t *testing.T) {
 	beta.initialize(mcpLatestVersion)
 
 	r, _ := alpha.call("tools/list", map[string]any{})
-	if got := strings.Join(toolNames(t, r), ","); got != "list_credentials,http_request,reveal_credential" {
+	if got := strings.Join(toolNames(t, r), ","); got != "list_credentials,http_request,reveal_credential,request_access,get_lease" {
 		t.Errorf("alpha tools: %s", got)
 	}
 	r, _ = beta.call("tools/list", nil)
-	if got := strings.Join(toolNames(t, r), ","); got != "list_credentials,http_request" {
+	if got := strings.Join(toolNames(t, r), ","); got != "list_credentials,http_request,request_access,get_lease" {
 		t.Errorf("beta tools (no reveal grant): %s", got)
 	}
 

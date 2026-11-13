@@ -173,6 +173,43 @@ Desktop, Cursor and VS Code (`docs/agents-mcp.md`).
 - Agents' long-lived tokens can be optional: an agent may be configured to
   require federation (workload identity) only.
 
+### As built in 2.3 (approvals and leases)
+
+- **Requests** (`aar_` IDs) are opened by a `requiresApproval` grant used
+  without a lease (origin `policy`, one action) or by
+  `POST /v1/agent/access-requests` / MCP `request_access` (origin `agent`,
+  with a required reason and an optional duration). One pending request per
+  (agent, credential, actions, task ID), enforced by a partial unique index;
+  asking again returns it. Pending requests lapse after one hour; an agent
+  has at most 20. Requests may name credentials that don't exist (no
+  discovery); those can only be denied.
+- **Approvers:** a console session of the agent's owner (an editor, as for
+  managing the agent) or an account admin. Access keys can list but never
+  approve or deny. With the organization's `requireMFA`, a password session
+  sends a current TOTP (or recovery) code with the approval; SSO sessions
+  are exempt, matching `requireMFA` itself. Approving an agent that isn't
+  active is refused.
+- **Leases** (`als_` IDs) have a scope `once` (uses_left 1), `duration` or
+  `task` (bound to the request's task ID), and last the requested duration
+  or 1 hour, capped by 24 hours, the grant's `leaseTtl` and its `notAfter`.
+  A lease from an approved request also allows actions the agent has no
+  grant for (just-in-time access); with a grant, its window and rate limit
+  still apply. A `leaseTtl` grant without `requiresApproval` opens a
+  `duration` lease (created by `policy`) on first use. Leases are consumed
+  with a single row-locked `UPDATE`, unlimited leases first, then the one
+  expiring soonest; they end on expiry, revoke, agent suspend or revoke, and
+  the kill switch (not restored on resume). Revoking an agent cancels its
+  pending requests.
+- **Attribution:** `lease=` and `request=` in the `resource` of
+  `citadel.AgentHTTP` and `citadel.AgentReveal`; reveal returns `leaseId`
+  and `leaseExpiresAt`. Broker and reveal refusals are 403
+  `approval_required` with `requestId`.
+- **Notifications:** `agent.approval_requested` (with a console deep link,
+  `/app/approvals?type=agent_access&id=...`) and a new `agent.access_decided`.
+- **requireFederation** is a flag on the agent: its tokens are refused (403
+  `federation_required`) and new ones can't be issued.
+- Migration 1450: one catalog-only column on `agents` and two new tables.
+
 ## Browser agents and provider-scoped tokens (2.4)
 
 - **Logins:** `login` credentials hold username, password, URL patterns and an

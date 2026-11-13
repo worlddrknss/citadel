@@ -6,6 +6,30 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Agent approvals and leases (2.3): grants with `requiresApproval` refuse
+  use and reveal with `approval_required` and the ID of a pending access
+  request; agents can also ask for access they don't have
+  (`POST /v1/agent/access-requests`, MCP `request_access`) and poll it
+  (`GET /v1/agent/access-requests/{id}`, MCP `get_lease`,
+  `GET /v1/agent/leases`). Requests appear in the console's Approvals inbox
+  (new type *Agent access*) and on the agent's Requests tab; the agent's
+  owner or an account admin approves in a console session (never an access
+  key; with an MFA code when the organization requires MFA) once, for a
+  duration, or for the request's task, capped by 24 hours and the grant's
+  `leaseTtlSeconds`, or denies with a reason. Leases are consumed
+  atomically, attributed in the audit log (`lease=`), listed and revocable
+  on the agent's Leases tab, and end on suspension, revocation and the kill
+  switch. `leaseTtlSeconds` grants open a lease on first use. New
+  notification event `agent.access_decided`; `agent.approval_requested` now
+  fires with a console link. Agents can require workload identity
+  federation (`requireFederation`: tokens refused). API, OpenAPI,
+  regenerated TypeScript types and Go SDK methods (`AgentRequestAccess`,
+  `WaitForAgentAccess`, `AgentLeases`, `ListAgentAccessRequests`,
+  `ListAgentLeases`, `RevokeAgentLease`). Migration 1450 (one catalog-only
+  column, two new tables). See docs/agents.md, "Approvals and leases".
+
 ## [2.2.0] - 2026-11-13
 
 Credentials for AI agents: agents use secrets through Citadel without holding

@@ -12,3 +12,9 @@ func TestAgentStore(t *testing.T) {
 		return &Store{AuditHMACKey: []byte("0123456789abcdef0123456789abcdef")}
 	})
 }
+
+func TestAgentAccessStore(t *testing.T) {
+	storetest.AgentAccessStore(t, func(*testing.T) store.Store {
+		return &Store{AuditHMACKey: []byte("0123456789abcdef0123456789abcdef")}
+	})
+}

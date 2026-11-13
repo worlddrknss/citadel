@@ -24,6 +24,8 @@ export interface Agent {
   grantCount: number;
   activeTokenCount: number;
   bindingCount: number;
+  /** Agent tokens are refused; the agent authenticates with workload identity federation only. */
+  requireFederation?: boolean;
   canManage: boolean;
 }
 
@@ -139,6 +141,79 @@ export interface GrantInput {
   notAfter?: string;
   window?: GrantWindow | null;
   maxUsesPerHour?: number;
+  requiresApproval?: boolean;
+  /** 0 (not set) or 60..86400. */
+  leaseTtlSeconds?: number;
+}
+
+// ---- access requests and leases (2.3), routes_agent_access.go ----------------
+
+export type AccessRequestStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'cancelled';
+export type LeaseScope = 'once' | 'duration' | 'task';
+export type LeaseStatus = 'active' | 'expired' | 'used' | 'ended';
+
+export interface AgentLease {
+  leaseId: string;
+  agentId: string;
+  agentName?: string;
+  credential: string;
+  actions: GrantAction[];
+  scope: LeaseScope;
+  taskId?: string;
+  /** null: unlimited uses until expiry. */
+  usesLeft: number | null;
+  useCount: number;
+  expiresAt: string;
+  createdAt: string;
+  /** The approver, or "policy" for a lease opened by a grant's lease TTL. */
+  createdBy: string;
+  requestId?: string;
+  status: LeaseStatus;
+  lastUsedAt?: string;
+  endedAt?: string;
+  endedBy?: string;
+  endedReason?: string;
+  canRevoke?: boolean;
+}
+
+export interface AccessRequest {
+  requestId: string;
+  credential: string;
+  actions: GrantAction[];
+  /** The agent's own words: untrusted, render as text. */
+  reason?: string;
+  taskId?: string;
+  durationSeconds?: number;
+  origin: 'policy' | 'agent';
+  status: AccessRequestStatus;
+  createdAt: string;
+  expiresAt: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  decisionComment?: string;
+  scope?: LeaseScope;
+  agentId: string;
+  agentName: string;
+  agentOwner: string;
+  agentStatus: string;
+  leaseId?: string;
+  /** '' / absent when no credential has the requested name. */
+  credentialKind?: CredentialKind | '';
+  /** null: the agent has no grant for the credential. */
+  grant: { actions: GrantAction[]; requiresApproval: boolean; leaseTtlSeconds?: number; notAfter?: string } | null;
+  maxDurationSeconds: number;
+  canDecide: boolean;
+  cannotDecideReason?: string;
+  mfaRequired?: boolean;
+}
+
+export interface ApproveInput {
+  requestId: string;
+  scope: LeaseScope;
+  durationSeconds?: number;
+  comment?: string;
+  mfaCode?: string;
+  recoveryCode?: string;
 }
 
 const qs = (p: Record<string, string>) => new URLSearchParams(p).toString();
@@ -147,8 +222,9 @@ const post = <T>(path: string, body: unknown) => req<T>(path, { method: 'POST', 
 export const agentsApi = {
   list: () => req<{ agents: Agent[]; settings: AgentSettings; canCreate: boolean }>('/v1/agents'),
   detail: (agentId: string) => req<AgentDetail>(`/v1/agents/detail?${qs({ agentId })}`),
-  create: (body: { name: string; description?: string; owner?: string; labels?: Record<string, string> }) => post<Agent>('/v1/agents', body),
-  update: (body: { agentId: string; name: string; description?: string; owner?: string; labels?: Record<string, string> }) =>
+  create: (body: { name: string; description?: string; owner?: string; labels?: Record<string, string>; requireFederation?: boolean }) =>
+    post<Agent>('/v1/agents', body),
+  update: (body: { agentId: string; name: string; description?: string; owner?: string; labels?: Record<string, string>; requireFederation?: boolean }) =>
     post<Agent>('/v1/agents/update', body),
   remove: (agentId: string) => req<{ deleted: boolean }>(`/v1/agents?${qs({ agentId })}`, { method: 'DELETE' }),
   suspend: (agentId: string, reason = '') => post<Agent>('/v1/agents/suspend', { agentId, reason }),
@@ -173,6 +249,23 @@ export const agentsApi = {
   createCredential: (body: CredentialInput) => post<AgentCredential>('/v1/agents/credentials', body),
   updateCredential: (body: CredentialInput) => post<AgentCredential>('/v1/agents/credentials/update', body),
   deleteCredential: (name: string) => req<{ deleted: boolean }>(`/v1/agents/credentials?${qs({ name })}`, { method: 'DELETE' }),
+
+  /** Access requests, newest first: one agent's or the account's; pending only by default. */
+  accessRequests: async (opts: { agentId?: string; status?: 'pending' | 'all' } = {}) =>
+    (
+      await req<{ requests: AccessRequest[] }>(
+        `/v1/agents/access-requests?${qs({ ...(opts.agentId ? { agentId: opts.agentId } : {}), status: opts.status ?? 'pending' })}`
+      )
+    ).requests ?? [],
+  approveAccess: (body: ApproveInput) => post<{ request: AccessRequest; lease: AgentLease }>('/v1/agents/access-requests/approve', body),
+  denyAccess: (requestId: string, comment: string) => post<{ request: AccessRequest }>('/v1/agents/access-requests/deny', { requestId, comment }),
+  leases: async (opts: { agentId?: string; active?: boolean } = {}) =>
+    (
+      await req<{ leases: AgentLease[] }>(
+        `/v1/agents/leases?${qs({ ...(opts.agentId ? { agentId: opts.agentId } : {}), ...(opts.active === false ? { active: 'false' } : {}) })}`
+      )
+    ).leases ?? [],
+  revokeLease: (leaseId: string, reason = '') => post<AgentLease>('/v1/agents/leases/revoke', { leaseId, reason }),
 
   settings: () => req<AgentSettings>('/v1/agents/settings'),
   saveSettings: (agentsSuspended: boolean, reason = '') => post<AgentSettings>('/v1/agents/settings', { agentsSuspended, reason }),
@@ -243,12 +336,16 @@ export function validateGrant(g: GrantInput, kind: CredentialKind | undefined): 
     if (!HHMM_RE.test(g.window.start) || !HHMM_RE.test(g.window.end)) return 'Times are HH:MM.';
   }
   if ((g.maxUsesPerHour ?? 0) < 0 || (g.maxUsesPerHour ?? 0) > 100000) return 'Uses per hour: 0 (unlimited) to 100000.';
+  const ttl = g.leaseTtlSeconds ?? 0;
+  if (ttl !== 0 && (ttl < 60 || ttl > 86400)) return 'Lease length: 1 minute to 24 hours.';
   return '';
 }
 
 /** One-line summary of a grant's limits. */
-export function grantLimits(g: Pick<AgentGrant, 'window' | 'maxUsesPerHour' | 'notAfter'>): string {
+export function grantLimits(g: Pick<AgentGrant, 'window' | 'maxUsesPerHour' | 'notAfter'> & Partial<Pick<AgentGrant, 'requiresApproval' | 'leaseTtlSeconds'>>): string {
   const parts: string[] = [];
+  if (g.requiresApproval) parts.push('needs approval');
+  if (g.leaseTtlSeconds) parts.push(`leases ${formatDuration(g.leaseTtlSeconds)}`);
   if (g.window?.start) parts.push(`${g.window.start}–${g.window.end}${g.window.timezone ? ` ${g.window.timezone}` : ' UTC'}`);
   if (g.window?.days?.length) parts.push(g.window.days.join(', '));
   if (g.maxUsesPerHour) parts.push(`${g.maxUsesPerHour}/hour`);
@@ -262,3 +359,55 @@ export const splitList = (v: string) =>
     .split(/[\s,]+/)
     .map((s) => s.trim())
     .filter(Boolean);
+
+/** "1h 30m", "45m", "2h", "90s". */
+export function formatDuration(seconds: number): string {
+  if (!seconds || seconds < 0) return '0m';
+  if (seconds < 60) return `${seconds}s`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.round((seconds % 3600) / 60);
+  if (h && m) return `${h}h ${m}m`;
+  return h ? `${h}h` : `${m}m`;
+}
+
+/** The approval's default lease length: what the agent asked for, or an hour, never above the cap. */
+export function defaultApprovalSeconds(r: Pick<AccessRequest, 'durationSeconds' | 'maxDurationSeconds'>): number {
+  return Math.max(0, Math.min(r.durationSeconds || 3600, r.maxDurationSeconds));
+}
+
+/** Validates an approval form; '' when valid. */
+export function validateApproval(a: ApproveInput, r: Pick<AccessRequest, 'taskId' | 'maxDurationSeconds' | 'mfaRequired'>): string {
+  if (a.scope === 'task' && !r.taskId) return 'This request has no task ID.';
+  const d = a.durationSeconds ?? 0;
+  if (r.maxDurationSeconds < 60) return "The agent's grant ends in less than a minute.";
+  if (d < 60 || d > r.maxDurationSeconds) return `Length: 1 minute to ${formatDuration(r.maxDurationSeconds)}.`;
+  if (r.mfaRequired && !(a.mfaCode ?? '').trim() && !(a.recoveryCode ?? '').trim()) return 'Enter a code from your authenticator app.';
+  return '';
+}
+
+export const ACCESS_STATUS: Record<AccessRequestStatus, { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' | 'info' }> = {
+  pending: { label: 'Pending', tone: 'info' },
+  approved: { label: 'Approved', tone: 'success' },
+  denied: { label: 'Denied', tone: 'danger' },
+  expired: { label: 'Expired', tone: 'neutral' },
+  cancelled: { label: 'Cancelled', tone: 'neutral' }
+};
+
+export const LEASE_STATUS: Record<LeaseStatus, { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' }> = {
+  active: { label: 'Active', tone: 'success' },
+  expired: { label: 'Expired', tone: 'neutral' },
+  used: { label: 'Used', tone: 'neutral' },
+  ended: { label: 'Revoked', tone: 'warning' }
+};
+
+export const SCOPE_LABELS: Record<LeaseScope, string> = { once: 'Once', duration: 'For a time', task: 'For the task' };
+
+/** "in 42 min", "in 3 h", "in 2 days", or "expired" for a time in the past. */
+export function timeLeft(iso: string, now = new Date()): string {
+  const s = Math.round((Date.parse(iso) - now.getTime()) / 1000);
+  if (Number.isNaN(s)) return iso;
+  if (s <= 0) return 'expired';
+  if (s < 3600) return `in ${Math.max(1, Math.round(s / 60))} min`;
+  if (s < 2 * 86400) return `in ${Math.round(s / 3600)} h`;
+  return `in ${Math.round(s / 86400)} days`;
+}

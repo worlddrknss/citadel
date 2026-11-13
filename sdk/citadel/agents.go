@@ -24,7 +24,9 @@ type Agent struct {
 	StatusReason     string            `json:"statusReason,omitempty"`
 	GrantCount       int               `json:"grantCount"`
 	ActiveTokenCount int               `json:"activeTokenCount"`
-	CanManage        bool              `json:"canManage"`
+	// RequireFederation: agent tokens are refused (2.3).
+	RequireFederation bool `json:"requireFederation"`
+	CanManage         bool `json:"canManage"`
 }
 
 // CreateAgentInput describes a new agent. Owner defaults to the key's owner.
@@ -33,6 +35,9 @@ type CreateAgentInput struct {
 	Description string            `json:"description,omitempty"`
 	Owner       string            `json:"owner,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"`
+	// RequireFederation refuses agent tokens: the agent must authenticate
+	// with workload identity federation (2.3).
+	RequireFederation bool `json:"requireFederation,omitempty"`
 }
 
 // ListAgents lists the account's agents.
@@ -156,6 +161,11 @@ type AgentGrantInput struct {
 	NotAfter       *time.Time        `json:"notAfter,omitempty"`
 	Window         *AgentGrantWindow `json:"window,omitempty"`
 	MaxUsesPerHour int               `json:"maxUsesPerHour,omitempty"`
+	// RequiresApproval makes every use need an approved access request;
+	// LeaseTTLSeconds (60-86400) caps approvals or, without
+	// RequiresApproval, opens a lease of that length on first use (2.3).
+	RequiresApproval bool `json:"requiresApproval,omitempty"`
+	LeaseTTLSeconds  int  `json:"leaseTtlSeconds,omitempty"`
 }
 
 // PutAgentGrant creates or replaces the agent's grant for the credential and
@@ -208,8 +218,10 @@ type UsableCredential struct {
 	AllowedHosts   []string `json:"allowedHosts"`
 	AllowedMethods []string `json:"allowedMethods"`
 	Actions        []string `json:"actions"`
-	Usable         bool     `json:"usable"`
-	Reason         string   `json:"reason,omitempty"`
+	// RequiresApproval: uses need an approved access request (2.3).
+	RequiresApproval bool   `json:"requiresApproval"`
+	Usable           bool   `json:"usable"`
+	Reason           string `json:"reason,omitempty"`
 }
 
 // AgentCredentials lists the credentials the calling agent has grants for.

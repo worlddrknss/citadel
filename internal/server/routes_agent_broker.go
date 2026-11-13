@@ -62,6 +62,8 @@ type agentBrokerError struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
 	Reason  string `json:"reason,omitempty"`
+	// RequestID is the pending access request for approval_required.
+	RequestID string `json:"requestId,omitempty"`
 }
 
 func writeAgentBrokerError(w http.ResponseWriter, status int, code, reason, msg string) {
@@ -76,13 +78,15 @@ type agentFailure struct {
 	Reason     string
 	Message    string
 	RetryAfter int // seconds; 0 when none
+	// RequestID is set for approval_required.
+	RequestID string
 }
 
 func (f *agentFailure) write(w http.ResponseWriter) {
 	if f.RetryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(f.RetryAfter))
 	}
-	writeAgentBrokerError(w, f.Status, f.Code, f.Reason, f.Message)
+	writeNativeJSON(w, f.Status, agentBrokerError{Error: f.Code, Message: f.Message, Reason: f.Reason, RequestID: f.RequestID})
 }
 
 // denialFailure maps an access denial onto a response. The messages never
@@ -100,6 +104,13 @@ func denialFailure(u agentUse) *agentFailure {
 		return &agentFailure{Status: http.StatusForbidden, Code: "forbidden", Reason: u.Reason, Message: "the grant does not allow this action"}
 	case "credential_unavailable":
 		return &agentFailure{Status: http.StatusForbidden, Code: "forbidden", Reason: u.Reason, Message: "the credential's secret is not available"}
+	case agentDenyApprovalRequired:
+		if u.RequestID == "" {
+			return &agentFailure{Status: http.StatusForbidden, Code: "approval_required", Reason: u.Reason,
+				Message: "a person must approve this use, and this agent has too many pending access requests; wait for a decision"}
+		}
+		return &agentFailure{Status: http.StatusForbidden, Code: "approval_required", Reason: u.Reason, RequestID: u.RequestID,
+			Message: "a person must approve this use; poll GET /v1/agent/access-requests/" + u.RequestID + " and retry once it is approved"}
 	}
 	return &agentFailure{Status: http.StatusForbidden, Code: "forbidden", Reason: u.Reason, Message: "access to the credential is denied right now"}
 }
@@ -195,12 +206,22 @@ type agentHTTPAudit struct {
 	truncated  bool
 	redacted   bool
 	via        string
+	// lease is the lease the use was made under; request the access
+	// request an approval_required refusal opened (2.3).
+	lease   string
+	request string
 }
 
 // resource renders the audit resource: space-separated key=value pairs.
 func (a agentHTTPAudit) resource() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "credential=%s", auditToken(a.credential))
+	if a.lease != "" {
+		fmt.Fprintf(&b, " lease=%s", a.lease)
+	}
+	if a.request != "" {
+		fmt.Fprintf(&b, " request=%s", a.request)
+	}
 	if a.method != "" {
 		fmt.Fprintf(&b, " method=%s", a.method)
 	}
@@ -273,6 +294,7 @@ func (s *Server) brokerHTTP(ctx context.Context, r *http.Request, c *agentCaller
 	defer release()
 
 	use := acc.evaluate(ctx, c, req.Credential, agentActionUse)
+	ev.lease, ev.request = use.LeaseID, use.RequestID
 	if !use.Allowed {
 		f := denialFailure(use)
 		result := store.AuditResultDenied
@@ -400,6 +422,10 @@ type agentRevealResponse struct {
 	Credential string `json:"credential"`
 	Kind       string `json:"kind"`
 	Value      string `json:"value"`
+	// LeaseID and LeaseExpiresAt name the lease the reveal was made under
+	// (2.3); treat the value as valid only until then.
+	LeaseID        string `json:"leaseId,omitempty"`
+	LeaseExpiresAt string `json:"leaseExpiresAt,omitempty"`
 }
 
 // revealCredential returns the value of a credential the agent holds a
@@ -408,8 +434,15 @@ type agentRevealResponse struct {
 func (s *Server) revealCredential(ctx context.Context, r *http.Request, c *agentCaller, req agentRevealRequest, via string) (*agentRevealResponse, *agentFailure) {
 	acc := s.agentAccess()
 	rt := s.agentBrokerMetrics()
+	var use agentUse
 	record := func(result, reason string) {
 		res := "credential=" + auditToken(req.Credential) + " via=" + via
+		if use.LeaseID != "" {
+			res += " lease=" + use.LeaseID
+		}
+		if use.RequestID != "" {
+			res += " request=" + use.RequestID
+		}
 		s.recordAudit(ctx, store.AuditEvent{Action: actionAgentReveal, KeyID: req.Credential, Result: result, ErrorType: reason, AuditOrigin: withResource(acc.auditOrigin(r, c), res)})
 		rt.reveals.Inc(via, result, metricReason(reason))
 	}
@@ -423,7 +456,7 @@ func (s *Server) revealCredential(ctx context.Context, r *http.Request, c *agent
 	if f := applyTaskID(c, req.TaskID); f != nil {
 		return fail(f, store.AuditResultDenied)
 	}
-	use := acc.evaluate(ctx, c, req.Credential, agentActionReveal)
+	use = acc.evaluate(ctx, c, req.Credential, agentActionReveal)
 	if !use.Allowed {
 		f := denialFailure(use)
 		result := store.AuditResultDenied
@@ -445,7 +478,11 @@ func (s *Server) revealCredential(ctx context.Context, r *http.Request, c *agent
 	if kind == "" {
 		kind = use.Profile.Kind
 	}
-	return &agentRevealResponse{Credential: req.Credential, Kind: kind, Value: value}, nil
+	out := &agentRevealResponse{Credential: req.Credential, Kind: kind, Value: value, LeaseID: use.LeaseID}
+	if use.LeaseID != "" {
+		out.LeaseExpiresAt = fmtTime(use.LeaseExpiresAt)
+	}
+	return out, nil
 }
 
 // handleAgentReveal is POST /v1/agent/credentials/reveal.

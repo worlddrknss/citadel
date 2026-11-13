@@ -54,8 +54,15 @@ type agentUse struct {
 	// Reason is a stable denial code when not allowed.
 	Reason     string
 	RetryAfter time.Duration
-	Credential agentCredentialInfo
-	Profile    agentbroker.Profile
+	// RequestID is the pending access request when Reason is
+	// approval_required (2.3).
+	RequestID string
+	// LeaseID and LeaseExpiresAt name the lease an allowed use was made
+	// under ("" when none).
+	LeaseID        string
+	LeaseExpiresAt time.Time
+	Credential     agentCredentialInfo
+	Profile        agentbroker.Profile
 	// ref is the core's reference to the backing secret.
 	ref any
 }

@@ -49,7 +49,7 @@ func fromNullTime(t sql.NullTime) *time.Time {
 }
 
 const agentCols = `agent_id, account_id, name, description, owner, status, labels_json, created_at, created_by, updated_at,
-	last_used_at, status_changed_at, status_changed_by, status_reason`
+	last_used_at, status_changed_at, status_changed_by, status_reason, require_federation`
 
 func scanAgent(row rowScanner) (store.Agent, error) {
 	var (
@@ -58,7 +58,7 @@ func scanAgent(row rowScanner) (store.Agent, error) {
 		lastUsed, changed sql.NullTime
 	)
 	err := row.Scan(&a.AgentID, &a.AccountID, &a.Name, &a.Description, &a.Owner, &a.Status, &labels, &a.CreatedAt, &a.CreatedBy,
-		&a.UpdatedAt, &lastUsed, &changed, &a.StatusChangedBy, &a.StatusReason)
+		&a.UpdatedAt, &lastUsed, &changed, &a.StatusChangedBy, &a.StatusReason, &a.RequireFederation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.Agent{}, store.ErrAgentNotFound
 	}
@@ -81,9 +81,9 @@ func labelsJSON(m map[string]string) string {
 
 func (s *Store) CreateAgent(ctx context.Context, a store.Agent) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO agents (`+agentCols+`)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 		a.AgentID, a.AccountID, a.Name, a.Description, a.Owner, a.Status, labelsJSON(a.Labels), a.CreatedAt.UTC(), a.CreatedBy,
-		a.UpdatedAt.UTC(), agentNullTime(a.LastUsedAt), agentNullTime(a.StatusChangedAt), a.StatusChangedBy, a.StatusReason)
+		a.UpdatedAt.UTC(), agentNullTime(a.LastUsedAt), agentNullTime(a.StatusChangedAt), a.StatusChangedBy, a.StatusReason, a.RequireFederation)
 	if idnUniqueViolation(err) {
 		return store.ErrAgentExists
 	}
@@ -116,8 +116,9 @@ func (s *Store) ListAgents(ctx context.Context, accountID string) ([]store.Agent
 }
 
 func (s *Store) UpdateAgent(ctx context.Context, a store.Agent) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE agents SET name = $3, description = $4, owner = $5, labels_json = $6, updated_at = $7
-WHERE account_id = $1 AND agent_id = $2`, a.AccountID, a.AgentID, a.Name, a.Description, a.Owner, labelsJSON(a.Labels), a.UpdatedAt.UTC())
+	res, err := s.db.ExecContext(ctx, `UPDATE agents SET name = $3, description = $4, owner = $5, labels_json = $6, updated_at = $7,
+	require_federation = $8
+WHERE account_id = $1 AND agent_id = $2`, a.AccountID, a.AgentID, a.Name, a.Description, a.Owner, labelsJSON(a.Labels), a.UpdatedAt.UTC(), a.RequireFederation)
 	if idnUniqueViolation(err) {
 		return store.ErrAgentExists
 	}

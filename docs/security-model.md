@@ -97,6 +97,14 @@ of running. CI runs the full test suite in that mode.
   requests per agent are limited locally and across replicas. Secret values
   are never returned by the endpoints in 2.2's first part, and tokens never
   appear in logs, audit events or errors. See [agents.md](agents.md).
+- **Agent approvals (2.3):** approving or denying an agent's access request
+  takes a console session of the agent's owner or an account admin (never an
+  access key, never an agent credential) and, when the organization requires
+  MFA, a current second factor. Approvals create time-boxed leases capped at
+  24 hours and by the grant; a single-use lease is consumed atomically in
+  the database. Leases end on suspension, revocation and the kill switch.
+  Agents may name any credential in a request without learning whether it
+  exists. An agent can be restricted to workload identity federation.
 - **First run:** with no users, a PostgreSQL-backed instance only accepts the
   bootstrap call, which needs a one-time token: `KMS_BOOTSTRAP_TOKEN`, or one
   the first replica generates and prints in its log. Only the generated

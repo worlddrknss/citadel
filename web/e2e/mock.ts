@@ -376,6 +376,49 @@ function agentDetail(id: string) {
 }
 const agentSettings = { agentsSuspended: false };
 
+// Agent access requests and leases (2.3).
+export const ACCESS_REQUEST_ID = 'aar_aaaaaaaaaaaaaaaa';
+export const REVEAL_REQUEST_ID = 'aar_bbbbbbbbbbbbbbbb';
+export const LEASE_ID = 'als_aaaaaaaaaaaaaaaa';
+const agentAccessRequests = [
+  {
+    requestId: ACCESS_REQUEST_ID, agentId: AGENT_ID, agentName: 'claude-code', agentOwner: 'alice', agentStatus: 'active',
+    credential: 'stripe-api', credentialKind: 'http_header', actions: ['use'], taskId: 'run-42', origin: 'policy', status: 'pending',
+    createdAt: ago(5 * 60_000), expiresAt: ahead(55 * 60_000),
+    grant: { actions: ['use'], requiresApproval: true, leaseTtlSeconds: 3600 }, maxDurationSeconds: 3600, canDecide: true
+  },
+  {
+    requestId: REVEAL_REQUEST_ID, agentId: AGENT_ID, agentName: 'claude-code', agentOwner: 'alice', agentStatus: 'active',
+    credential: 'db-password', credentialKind: 'raw', actions: ['reveal'], reason: 'Run the <b>migration</b> locally', durationSeconds: 900,
+    origin: 'agent', status: 'pending', createdAt: ago(20 * 60_000), expiresAt: ahead(40 * 60_000), grant: null, maxDurationSeconds: 86400, canDecide: true
+  },
+  {
+    requestId: 'aar_cccccccccccccccc', agentId: 'agt_zyxwvutsrqponmlkjihg', agentName: 'triage-bot', agentOwner: 'bob', agentStatus: 'suspended',
+    credential: 'stripe-api', credentialKind: 'http_header', actions: ['use'], reason: 'Look up a refund', origin: 'agent', status: 'approved',
+    createdAt: ago(2 * DAY), expiresAt: ago(2 * DAY - 3_600_000), decidedAt: ago(2 * DAY - 60_000), decidedBy: 'alice', decisionComment: 'ok for today',
+    scope: 'once', leaseId: 'als_bbbbbbbbbbbbbbbb', grant: null, maxDurationSeconds: 86400, canDecide: false
+  }
+];
+const agentLeases = [
+  {
+    leaseId: LEASE_ID, agentId: AGENT_ID, agentName: 'claude-code', credential: 'stripe-api', actions: ['use'], scope: 'duration', usesLeft: null,
+    useCount: 3, expiresAt: ahead(40 * 60_000), createdAt: ago(20 * 60_000), createdBy: 'alice', requestId: 'aar_dddddddddddddddd', status: 'active',
+    lastUsedAt: ago(60_000), canRevoke: true
+  },
+  {
+    leaseId: 'als_cccccccccccccccc', agentId: AGENT_ID, agentName: 'claude-code', credential: 'db-password', actions: ['reveal'], scope: 'once', usesLeft: 0,
+    useCount: 1, expiresAt: ago(DAY - 3_600_000), createdAt: ago(DAY), createdBy: 'alice', requestId: 'aar_eeeeeeeeeeeeeeee', status: 'used', lastUsedAt: ago(DAY - 60_000)
+  }
+];
+function accessRequestsFor(q: URLSearchParams) {
+  const agent = q.get('agentId');
+  return agentAccessRequests.filter((r) => (!agent || r.agentId === agent) && (q.get('status') === 'all' || r.status === 'pending'));
+}
+function decided(body: Record<string, unknown>, status: string) {
+  const r = agentAccessRequests.find((x) => x.requestId === body.requestId) ?? agentAccessRequests[0];
+  return { ...r, status, decidedBy: me.username, decidedAt: new Date().toISOString(), decisionComment: body.comment ?? '', scope: body.scope, canDecide: false };
+}
+
 type Json = Record<string, unknown> | unknown[];
 type Handler = (q: URLSearchParams, body: Record<string, unknown>) => Json | undefined;
 
@@ -559,7 +602,11 @@ const GET: Record<string, Handler> = {
     credentials: q.get('key') ? agentCredentials.filter((c) => c.key === q.get('key')) : agentCredentials,
     canEdit: true
   }),
-  '/v1/agents/settings': () => agentSettings
+  '/v1/agents/settings': () => agentSettings,
+  '/v1/agents/access-requests': (q) => ({ requests: accessRequestsFor(q) }),
+  '/v1/agents/leases': (q) => ({
+    leases: agentLeases.filter((l) => (!q.get('agentId') || l.agentId === q.get('agentId')) && (q.get('active') === 'false' || l.status === 'active'))
+  })
 };
 
 // GET /v1/workload-identity/issuer (and the settings/rotate responses).
@@ -711,6 +758,12 @@ const WRITE: Record<string, Handler> = {
   'POST /v1/agents/credentials': (_, b) => ({ ...agentCredentials[0], ...b, grants: [] }),
   'POST /v1/agents/credentials/update': (_, b) => ({ ...agentCredentials[0], ...b }),
   'DELETE /v1/agents/credentials': () => ({ deleted: true }),
+  'POST /v1/agents/access-requests/approve': (_, b) => ({
+    request: decided(b, 'approved'),
+    lease: { ...agentLeases[0], leaseId: 'als_newnewnewnewnewne', scope: b.scope, usesLeft: b.scope === 'once' ? 1 : null, useCount: 0, requestId: b.requestId }
+  }),
+  'POST /v1/agents/access-requests/deny': (_, b) => ({ request: decided(b, 'denied') }),
+  'POST /v1/agents/leases/revoke': (_, b) => ({ ...agentLeases[0], leaseId: b.leaseId, status: 'ended', endedAt: new Date().toISOString(), endedBy: me.username, canRevoke: false }),
   'POST /v1/agents/settings': (_, b) =>
     b.agentsSuspended ? { agentsSuspended: true, suspendedAt: new Date().toISOString(), suspendedBy: me.username, reason: b.reason } : { agentsSuspended: false }
 };
@@ -913,6 +966,8 @@ export class MockApi {
   mfaEnrollmentRequired = false;
   /** GET /v1/account/mfa state. */
   mfaEnabled = false;
+  /** Approving agent access needs a current MFA code (organization policy). */
+  approvalMfa = false;
 
   constructor(opts: MockOptions = {}) {
     this.signedIn = opts.signedIn ?? true;
@@ -971,6 +1026,13 @@ export class MockApi {
       return route.fulfill({ status: 200, json: { enabled: true, recoveryCodes: mfaRecoveryCodes, ...(upgraded ? { me } : {}) } });
     }
 
+    if (method === 'POST' && path === '/v1/agents/access-requests/approve' && this.approvalMfa && body.mfaCode !== MFA_CODE) {
+      return route.fulfill(
+        body.mfaCode
+          ? { status: 403, json: { error: 'invalid_mfa_code', message: 'the MFA code is incorrect' } }
+          : { status: 403, json: { error: 'mfa_required', message: 'your organization requires a current MFA code to approve agent access' } }
+      );
+    }
     if (method === 'GET' && RAW[path]) {
       const r = RAW[path](url.searchParams);
       return route.fulfill({ status: 200, contentType: r.contentType, body: r.body });

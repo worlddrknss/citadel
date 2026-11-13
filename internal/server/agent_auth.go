@@ -82,6 +82,9 @@ const (
 	agentReasonAmbiguous         = "federation_ambiguous"
 	agentReasonRateLimited       = "rate_limited"
 	agentReasonInvalidTaskID     = "invalid_task_id"
+	// agentReasonFederationRequired: the agent requires workload identity
+	// federation and presented an agent token (2.3).
+	agentReasonFederationRequired = "federation_required"
 )
 
 // agentAuthError is a refused agent authentication. msg is safe to return;
@@ -252,6 +255,9 @@ func (s *Server) authenticateAgentToken(ctx context.Context, tok string, now tim
 			return nil, agentUnauthorized(agentReasonTokenRevoked, &agent)
 		case t.ExpiresAt != nil && !now.Before(*t.ExpiresAt):
 			return nil, agentUnauthorized(agentReasonTokenExpired, &agent)
+		case agent.RequireFederation:
+			return nil, &agentAuthError{status: http.StatusForbidden, code: "forbidden", reason: agentReasonFederationRequired,
+				msg: "this agent must authenticate with workload identity federation", agent: &agent}
 		}
 		return &AgentPrincipal{Agent: agent, AccountID: agent.AccountID, Method: agentAuthToken, TokenID: t.TokenID, TokenExpiresAt: t.ExpiresAt}, nil
 	}

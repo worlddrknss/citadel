@@ -129,6 +129,9 @@ type agentJSON struct {
 	GrantCount       int               `json:"grantCount"`
 	ActiveTokenCount int               `json:"activeTokenCount"`
 	BindingCount     int               `json:"bindingCount"`
+	// RequireFederation: agent tokens are refused; the agent authenticates
+	// with workload identity federation only.
+	RequireFederation bool `json:"requireFederation"`
 	// CanManage reports whether the caller may change the agent.
 	CanManage bool `json:"canManage"`
 }
@@ -142,6 +145,7 @@ func agentOut(a store.Agent) agentJSON {
 		AgentID: a.AgentID, Name: a.Name, Description: a.Description, Owner: a.Owner, Status: a.Status, Labels: labels,
 		CreatedAt: fmtTime(a.CreatedAt), CreatedBy: a.CreatedBy, UpdatedAt: fmtTime(a.UpdatedAt), LastUsedAt: fmtTimePtr(a.LastUsedAt),
 		StatusChangedAt: fmtTimePtr(a.StatusChangedAt), StatusChangedBy: a.StatusChangedBy, StatusReason: a.StatusReason,
+		RequireFederation: a.RequireFederation,
 	}
 }
 
@@ -204,7 +208,9 @@ type agentGrantJSON struct {
 	NotAfter       string           `json:"notAfter,omitempty"`
 	Window         *agentWindowJSON `json:"window"`
 	MaxUsesPerHour int              `json:"maxUsesPerHour"`
-	// RequiresApproval and LeaseTTLSeconds are reserved for 2.3.
+	// RequiresApproval: every use needs a lease from an approved access
+	// request. LeaseTTLSeconds caps approvals, or (without
+	// RequiresApproval) opens a lease of that length on first use.
 	RequiresApproval *bool  `json:"requiresApproval"`
 	LeaseTTLSeconds  *int   `json:"leaseTtlSeconds"`
 	CreatedAt        string `json:"createdAt"`
@@ -438,6 +444,8 @@ type agentInput struct {
 	Description string            `json:"description"`
 	Owner       string            `json:"owner"`
 	Labels      map[string]string `json:"labels"`
+	// RequireFederation is left unchanged on update when omitted.
+	RequireFederation *bool `json:"requireFederation,omitempty"`
 }
 
 // validateAgentInput checks name, description, labels and owner; it returns
@@ -495,6 +503,7 @@ func (s *Server) handleV1CreateAgent(w http.ResponseWriter, r *http.Request) {
 	a := store.Agent{
 		AccountID: acct, AgentID: store.NewAgentID(), Name: in.Name, Description: in.Description, Owner: owner,
 		Status: store.AgentStatusActive, Labels: in.Labels, CreatedAt: now, CreatedBy: sess.Principal(), UpdatedAt: now,
+		RequireFederation: in.RequireFederation != nil && *in.RequireFederation,
 	}
 	if err := s.store.CreateAgent(ctx, a); err != nil {
 		if errors.Is(err, store.ErrAgentExists) {
@@ -600,6 +609,9 @@ func (s *Server) handleV1UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.Name, a.Description, a.Owner, a.Labels, a.UpdatedAt = in.Name, in.Description, owner, in.Labels, time.Now().UTC().Truncate(time.Second)
+	if in.RequireFederation != nil {
+		a.RequireFederation = *in.RequireFederation
+	}
 	if err := s.store.UpdateAgent(ctx, a); err != nil {
 		if errors.Is(err, store.ErrAgentExists) {
 			writeNativeError(w, http.StatusConflict, "already_exists", "an agent with that name already exists")
@@ -694,6 +706,7 @@ func (s *Server) handleV1SuspendAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.SuspendAgent", KeyID: a.AgentID, Result: "ok", AuditOrigin: s.agentOrigin(r, a)})
+	s.endAgentAccess(ctx, r, a, sess.Principal(), "agent suspended", false)
 	s.writeAgent(w, sess, a)
 }
 
@@ -720,6 +733,7 @@ func (s *Server) handleV1RevokeAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.RevokeAgent", KeyID: a.AgentID, Result: "ok", AuditOrigin: s.agentOrigin(r, a)})
+	s.endAgentAccess(ctx, r, a, sess.Principal(), "agent revoked", true)
 	s.writeAgent(w, sess, a)
 }
 
@@ -756,6 +770,10 @@ func (s *Server) handleV1CreateAgentToken(w http.ResponseWriter, r *http.Request
 	}
 	if a.Status == store.AgentStatusRevoked {
 		writeNativeError(w, http.StatusConflict, "agent_revoked", "a revoked agent can't get new tokens")
+		return
+	}
+	if a.RequireFederation {
+		writeNativeError(w, http.StatusConflict, "federation_required", "this agent must authenticate with workload identity federation; turn off requireFederation to issue tokens")
 		return
 	}
 	now := time.Now().UTC().Truncate(time.Second)
@@ -958,6 +976,9 @@ type agentGrantRequest struct {
 	NotAfter       string           `json:"notAfter"`
 	Window         *agentWindowJSON `json:"window"`
 	MaxUsesPerHour int              `json:"maxUsesPerHour"`
+	// RequiresApproval and LeaseTTLSeconds (2.3); omitted means not set.
+	RequiresApproval *bool `json:"requiresApproval"`
+	LeaseTTLSeconds  *int  `json:"leaseTtlSeconds"`
 }
 
 // validateAgentGrant checks in against cred and fills g.
@@ -1046,6 +1067,18 @@ func validateAgentGrant(in agentGrantRequest, cred store.AgentCredential, g *sto
 		return "maxUsesPerHour must be 0 (unlimited) to 100000"
 	}
 	g.MaxUsesPerHour = in.MaxUsesPerHour
+	g.RequiresApproval, g.LeaseTTLSeconds = nil, nil
+	if in.RequiresApproval != nil && *in.RequiresApproval {
+		v := true
+		g.RequiresApproval = &v
+	}
+	if in.LeaseTTLSeconds != nil && *in.LeaseTTLSeconds != 0 {
+		ttl := *in.LeaseTTLSeconds
+		if ttl < minAgentLeaseSeconds || ttl > maxAgentLeaseSeconds {
+			return "leaseTtlSeconds must be 0 (not set) or 60 to 86400"
+		}
+		g.LeaseTTLSeconds = &ttl
+	}
 	return ""
 }
 
@@ -1540,6 +1573,7 @@ func (s *Server) handleV1PutAgentSettings(w http.ResponseWriter, r *http.Request
 	}
 	if in.AgentsSuspended {
 		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.SuspendAllAgents", KeyID: acct, Result: "ok", AuditOrigin: s.auditOrigin(r)})
+		s.endAccountLeases(ctx, r, acct, sess.Principal())
 	} else {
 		s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ResumeAllAgents", KeyID: acct, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	}
@@ -1583,6 +1617,8 @@ type agentUsableCredentialJSON struct {
 	Actions             []string `json:"actions"`
 	MaxUsesPerHour      int      `json:"maxUsesPerHour"`
 	NotAfter            string   `json:"notAfter,omitempty"`
+	// RequiresApproval: uses need an approved access request (2.3).
+	RequiresApproval bool `json:"requiresApproval"`
 	// Usable is false when the grant's dates or window exclude now, or the
 	// secret behind the credential is gone; Reason says why.
 	Usable bool   `json:"usable"`
@@ -1613,6 +1649,7 @@ func (s *Server) handleV1AgentCredentials(w http.ResponseWriter, r *http.Request
 		item := agentUsableCredentialJSON{
 			Name: c.Name, Kind: c.Kind, Description: c.Description, AllowedHosts: j.AllowedHosts, AllowedMethods: j.AllowedMethods,
 			AllowedPathPrefixes: j.AllowedPathPrefixes, Actions: g.Actions, MaxUsesPerHour: g.MaxUsesPerHour, NotAfter: fmtTimePtr(g.NotAfter),
+			RequiresApproval: g.RequiresApproval != nil && *g.RequiresApproval,
 		}
 		item.Reason = agentGrantStatus(g, now)
 		if item.Reason == "" {

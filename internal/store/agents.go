@@ -84,6 +84,9 @@ type Agent struct {
 	StatusChangedAt *time.Time
 	StatusChangedBy string
 	StatusReason    string
+	// RequireFederation refuses agent tokens: the agent must authenticate
+	// with workload identity federation (2.3).
+	RequireFederation bool
 }
 
 // AgentToken is an agent bearer token. Hash is a PBKDF2 hash of the secret
@@ -165,8 +168,10 @@ type AgentGrant struct {
 	Timezone    string
 	// MaxUsesPerHour limits uses of the grant; 0 means unlimited.
 	MaxUsesPerHour int
-	// RequiresApproval and LeaseTTLSeconds are reserved for 2.3 (stored,
-	// not enforced).
+	// RequiresApproval makes every action need a lease from an approved
+	// access request (2.3). LeaseTTLSeconds caps how long an approval may
+	// last; without RequiresApproval, a use opens a lease of that length
+	// automatically. nil means not set.
 	RequiresApproval *bool
 	LeaseTTLSeconds  *int
 	CreatedAt        time.Time
@@ -205,7 +210,8 @@ type AgentStore interface {
 	// LookupAgent finds an agent by ID in any account (authentication).
 	LookupAgent(ctx context.Context, agentID string) (Agent, error)
 	ListAgents(ctx context.Context, accountID string) ([]Agent, error)
-	// UpdateAgent stores name, description, owner and labels.
+	// UpdateAgent stores name, description, owner, labels and
+	// RequireFederation.
 	UpdateAgent(ctx context.Context, a Agent) error
 	// SetAgentStatus moves the agent to status (ErrAgentRevoked once
 	// revoked). Revoking also revokes every active token.
