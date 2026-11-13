@@ -113,7 +113,11 @@ func TestAgentLifecycleAndAuthentication(t *testing.T) {
 
 	// Bad task IDs, bad tokens, console sessions and access keys are refused.
 	wantStatus(t, e.do(http.MethodGet, "/v1/agent/whoami", nil, nil, bearer(tok), withHeader(AgentTaskHeader, "bad task id")), http.StatusBadRequest)
-	wantStatus(t, e.do(http.MethodGet, "/v1/agent/whoami", nil, nil, bearer(tok[:len(tok)-1]+"a")), http.StatusUnauthorized)
+	last := "a"
+	if strings.HasSuffix(tok, "a") {
+		last = "b"
+	}
+	wantStatus(t, e.do(http.MethodGet, "/v1/agent/whoami", nil, nil, bearer(tok[:len(tok)-1]+last)), http.StatusUnauthorized)
 	wantStatus(t, e.do(http.MethodGet, "/v1/agent/whoami", nil, nil, bearer("cagt_garbage")), http.StatusUnauthorized)
 	wantStatus(t, e.do(http.MethodGet, "/v1/agent/whoami", nil, bob), http.StatusUnauthorized)
 	// An agent token is not a console credential.
