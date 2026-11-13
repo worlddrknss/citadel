@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { request as pwRequest } from '@playwright/test';
 import { BASE } from './playwright.config';
 import { ORG, apiPost, expect, signIn, test } from './fixtures';
@@ -70,10 +70,15 @@ class Bridge {
   }
 }
 
-test('agent broker: REST and the MCP stdio bridge against the real server', async ({ page }) => {
-  if (!existsSync(resolve(SDK, 'dist/esm/cli.js'))) {
+/** Builds the SDK unless dist/ has this version's files. */
+function ensureSdkBuilt() {
+  if (!existsSync(resolve(SDK, 'dist/esm/cli.js')) || !existsSync(resolve(SDK, 'dist/esm/agent.js'))) {
     execFileSync('npm', ['run', 'build'], { cwd: SDK, stdio: 'inherit' });
   }
+}
+
+test('agent broker: REST and the MCP stdio bridge against the real server', async ({ page }) => {
+  ensureSdkBuilt();
   const seen: Seen = {};
   const upstream = await startUpstream(seen);
   const port = (upstream.address() as AddressInfo).port;
@@ -149,6 +154,118 @@ test('agent broker: REST and the MCP stdio bridge against the real server', asyn
     expect(http.some((e) => e.resource?.includes('via=api') && e.taskId === 'live-broker-1')).toBeTruthy();
     expect(events.some((e) => e.action === 'citadel.MCPInitialize')).toBeTruthy();
     expect(events.some((e) => e.action === 'citadel.MCPEndSession')).toBeTruthy();
+  } finally {
+    upstream.close();
+  }
+});
+
+// The parts of the built SDK (dist/esm/index.js) this spec drives. Typed
+// here so the web project doesn't typecheck the SDK's sources.
+interface SdkError extends Error {
+  status: number;
+  code: string;
+  reason?: string;
+  requestId?: string;
+  attempts: number;
+}
+interface HttpResult {
+  ok: boolean;
+  status: number;
+  redacted: boolean;
+  text(): string;
+  json<T>(): T;
+}
+interface Agent {
+  whoami(): Promise<{ agentId: string; taskId?: string }>;
+  listCredentials(): Promise<{ name: string; usable: boolean; requiresApproval: boolean }[]>;
+  http(input: { credential: string; url: string; method?: string; json?: unknown }): Promise<HttpResult>;
+  reveal(credential: string): Promise<{ value: string }>;
+  getAccessRequest(id: string): Promise<{ requestId: string; status: string; origin: string; lease?: { leaseId: string } }>;
+  waitForAccess(id: string, opts: { intervalMs: number; signal?: AbortSignal }): Promise<{ status: string; lease?: { leaseId: string } }>;
+  listLeases(input?: { credential?: string }): Promise<{ leaseId: string; credential: string; status: string }[]>;
+}
+interface Sdk {
+  CitadelAgent: new (opts: { baseUrl: string; token: string; taskId?: string }) => Agent;
+  VERSION: string;
+}
+
+test('agent broker: the TypeScript SDK (CitadelAgent) against the real server', async ({ page }) => {
+  ensureSdkBuilt();
+  const sdk = (await import(pathToFileURL(resolve(SDK, 'dist/esm/index.js')).href)) as Sdk;
+  const seen: Seen = {};
+  const upstream = await startUpstream(seen);
+  const port = (upstream.address() as AddressInfo).port;
+  const upstreamURL = `http://127.0.0.1:${port}`;
+
+  try {
+    await signIn(page, ORG.admin);
+    await apiPost(page, '/v1/secrets', { project: 'payments', env: 'dev', key: 'SDK_BROKER_API_KEY', value: SECRET });
+    for (const name of ['live-sdk-upstream', 'live-sdk-gated']) {
+      await apiPost(page, '/v1/agents/credentials', {
+        name, project: 'payments', env: 'dev', key: 'SDK_BROKER_API_KEY', kind: 'http_header',
+        headerName: 'Authorization', headerPrefix: 'Bearer ',
+        allowedHosts: [`127.0.0.1:${port}`], allowedMethods: ['GET', 'POST'], allowHttp: true, allowedCidrs: ['127.0.0.1/32']
+      });
+    }
+    const created = await apiPost(page, '/v1/agents', { name: 'live-sdk-agent', description: 'TypeScript SDK e2e' });
+    const agentId = created.agentId as string;
+    const { token } = await apiPost(page, '/v1/agents/tokens', { agentId, name: 'sdk-e2e', expiresInDays: 1 });
+    await apiPost(page, '/v1/agents/grants', { agentId, credential: 'live-sdk-upstream', actions: ['use'], maxUsesPerHour: 100 });
+    await apiPost(page, '/v1/agents/grants', { agentId, credential: 'live-sdk-gated', actions: ['use'], requiresApproval: true, leaseTtlSeconds: 600 });
+
+    const agent = new sdk.CitadelAgent({ baseUrl: BASE, token, taskId: 'live-sdk-1' });
+    const me = await agent.whoami();
+    expect(me).toMatchObject({ agentId, taskId: 'live-sdk-1' });
+    const creds = await agent.listCredentials();
+    expect(creds.map((c) => c.name).sort()).toEqual(['live-sdk-gated', 'live-sdk-upstream']);
+    expect(creds.find((c) => c.name === 'live-sdk-gated')?.requiresApproval).toBe(true);
+
+    // Brokered HTTP with a JSON body: the secret reaches the upstream, never the agent.
+    const res = await agent.http({ credential: 'live-sdk-upstream', method: 'POST', url: `${upstreamURL}/v1/sdk?x=1`, json: { hello: 'world' } });
+    expect(res.ok).toBe(true);
+    expect(res.redacted).toBe(true);
+    expect(res.text()).not.toContain(SECRET);
+    expect(res.json<{ echoed: string }>().echoed).toBe('Bearer [REDACTED]');
+    expect(seen.authorization).toBe(`Bearer ${SECRET}`);
+    expect(seen.path).toBe('/v1/sdk?x=1');
+
+    // Errors carry the stable reason.
+    const denied = (await agent.http({ credential: 'live-sdk-upstream', url: 'https://example.com/' }).catch((e: unknown) => e)) as SdkError;
+    expect(denied).toMatchObject({ status: 403, code: 'forbidden', reason: 'host_not_allowed', attempts: 1 });
+    const noReveal = (await agent.reveal('live-sdk-upstream').catch((e: unknown) => e)) as SdkError;
+    expect(noReveal).toMatchObject({ status: 403, reason: 'action_not_granted' });
+    expect(JSON.stringify(noReveal)).not.toContain(token);
+
+    // approval_required carries the request to wait for: no need to ask again.
+    const gated = (await agent.http({ credential: 'live-sdk-gated', url: `${upstreamURL}/gated` }).catch((e: unknown) => e)) as SdkError;
+    expect(gated).toMatchObject({ status: 403, code: 'approval_required', reason: 'approval_required' });
+    const requestId = gated.requestId as string;
+    expect(requestId).toMatch(/^aar_[a-z2-7]{16}$/);
+    expect(await agent.getAccessRequest(requestId)).toMatchObject({ requestId, status: 'pending', origin: 'policy' });
+
+    // A person approves once (here through the API); the agent's wait ends
+    // and the retried call runs under the lease.
+    const waiting = agent.waitForAccess(requestId, { intervalMs: 200, signal: AbortSignal.timeout(30_000) });
+    await apiPost(page, '/v1/agents/access-requests/approve', { requestId, scope: 'once', comment: 'live sdk e2e' });
+    const decided = await waiting;
+    expect(decided.status).toBe('approved');
+    const leaseId = decided.lease?.leaseId as string;
+    expect(leaseId).toBeTruthy();
+    expect((await agent.listLeases({ credential: 'live-sdk-gated' })).map((l) => l.leaseId)).toEqual([leaseId]);
+    const viaLease = await agent.http({ credential: 'live-sdk-gated', url: `${upstreamURL}/gated` });
+    expect(viaLease.ok).toBe(true);
+    expect(seen.path).toBe('/gated');
+    expect(await agent.listLeases({ credential: 'live-sdk-gated' })).toEqual([]);
+
+    // The SDK's calls are audited with the task ID and the lease, never the value.
+    const audit = await page.request.get(`/v1/audit/events?agent=${agentId}&limit=200`);
+    const auditText = await audit.text();
+    expect(audit.ok()).toBeTruthy();
+    expect(auditText).not.toContain(SECRET);
+    expect(auditText).not.toContain(token);
+    const events = JSON.parse(auditText).events as { action: string; resource?: string; taskId?: string; result: string }[];
+    const http = events.filter((e) => e.action === 'citadel.AgentHTTP');
+    expect(http.some((e) => e.taskId === 'live-sdk-1' && e.result === 'success' && e.resource?.includes(`lease=${leaseId}`))).toBeTruthy();
   } finally {
     upstream.close();
   }

@@ -6,6 +6,48 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- TypeScript SDK: `CitadelAgent`, a typed Agent API client authenticated
+  with an agent token (`CITADEL_AGENT_TOKEN`): `whoami`, `listCredentials`,
+  `http` (brokered requests; `body` as text or bytes, `json`, and a result
+  with `ok`, `text()`, `bytes()`, `json()`), `reveal`, `getTotpCode`,
+  `getLogin`, `requestAccess`, `getAccessRequest`, `waitForAccess` and
+  `listLeases`. Optional `taskId` and `agentId` are sent as
+  `X-Citadel-Task-Id` and `X-Citadel-Agent-Id`. The token is kept in a
+  private field and never appears in errors or when the client is logged.
+- Go SDK: `AgentHTTP` for brokered requests (`AgentHTTPRequest` with
+  `Body` sent as text or base64, a `JSON` helper and `TaskID`;
+  `AgentHTTPResponse` with the decoded body, `OK`, `Text` and `JSON`).
+- Both SDKs expose the Agent API's `reason` and `requestId` on errors:
+  TypeScript `CitadelError.reason`, `.requestId` and `.isApprovalRequired`;
+  Go `APIError.Reason` and `.RequestID`, `citadel.ErrorReason(err)` and
+  `citadel.ApprovalRequestID(err) (requestID string, ok bool)`. An agent can
+  wait for the access request an `approval_required` refusal opened instead
+  of asking again.
+- The TypeScript SDK sends `User-Agent: citadel-ts/<version>` (the MCP
+  bridge `citadel-mcp-bridge/<version>`) and exports `VERSION`.
+- The release workflow fails a tag whose SDK versions (Go `Version`,
+  TypeScript `VERSION`, `package.json`, `package-lock.json`) don't match it
+  (`scripts/check-sdk-version.sh`). The release steps are in
+  CONTRIBUTING.md.
+
+### Changed
+
+- SDK versions are 2.6.0, the next release (they were stuck at 2.1.0).
+- Both SDKs no longer repeat non-idempotent calls after a failure that may
+  have come after the request took effect. The broker answers 502 or 504
+  when the upstream failed or timed out, possibly after it acted, and both
+  SDKs used to retry those for every method, so a brokered POST could run
+  twice. Now 429, and 503 with `Retry-After` (which Citadel answers before
+  acting), are retried for every method; 500, 502, 504, a 503 without
+  `Retry-After`, timeouts and connection failures only for GET and HEAD (Go)
+  or GET, HEAD, PUT and DELETE (TypeScript). Brokered HTTP, reveals, TOTP
+  codes, logins and access requests are therefore not retried after those
+  failures unless the caller opts in: `retryNonIdempotent: true` in the
+  TypeScript request options, `citadel.WithRetryNonIdempotent(ctx)` in Go.
+  TypeScript previously also retried POSTs after a 500.
+
 ### Documentation
 
 - SDK docs in the console: a new **SDKs** group with
