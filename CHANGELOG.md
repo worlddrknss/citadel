@@ -6,6 +6,8 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.1.1]
+
 ### Security
 
 - Write-ahead audit: no state change takes effect without an audit record.
