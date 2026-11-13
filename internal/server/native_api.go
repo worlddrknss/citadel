@@ -66,6 +66,12 @@ func (s *Server) resolveNativeSession(w http.ResponseWriter, r *http.Request, mi
 		writeNativeError(w, http.StatusUnauthorized, "unauthorized", "session expired")
 		return nil, nil, false
 	}
+	if session.Method == store.SessionMethodMFAEnrollment && !mfaEnrollmentAllowed(r) {
+		// Restricted session: the organization requires MFA and this user
+		// has not enrolled yet.
+		writeNativeError(w, http.StatusForbidden, "mfa_enrollment_required", "set up multi-factor authentication to continue")
+		return nil, nil, false
+	}
 	if !uiRoleAtLeast(session.Role, minRole) {
 		writeNativeError(w, http.StatusForbidden, "forbidden", "insufficient role")
 		return nil, nil, false

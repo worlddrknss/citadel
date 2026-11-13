@@ -15,6 +15,11 @@ var (
 	ErrMFAAlreadyEnabled = errors.New("mfa already enabled")
 )
 
+// SessionMethodMFAEnrollment marks a restricted console session: a password
+// sign-in by a user without MFA while the organization requires it. It can
+// reach only the MFA enrolment endpoints.
+const SessionMethodMFAEnrollment = "mfa_enrollment"
+
 // MFAEnrollment is a console user's TOTP enrolment. SecretEnc is the shared
 // secret sealed with AES-GCM by the server (the store never sees it in the
 // clear). An enrolment is pending until confirmed with a valid code.
