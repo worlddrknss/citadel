@@ -171,8 +171,14 @@ func (s *Server) renewDueLECertificates(ctx context.Context, now time.Time) int 
 
 // renewLECertificate renews one claimed certificate and records the outcome.
 func (s *Server) renewLECertificate(ctx context.Context, c store.ACMELECertificate) bool {
-	actx := store.WithCallerAccount(ctx, c.AccountID)
 	origin := store.AuditOrigin{Actor: leRenewActor, ActorType: store.AuditActorSystem, AccountID: c.AccountID, Resource: c.CertID}
+	// Write-ahead audit: no renewal without an attempt record. When it can't
+	// be written the lease simply runs out and a later run retries.
+	actx, aerr := s.beginJobAudit(store.WithCallerAccount(ctx, c.AccountID), store.AuditEvent{Action: "citadel.LetsEncryptAutoRenew", KeyID: c.CertID, AuditOrigin: origin})
+	if aerr != nil {
+		log.Printf("pki: Let's Encrypt renewal of %s: skipped, the audit log is unavailable", c.CertID)
+		return false
+	}
 	domains := normalizeDomains([]string{c.Domains})
 	order := store.ACMELEOrder{
 		OrderID: cryptoutil.RandomHex(12), DirectoryURL: s.acmeLEDirectoryURL(actx), Domains: strings.Join(domains, ","),

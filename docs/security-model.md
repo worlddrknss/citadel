@@ -162,7 +162,7 @@ Where the attempt is written, per path:
 | STS `AssumeRole`, `AssumeRoleWithWebIdentity` | after the trust check, before credentials are minted | `sts.AssumeRole...` |
 | Console login, SSO login, bootstrap, logout | after credentials are verified, before the session or account is created (or deleted) | `citadel.Login`, ... |
 | ACME server | before issuing, revoking, or binding an EAB key | `citadel.ACME...` |
-| Background jobs | per key for KMS rotation and deletion; before the workload signing-key rotation and the re-wrap; for the secrets purge (per account) and certificate expiry sweeps only when there is work, so idle runs write nothing | the job's action |
+| Background jobs | per key for KMS rotation and deletion, per CA for the CA purge, per certificate for Let's Encrypt auto-renewal; before the workload signing-key rotation and the re-wrap; for the secrets purge (per account) and certificate expiry sweeps only when there is work, so idle runs write nothing | the job's action |
 
 The resource on an attempt comes from the query string, else from the
 identifying field of a JSON body (`SecretId`, `KeyId`, `name`, `arn`...).

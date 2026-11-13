@@ -174,8 +174,11 @@ func (s *Server) purgeDeletedCAs(ctx context.Context, now time.Time) int {
 		if ctx.Err() != nil {
 			break
 		}
-		actx := store.WithCallerAccount(ctx, ca.AccountID)
 		origin := store.AuditOrigin{Actor: caPurgeActor, ActorType: store.AuditActorSystem, AccountID: ca.AccountID, Resource: ca.ARN}
+		actx, aerr := s.beginJobAudit(store.WithCallerAccount(ctx, ca.AccountID), store.AuditEvent{Action: "citadel.PurgeCertificateAuthority", KeyID: ca.CAID, AuditOrigin: origin})
+		if aerr != nil {
+			continue // not attempted; the next run retries
+		}
 		ok, err := s.store.PurgeCertificateAuthority(actx, ca.CAID, now)
 		switch {
 		case err != nil:
@@ -184,6 +187,8 @@ func (s *Server) purgeDeletedCAs(ctx context.Context, now time.Time) int {
 		case ok:
 			n++
 			s.recordAudit(actx, store.AuditEvent{Action: "citadel.PurgeCertificateAuthority", KeyID: ca.CAID, Result: "ok", AuditOrigin: origin})
+		default:
+			s.finishAudit(actx, store.AuditResultError, "NotDue") // restored or purged elsewhere meanwhile
 		}
 	}
 	return n
