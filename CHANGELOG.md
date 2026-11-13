@@ -6,6 +6,15 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.1.2]
+
+### Fixed
+
+- Row "more actions" menus on the Certificates page were clipped by the table
+  when it had few rows, hiding some actions. All row menus (Certificates, KMS,
+  Parameters) now use one shared menu that floats above the page, opens upward
+  near the bottom of the screen, and follows the row when a table scrolls.
+
 ## [2.1.1]
 
 ### Security
