@@ -145,5 +145,31 @@ Include:
 - A line for [CHANGELOG.md](CHANGELOG.md) under "Unreleased" for user-facing
   changes.
 
+## Releases
+
+Releases follow semantic versioning: a minor release for new features
+(including new SDK methods), a patch release for fixes only. The Go and
+TypeScript SDKs carry the release version too.
+
+1. Open a release pull request (`release/X.Y.Z`) that:
+   - moves the "Unreleased" entries in [CHANGELOG.md](CHANGELOG.md) under
+     `## [X.Y.Z] - YYYY-MM-DD`;
+   - sets `appVersion: "X.Y.Z"` and bumps `version` in
+     [deploy/helm/citadel/Chart.yaml](deploy/helm/citadel/Chart.yaml);
+   - sets the SDK versions to `X.Y.Z`: `Version` in
+     [sdk/citadel/client.go](sdk/citadel/client.go), `VERSION` in
+     [sdk/typescript/src/version.ts](sdk/typescript/src/version.ts), and
+     `npm version X.Y.Z --no-git-tag-version` in `sdk/typescript` (updates
+     `package.json` and `package-lock.json`). Skip this when they already
+     match, for example when a feature pull request bumped them ahead of the
+     release.
+2. Check locally: `scripts/check-chart-version.sh vX.Y.Z` and
+   `scripts/check-sdk-version.sh vX.Y.Z`.
+3. Merge once CI is green, then tag the merge commit `vX.Y.Z` and push the
+   tag. The release workflow
+   ([.github/workflows/release-image.yaml](.github/workflows/release-image.yaml))
+   runs both checks first and fails without building or pushing anything if
+   the chart or an SDK version doesn't match the tag.
+
 By contributing, you agree that your contributions are licensed under the
 GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).
