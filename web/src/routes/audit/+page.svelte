@@ -11,7 +11,7 @@
   import { isNotImplemented, saveBlob } from '../http';
   import { fullTime, initials, relTime, utcStamp } from '../time';
   import StreamModal from './StreamModal.svelte';
-  import { auditApi, resultKind, type AuditFilters, type AuditPage, type AuditRow, type ChainStatus, type ResultFilter } from './api';
+  import { auditApi, legacyBreakNote, resultKind, type AuditFilters, type AuditPage, type AuditRow, type ChainStatus, type ResultFilter } from './api';
 
   const PAGE_SIZE = 50;
 
@@ -106,7 +106,6 @@
   let chain = $state<ChainStatus | null>(null);
   let chainState = $state<'loading' | 'ok' | 'unavailable' | 'error'>('loading');
   let chainError = $state('');
-  let verifying = $state(false);
 
   async function loadChain() {
     chainState = 'loading';
@@ -118,17 +117,25 @@
       chainError = errorMessage(e, "Couldn't check the chain");
     }
   }
-  async function verifyNow() {
-    verifying = true;
+  /** Which check is running: the incremental one or a full re-walk. */
+  let verifyingKind = $state<'' | 'quick' | 'full'>('');
+  const verifying = $derived(verifyingKind !== '');
+  // A full re-walk reads every event, so the server allows it to platform
+  // admins only; nobody else sees the button.
+  const canFullCheck = $derived(session.platformAdmin);
+
+  async function verifyNow(full = false) {
+    verifyingKind = full ? 'full' : 'quick';
     try {
-      chain = await auditApi.verify();
+      chain = full ? await auditApi.verifyFull() : await auditApi.verify();
       chainState = 'ok';
-      if (chain.status === 'verified') toast.success(`Chain verified through event #${(chain.verifiedThrough ?? 0).toLocaleString()}`);
-      else if (chain.status === 'broken') toast.error(`Chain broken at event #${(chain.brokenAt ?? 0).toLocaleString()}`);
+      const scope = full ? 'Full re-check: chain' : 'Chain';
+      if (chain.status === 'verified') toast.success(`${scope} verified through event #${(chain.verifiedThrough ?? 0).toLocaleString()}`);
+      else if (chain.status === 'broken') toast.error(`${scope} broken at event #${(chain.brokenAt ?? 0).toLocaleString()}`);
     } catch (e) {
-      toast.error(e, 'Verification failed');
+      toast.error(e, full ? 'Full re-check failed' : 'Verification failed');
     } finally {
-      verifying = false;
+      verifyingKind = '';
     }
   }
   onMount(loadChain);
@@ -244,10 +251,29 @@
           · head <span class="mono">{shortHash(chain.headHash)}</span>{/if}
       </span>
     </div>
-    <button type="button" class="btn btn-secondary btn-sm" onclick={verifyNow} disabled={verifying}>
-      <Icon name="rotate" size={14} />{verifying ? 'Verifying…' : 'Verify now'}
-    </button>
+    <div class="chain-actions">
+      <button type="button" class="btn btn-secondary btn-sm" onclick={() => verifyNow(false)} disabled={verifying}>
+        <Icon name="rotate" size={14} />{verifyingKind === 'quick' ? 'Verifying…' : 'Verify now'}
+      </button>
+      {#if canFullCheck}
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm"
+          onclick={() => verifyNow(true)}
+          disabled={verifying}
+          title="Re-walk every event from the start instead of continuing from the last checkpoint"
+        >
+          <Icon name="shield-check" size={14} />{verifyingKind === 'full' ? 'Re-checking…' : 'Full re-check'}
+        </button>
+      {/if}
+    </div>
   </div>
+  {#if chain.status !== 'never' && legacyBreakNote(chain)}
+    <div class="callout callout-warning legacy-note" role="note" data-testid="legacy-break-note">
+      <Icon name="alert-triangle" size={16} />
+      <span>{legacyBreakNote(chain)}</span>
+    </div>
+  {/if}
 {:else if chainState === 'unavailable'}
   <div class="banner banner-neutral" role="status">
     <Icon name="link" size={20} />
@@ -477,6 +503,14 @@
     padding: 12px 16px;
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
+  }
+  .chain-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .legacy-note {
+    margin-top: 8px;
   }
   .banner-success {
     background: var(--success-soft);

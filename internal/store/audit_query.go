@@ -56,6 +56,18 @@ type AuditVerification struct {
 	BrokenSeq   int64
 	TotalEvents int64
 	CheckedAt   time.Time
+
+	// LegacyEvents counts the pre-2.0 (HashVersion 1) events walked.
+	// LegacyLinkBreaks counts those whose PrevHash doesn't match the event
+	// before them: Citadel 1.x appended by reading the last row and then
+	// inserting, without a lock, so concurrent requests could link to the
+	// same predecessor. Such breaks are reported, not treated as a broken
+	// chain; the walk continues from the event's own hash. FirstLegacyBreak*
+	// identify the first one (0 when there is none).
+	LegacyEvents        int64
+	LegacyLinkBreaks    int64
+	FirstLegacyBreakSeq int64
+	FirstLegacyBreakID  int64
 }
 
 // AuditStreamConfig is an account's SIEM streaming configuration. TokenSealed
@@ -122,14 +134,23 @@ const auditVerifyBatch = 1000
 // previous event's MAC as its PrevHash and (for version-2 rows) a MAC that
 // recomputes under key. The walk ends by checking that the last event is the
 // chain head, which catches a truncated tail.
+//
+// One exception: a pre-2.0 (HashVersion 1) event whose PrevHash doesn't match
+// is counted in LegacyLinkBreaks and the walk continues from its own hash
+// (see AuditVerification). Gaps in the sequence, and every check on 2.0
+// events, stay strict.
 func RunAuditVerification(ctx context.Context, src AuditChainSource, key []byte, accountID string, full bool, now time.Time) (AuditVerification, error) {
 	prev, hasPrev, err := src.LoadAuditVerification(ctx, accountID)
 	if err != nil {
 		return AuditVerification{}, err
 	}
 	res := AuditVerification{AccountID: accountID, CheckedAt: now.UTC()}
-	if hasPrev && !full && prev.Status == AuditChainVerified {
+	if hasPrev && !full && prev.Status == AuditChainVerified && prev.VerifiedSeq > 0 {
 		res.VerifiedSeq, res.VerifiedID, res.VerifiedHash = prev.VerifiedSeq, prev.VerifiedID, prev.VerifiedHash
+		// The rows before the checkpoint aren't walked again; keep what the
+		// run that walked them found.
+		res.LegacyEvents, res.LegacyLinkBreaks = prev.LegacyEvents, prev.LegacyLinkBreaks
+		res.FirstLegacyBreakSeq, res.FirstLegacyBreakID = prev.FirstLegacyBreakSeq, prev.FirstLegacyBreakID
 	}
 	total, err := src.AuditEventCount(ctx, accountID)
 	if err != nil {
@@ -168,9 +189,20 @@ func RunAuditVerification(ctx context.Context, src AuditChainSource, key []byte,
 			return AuditVerification{}, err
 		}
 		for _, rec := range batch {
-			ok := rec.ChainSeq == seq+1 && rec.PrevHash == hash && rec.AccountID == accountID
-			if ok && rec.HashVersion >= AuditHashVersion {
-				ok = AuditMACValid(key, rec)
+			ok := rec.ChainSeq == seq+1 && rec.AccountID == accountID
+			linked := rec.PrevHash == hash
+			if rec.HashVersion >= AuditHashVersion {
+				// 2.0 events: strict linkage (including the first one's link
+				// to the last legacy event) and a valid MAC.
+				ok = ok && linked && AuditMACValid(key, rec)
+			} else if ok {
+				res.LegacyEvents++
+				if !linked {
+					res.LegacyLinkBreaks++
+					if res.FirstLegacyBreakSeq == 0 {
+						res.FirstLegacyBreakSeq, res.FirstLegacyBreakID = rec.ChainSeq, rec.ID
+					}
+				}
 			}
 			if !ok {
 				res.BrokenID, res.BrokenSeq = rec.ID, rec.ChainSeq

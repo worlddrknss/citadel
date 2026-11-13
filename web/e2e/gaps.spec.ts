@@ -1,4 +1,53 @@
+import type { Page } from '@playwright/test';
 import { expect, open, test } from './fixtures';
+import { me } from './mock';
+
+const LEGACY_NOTE =
+  "16 links in pre-2.0 history don't connect. This is consistent with concurrent writes in Citadel 1.x, which didn't lock the chain; events from 2.0 on are fully verified.";
+
+/** Serves a verified chain whose pre-2.0 part has 16 links that don't connect. */
+async function legacyChain(page: Page, full: string[]) {
+  await page.route('**/v1/audit/verify**', (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === 'POST' && url.searchParams.get('full') === 'true') full.push('full');
+    return route.fulfill({
+      json: {
+        status: 'verified',
+        verifiedThrough: 316700,
+        headHash: 'abcdef0123456789',
+        checkedAt: new Date().toISOString(),
+        totalEvents: 316700,
+        legacyEvents: 316652,
+        legacyLinkBreaks: 16,
+        firstLegacyBreakSeq: 1174,
+        firstLegacyBreakId: 1174
+      }
+    });
+  });
+}
+
+test('legacy link breaks: verified with an amber note on the audit page and the overview', async ({ page }) => {
+  const full: string[] = [];
+  await legacyChain(page, full);
+  await open(page, '/audit');
+  await expect(page.getByText('Chain verified through event #316,700')).toBeVisible();
+  await expect(page.getByTestId('legacy-break-note')).toHaveText(LEGACY_NOTE);
+
+  // Platform admins can run a full re-check.
+  await page.getByRole('button', { name: 'Full re-check' }).click();
+  await expect(page.getByText(/Full re-check: chain verified through event #316,700/)).toBeVisible();
+  expect(full).toEqual(['full']);
+
+  await open(page, '/');
+  await expect(page.getByTestId('overview-legacy-note')).toHaveText(LEGACY_NOTE);
+});
+
+test('the full re-check button is hidden from users who are not platform admins', async ({ page }) => {
+  await page.route('**/v1/me', (route) => route.fulfill({ json: { ...me, role: 'admin', platformAdmin: false } }));
+  await open(page, '/audit');
+  await expect(page.getByRole('button', { name: 'Verify now' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Full re-check' })).toHaveCount(0);
+});
 
 // 2.0.3 console changes against the mocked API: CA path length, workload
 // client name conflicts, parameter name rules.

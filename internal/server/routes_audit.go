@@ -195,6 +195,13 @@ type auditChainStatusJSON struct {
 	CheckedAt       string `json:"checkedAt,omitempty"`
 	BrokenAt        *int64 `json:"brokenAt,omitempty"`
 	TotalEvents     *int64 `json:"totalEvents,omitempty"`
+	// Pre-2.0 history: how many events it has, how many of their links
+	// don't connect (consistent with 1.x's unlocked appends; see
+	// store.AuditVerification), and where the first such break is.
+	LegacyEvents        *int64 `json:"legacyEvents,omitempty"`
+	LegacyLinkBreaks    *int64 `json:"legacyLinkBreaks,omitempty"`
+	FirstLegacyBreakSeq *int64 `json:"firstLegacyBreakSeq,omitempty"`
+	FirstLegacyBreakID  *int64 `json:"firstLegacyBreakId,omitempty"`
 }
 
 func toChainStatusJSON(v store.AuditVerification) auditChainStatusJSON {
@@ -208,6 +215,12 @@ func toChainStatusJSON(v store.AuditVerification) auditChainStatusJSON {
 	out.CheckedAt = v.CheckedAt.UTC().Format(time.RFC3339)
 	total := v.TotalEvents
 	out.TotalEvents = &total
+	legacy, breaks := v.LegacyEvents, v.LegacyLinkBreaks
+	out.LegacyEvents, out.LegacyLinkBreaks = &legacy, &breaks
+	if v.LegacyLinkBreaks > 0 {
+		seq, id := v.FirstLegacyBreakSeq, v.FirstLegacyBreakID
+		out.FirstLegacyBreakSeq, out.FirstLegacyBreakID = &seq, &id
+	}
 	if v.Status == store.AuditChainBroken {
 		// The event ID when the broken event exists; for a missing tail, the
 		// ID the head says should be there.
@@ -232,17 +245,22 @@ func (s *Server) handleV1AuditVerifyStatus(w http.ResponseWriter, r *http.Reques
 	writeNativeJSON(w, http.StatusOK, toChainStatusJSON(v))
 }
 
-// POST /v1/audit/verify[?full=true] — viewer (full re-walk: admin). Verifies
-// the account's chain from the last verified point (or from the start after a
-// break, or when full) and returns the result.
+// POST /v1/audit/verify[?full=true] — viewer (full re-walk: platform
+// admin). Verifies the account's chain from the last verified point (or from
+// the start after a break, or when full) and returns the result. A full walk
+// reads every event of the account, so it is reserved for platform admins.
 func (s *Server) handleV1AuditVerify(w http.ResponseWriter, r *http.Request) {
 	full := strings.EqualFold(r.URL.Query().Get("full"), "true")
 	minRole := "viewer"
 	if full {
 		minRole = "admin"
 	}
-	_, ctx, ok := s.nativeSession(w, r, minRole)
+	sess, ctx, ok := s.nativeSession(w, r, minRole)
 	if !ok {
+		return
+	}
+	if full && (!sess.PlatformAdmin || sess.ViaToken) {
+		writeNativeError(w, http.StatusForbidden, "forbidden", "a full re-check of the audit chain needs a platform admin")
 		return
 	}
 	account := s.auditAccount(ctx)
@@ -255,6 +273,8 @@ func (s *Server) handleV1AuditVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	if v.Status == store.AuditChainBroken {
 		log.Printf("AUDIT CHAIN BROKEN event=%d seq=%d", v.BrokenID, v.BrokenSeq)
+	} else if v.LegacyLinkBreaks > 0 && full {
+		log.Printf("audit chain verified; %d of %d pre-2.0 events don't link to the event before them (first at seq %d), consistent with Citadel 1.x's unlocked appends", v.LegacyLinkBreaks, v.LegacyEvents, v.FirstLegacyBreakSeq)
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.VerifyAuditChain", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, toChainStatusJSON(v))

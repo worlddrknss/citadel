@@ -15,8 +15,27 @@ All notable changes to Citadel are documented here. The format follows
   `GET /v1/certificates/detail` carry `isCA` and `pathLen` (the
   basic-constraints path length; absent when unlimited). The CA tree shows it
   for each CA and the CA drawer explains it.
+- A **Full re-check** button on the audit log for platform admins, which
+  re-walks the whole chain (`POST /v1/audit/verify?full=true`) and shows the
+  result. Other users don't see it.
+
+### Changed
+
+- `POST /v1/audit/verify?full=true` needs a platform admin (it was any
+  account admin): a full walk reads every event of the account.
 
 ### Fixed
+
+- Audit chains upgraded from 1.x showed as "broken" at the first pre-2.0
+  event whose `prev_hash` didn't connect, which 1.x's unlocked appends
+  produced under concurrent requests. Such links between pre-2.0 (hash
+  version 1) events are now counted (`legacyLinkBreaks`,
+  `firstLegacyBreakSeq`, `legacyEvents` in `GET`/`POST /v1/audit/verify`) and
+  verification continues; the chain is "verified" when everything else
+  holds, and the audit page and overview show an amber note with the count.
+  2.0 events, the link from the last pre-2.0 event to the first 2.0 one, and
+  sequence gaps stay strict. The next verification after upgrading walks the
+  chain from the start (migration 0901).
 
 - Parameter names follow AWS's rules when a parameter is created or
   overwritten (SSM `PutParameter` and `POST /v1/parameters`): names beginning

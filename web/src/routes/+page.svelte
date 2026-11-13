@@ -8,7 +8,7 @@
   import Menu from './Menu.svelte';
   import { shellApi } from './api';
   import { isNotImplemented } from './http';
-  import { auditApi, resultKind, type AuditRow, type ChainStatus } from './audit/api';
+  import { auditApi, legacyBreakNote, resultKind, type AuditRow, type ChainStatus } from './audit/api';
   import { approvalsApi } from './approvals/api';
   import { daysUntil, fullTime, relTime } from './time';
 
@@ -384,6 +384,11 @@
       {#if chain?.status === 'verified'}
         <span class="ok"><Icon name="shield-check" size={14} /></span>
         <span>Audit chain verified through event <span class="mono">#{(chain.verifiedThrough ?? 0).toLocaleString()}</span></span>
+        {#if legacyBreakNote(chain)}
+          <span class="legacy-note" data-testid="overview-legacy-note">
+            <Icon name="alert-triangle" size={14} /><span>{legacyBreakNote(chain)}</span>
+          </span>
+        {/if}
       {:else if chain?.status === 'broken'}
         <span class="danger"><Icon name="alert-triangle" size={14} /></span>
         <span class="danger">Audit chain broken at event <span class="mono">#{(chain.brokenAt ?? 0).toLocaleString()}</span></span>
@@ -690,6 +695,14 @@
   }
   .feed time {
     white-space: nowrap;
+  }
+  .legacy-note {
+    display: inline-flex;
+    flex-basis: 100%;
+    align-items: flex-start;
+    gap: 6px;
+    color: var(--warning);
+    font-size: var(--text-sm);
   }
   .sec-foot {
     display: flex;
