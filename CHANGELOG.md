@@ -8,6 +8,22 @@ All notable changes to Citadel are documented here. The format follows
 
 ### Added
 
+- `internal/providertoken` (groundwork for 2.4, no routes or UI yet): minters
+  for provider-scoped agent credentials behind one `Minter` interface:
+  AWS STS AssumeRole (real AWS or Citadel's own STS; session policy,
+  duration, external ID, session name) with server-side SigV4 signing of
+  brokered AWS requests; GitHub App installation tokens (RS256 App JWT from
+  the App's PEM key, repository and permission restrictions, GitHub
+  Enterprise base URLs); OAuth 2.0 client-credentials tokens
+  (`client_secret_basic` and `client_secret_post`, scopes, audience and
+  resource, cached until shortly before `expires_in` with deduplicated
+  concurrent fetches); and TOTP codes from otpauth:// URIs or base32 seeds
+  (SHA-256/SHA-512, 6–8 digits; SHA-1 seeds are refused with
+  `ErrSHA1Unsupported` because HMAC-SHA-1 is not allowed in FIPS 140-3
+  mode). Outbound HTTP uses the injected client, never follows redirects
+  and runs under a timeout; errors carry no tokens, keys or secrets.
+- `internal/sigv4.SignRequest`: client-side SigV4 signing, checked against
+  the AWS SDK signer.
 - TypeScript SDK: an MCP stdio bridge, `npx @worlddrknss/citadel mcp`, for
   MCP clients that only start local servers (such as Claude Desktop). It
   forwards newline-delimited JSON-RPC from stdin to Citadel's `/mcp` endpoint
