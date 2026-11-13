@@ -552,7 +552,8 @@ export const api = {
     }),
 
   // Parameter Store
-  parameters: () => req<{ parameters: Parameter[] }>('/v1/parameters'),
+  parameters: () =>
+    req<{ parameters: Parameter[]; limits?: { nameMaxLength: number; maxHierarchyLevels: number } }>('/v1/parameters'),
   putParameter: (body: {
     name: string;
     type: ParameterType;

@@ -4,15 +4,18 @@
   import Modal from '#lib/components/Modal.svelte';
   import Icon from '#lib/components/Icon.svelte';
   import { toast } from '#lib/stores/toast.svelte.ts';
-  import { params, TYPES, validateName, valueLimit, byteLength, leaf, type Param } from './api';
+  import { params, TYPES, validateName, valueLimit, byteLength, leaf, DEFAULT_LIMITS, type Param, type ParamLimits } from './api';
 
   let {
     open = $bindable(false),
     editing,
     prefix,
     kmsKeys,
+    limits = DEFAULT_LIMITS,
     onsaved
   }: {
+    /** Name limits reported by GET /v1/parameters. */
+    limits?: ParamLimits;
     open?: boolean;
     /** The parameter being edited; null creates a new one. */
     editing: Param | null;
@@ -37,7 +40,7 @@
 
   const isEdit = $derived(!!editing);
   const fullName = $derived(isEdit ? editing!.name : `${prefix}${name.trim().replace(/^\/+/, '')}`);
-  const nameError = $derived(isEdit ? '' : validateName(fullName));
+  const nameError = $derived(isEdit ? '' : validateName(fullName, limits));
   const limit = $derived(valueLimit(tier));
   const bytes = $derived(byteLength(value));
   const valueError = $derived(

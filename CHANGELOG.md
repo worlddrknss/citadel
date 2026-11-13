@@ -13,6 +13,13 @@ All notable changes to Citadel are documented here. The format follows
 
 ### Fixed
 
+- Parameter names follow AWS's rules when a parameter is created or
+  overwritten (SSM `PutParameter` and `POST /v1/parameters`): names beginning
+  with `aws` or `ssm` in any case (the first level of a hierarchy) are refused,
+  a name's full ARN can be at most 1011 characters, and a hierarchy at most 15
+  levels (SSM answers `HierarchyLevelLimitExceededException`). Names longer
+  than 2048 characters are refused by every operation. The console checks the
+  same rules with the same messages before submitting.
 - The Helm chart's `appVersion` (the default image tag) was still 2.0.0; it
   is now 2.0.2. The release workflow fails before building an image when
   `Chart.yaml` `appVersion` doesn't match the tag being released

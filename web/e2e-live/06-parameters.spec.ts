@@ -76,3 +76,35 @@ test('viewer cannot reveal SecureString values unless the account allows it', as
   await expect(page.getByRole('complementary', { name: 'url' }).getByText('https://v2.example.com')).toBeVisible();
   await page.waitForLoadState('networkidle');
 });
+
+test('reserved, too deep and too long names are refused in the form and by the server', async ({ page }) => {
+  await signIn(page, ORG.editor);
+  await open(page, '/parameters');
+  await page.waitForLoadState('networkidle');
+  await page.getByRole('button', { name: 'Create parameter' }).first().click();
+  const dlg = page.getByRole('dialog', { name: 'Create parameter' });
+  const name = dlg.getByRole('textbox').first();
+  await dlg.getByLabel('Value').fill('v');
+  await name.fill('SSM-config');
+  await dlg.getByRole('button', { name: 'Create parameter' }).click();
+  await expect(dlg.getByText('Parameter names can\'t begin with "aws" or "ssm" (in any case).')).toBeVisible();
+  await name.fill('a/'.repeat(15) + 'leaf');
+  await expect(dlg.getByText('A parameter hierarchy can have a maximum of 15 levels.')).toBeVisible();
+  await name.fill('n'.repeat(1000));
+  await expect(dlg.getByText(/Parameter names can be at most \d+ characters/)).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dlg).toBeHidden();
+
+  // The server applies the same rules and wording.
+  for (const [n, msg] of [
+    ['/aws/x', 'Parameter names can\'t begin with "aws" or "ssm" (in any case).'],
+    ['/a'.repeat(16), 'A parameter hierarchy can have a maximum of 15 levels.']
+  ]) {
+    const res = await page.request.post('/v1/parameters', {
+      data: { name: n, type: 'String', value: 'v' },
+      headers: { 'X-Citadel-Request': '1' }
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).message).toBe(msg);
+  }
+});
