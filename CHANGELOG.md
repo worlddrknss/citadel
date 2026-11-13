@@ -6,6 +6,11 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Images are published for `linux/arm64` as well as `linux/amd64`, built by
+  cross-compiling (both are FIPS builds).
+
 ## [2.0.2]
 
 ### Changed

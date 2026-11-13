@@ -6,20 +6,24 @@ ARG BASE_IMAGE=ghcr.io/worlddrknss/debian-fips-base:3.5.4-pqc
 
 # The web console is built here, from source, so an image can never ship a
 # stale UI.
-FROM ${NODE_IMAGE} AS web
+# Platform-independent output: build it once, natively.
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY web/ ./
 RUN npm run build
 
-FROM ${GO_IMAGE} AS build
+# Cross-compile on the build machine's own architecture (no emulation).
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /web/build/ ./cmd/server/webdist/
-RUN CGO_ENABLED=0 GOOS=linux GOFIPS140=certified go build -trimpath -o /out/citadel ./cmd/server
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} GOFIPS140=certified go build -trimpath -o /out/citadel ./cmd/server
 
 FROM ${BASE_IMAGE}
 COPY --from=build /out/citadel /citadel
