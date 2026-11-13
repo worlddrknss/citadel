@@ -143,6 +143,9 @@ Supported actions and known differences from AWS are listed in
 | Production deployment | [docs/deployment.md](docs/deployment.md) |
 | AWS API compatibility | [docs/aws-compatibility.md](docs/aws-compatibility.md) |
 | Security model | [docs/security-model.md](docs/security-model.md) |
+| Native API reference (OpenAPI 3.1) | [docs/openapi.yaml](docs/openapi.yaml), served at `GET /v1/openapi.yaml` and rendered in the console under Help, API reference |
+| Go SDK | [sdk/citadel/README.md](sdk/citadel/README.md) |
+| TypeScript SDK (`@worlddrknss/citadel`, Next.js) | [sdk/typescript/README.md](sdk/typescript/README.md) |
 | Release notes | [CHANGELOG.md](CHANGELOG.md) |
 
 ## Project layout
@@ -156,7 +159,8 @@ Supported actions and known differences from AWS are listed in
 | `internal/config`, `internal/sigv4`, `internal/cryptoutil`, `internal/metrics` | Configuration, SigV4 verification, crypto helpers, Prometheus exporter |
 | `web` | The SvelteKit web console |
 | `deploy` | Helm chart and Docker Compose stack |
-| `sdk` | Go client library |
+| `sdk` | Client libraries: Go (`sdk/citadel`) and TypeScript (`sdk/typescript`) |
+| `docs` | Documentation, including the OpenAPI description of the native API |
 
 ## Contributing
 

@@ -6,6 +6,44 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- An OpenAPI 3.1 description of the native `/v1` API,
+  [`docs/openapi.yaml`](docs/openapi.yaml), covering all 151 operations with
+  their parameters, request and response schemas, the `{error, message}` error
+  shape, authentication (session cookie with `X-Citadel-Request`, or a bearer
+  access key), the role each operation needs (`x-citadel-role`) and the audit
+  action it records (`x-citadel-audit`). It is served unauthenticated at
+  `GET /v1/openapi.yaml`, also in bootstrap mode, since it holds no data. A
+  test fails if the document and the registered routes drift apart, if a role
+  or audit action disagrees with its handler, or if the TypeScript SDK's
+  generated types are stale.
+- An **API reference** page in the console (Help menu and command palette)
+  that renders the spec: operations grouped by tag, with expandable schemas
+  and a filter. It is built in, with no third-party bundle.
+- The Go SDK (`sdk/citadel`), rebuilt against the spec: projects,
+  environments, folders, secrets (with versions), parameters, KMS
+  encrypt/decrypt and keys, certificates and workload identity tokens, with
+  configuration from the environment, per-attempt timeouts, retries on 429
+  and 5xx with jittered backoff honouring `Retry-After`, and typed errors that
+  expose the API error code. Its tests run against the real server.
+- A TypeScript SDK, `@worlddrknss/citadel` (`sdk/typescript`), for Node 18+
+  and edge runtimes with no runtime dependencies: types generated from the
+  spec, an ergonomic client, retries and timeouts, typed errors, a server-only
+  guard, and `loadSecrets()` for Next.js (TTL cache with
+  stale-while-revalidate, `revalidate`, optional `process.env` injection).
+  CI builds and tests it in a new `sdk-ts` job.
+- The in-memory store supports access keys, so bearer-token authentication
+  works against it in local development and tests.
+
+### Security
+
+- `npm audit` in `web/` still reports four low-severity findings for
+  GHSA-gcqx-w48m-w2h4 (deepmerge, via `@sveltejs/vite-plugin-svelte`). No
+  patched deepmerge exists (4.3.1 is the latest and is affected), so no
+  override is possible; the plugin uses it only to merge Svelte config at
+  build time.
+
 ## [2.0.3]
 
 ### Added

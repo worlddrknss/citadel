@@ -1,3 +1,12 @@
+# OpenAPI 3.1 description of Citadel's native /v1 API.
+#
+# Keep this file in the YAML subset that internal/server/yaml_subset_test.go
+# and web/src/lib/yaml.ts parse (the repository takes no YAML dependency):
+# 2-space indentation; block mappings and sequences; plain, "double" or
+# 'single' quoted scalars; `|` literal blocks; flow style only for [], {} and
+# one-line lists of scalars; full-line comments only; no anchors or tags.
+# internal/server/openapi_test.go checks it against the registered routes.
+# After editing, run `npm run generate` in sdk/typescript.
 openapi: 3.1.0
 info:
   title: Citadel native API
