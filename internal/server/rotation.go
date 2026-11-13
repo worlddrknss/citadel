@@ -358,17 +358,30 @@ func (s *Server) startRotation(ctx context.Context, account, name, trigger, toke
 		return "", errRotationInProgress
 	}
 	meta, err := s.store.DescribeSecret(ctx, name)
-	if err == nil {
-		if p := store.PendingRotationToken(meta); p != "" {
-			token = p // resume the unfinished rotation, as AWS does
+	if err != nil {
+		_ = s.store.ReleaseSecretRotation(ctx, name, owner)
+		return "", err
+	}
+	if trigger == "schedule" {
+		// The due list may be stale: another replica can have finished this
+		// rotation between our listing and our claim. Re-check under the
+		// lease.
+		rot, err := s.store.GetSecretRotation(ctx, name)
+		if err != nil {
+			_ = s.store.ReleaseSecretRotation(ctx, name, owner)
+			return "", err
 		}
+		rot.LeaseUntil = nil
+		if !store.RotationIsDue(meta, &rot, time.Now().UTC()) {
+			_ = s.store.ReleaseSecretRotation(ctx, name, owner)
+			return "", errRotationInProgress
+		}
+	}
+	if p := store.PendingRotationToken(meta); p != "" {
+		token = p // resume the unfinished rotation, as AWS does
 	}
 	if token == "" {
 		token = cryptoutil.RandomHex(16)
-	}
-	if err != nil {
-		_ = s.store.SaveSecretRotationState(ctx, name, owner, store.SecretRotationStateUpdate{Status: store.RotationStatusNever, LastAttemptAt: time.Now().UTC()})
-		return "", err
 	}
 	if async {
 		s.jobs.Go("secret-rotation", ctx, rotationTimeout, func(bg context.Context) {

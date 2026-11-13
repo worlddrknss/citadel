@@ -176,6 +176,19 @@ func (s *Store) SaveSecretRotationState(ctx context.Context, secretID, owner str
 	return nil
 }
 
+func (s *Store) ReleaseSecretRotation(ctx context.Context, secretID, owner string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	secret, err := s.findSecret(ctx, secretID)
+	if err != nil {
+		return err
+	}
+	if r := secret.rotation; r != nil && r.LeaseOwner == owner {
+		r.LeaseOwner, r.LeaseUntil = "", nil
+	}
+	return nil
+}
+
 func cloneTime(t *time.Time) *time.Time {
 	if t == nil {
 		return nil

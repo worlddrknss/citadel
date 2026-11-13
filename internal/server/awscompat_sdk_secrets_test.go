@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -183,6 +184,65 @@ func TestSDKSecretsManager(t *testing.T) {
 			t.Fatalf("rotation not enabled: %+v", d)
 		}
 		must[*secretsmanager.CancelRotateSecretOutput](t)(c.CancelRotateSecret(ctx, &secretsmanager.CancelRotateSecretInput{SecretId: aws.String("rotating")}))
+	})
+
+	t.Run("built-in rotation", func(t *testing.T) {
+		created := must[*secretsmanager.CreateSecretOutput](t)(c.CreateSecret(ctx, &secretsmanager.CreateSecretInput{Name: aws.String("builtin"), SecretString: aws.String("old")}))
+		rotator := "arn:citadel:rotator:" + harnessRegion + ":" + harnessAccount + ":random"
+		_, err := c.RotateSecret(ctx, &secretsmanager.RotateSecretInput{SecretId: aws.String("builtin"), RotationLambdaARN: aws.String(rotator),
+			RotationRules: &smtypes.RotationRulesType{ScheduleExpression: aws.String("cron(0 25 * * ? *)")}})
+		wantCode(t, err, "InvalidParameterException")
+		_, err = c.RotateSecret(ctx, &secretsmanager.RotateSecretInput{SecretId: aws.String("builtin"),
+			RotationLambdaARN: aws.String("arn:citadel:rotator:" + harnessRegion + ":999999999999:random")})
+		wantCode(t, err, "InvalidParameterException")
+
+		out := must[*secretsmanager.RotateSecretOutput](t)(c.RotateSecret(ctx, &secretsmanager.RotateSecretInput{
+			SecretId: aws.String("builtin"), RotationLambdaARN: aws.String(rotator),
+			RotationRules: &smtypes.RotationRulesType{ScheduleExpression: aws.String("rate(10 days)"), Duration: aws.String("3h")},
+		}))
+		token := aws.ToString(out.VersionId)
+		if token == "" {
+			t.Fatal("RotateSecret returned no VersionId")
+		}
+		var cur *secretsmanager.GetSecretValueOutput
+		for i := 0; i < 500; i++ {
+			cur = must[*secretsmanager.GetSecretValueOutput](t)(c.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{SecretId: aws.String("builtin")}))
+			if aws.ToString(cur.VersionId) == token {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if aws.ToString(cur.VersionId) != token || aws.ToString(cur.SecretString) == "old" || len(aws.ToString(cur.SecretString)) != 32 {
+			t.Fatalf("after rotation: %s %q", aws.ToString(cur.VersionId), aws.ToString(cur.SecretString))
+		}
+		prev := must[*secretsmanager.GetSecretValueOutput](t)(c.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{SecretId: aws.String("builtin"), VersionStage: aws.String("AWSPREVIOUS")}))
+		if aws.ToString(prev.VersionId) != aws.ToString(created.VersionId) || aws.ToString(prev.SecretString) != "old" {
+			t.Fatalf("AWSPREVIOUS = %s", aws.ToString(prev.VersionId))
+		}
+		d := must[*secretsmanager.DescribeSecretOutput](t)(c.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{SecretId: aws.String("builtin")}))
+		if d.LastRotatedDate == nil || d.NextRotationDate == nil || d.RotationRules == nil ||
+			aws.ToString(d.RotationRules.ScheduleExpression) != "rate(10 days)" || aws.ToString(d.RotationRules.Duration) != "3h" ||
+			aws.ToString(d.RotationLambdaARN) != rotator {
+			t.Fatalf("DescribeSecret = %+v", d)
+		}
+		if stages := d.VersionIdsToStages[token]; len(stages) != 1 || stages[0] != "AWSCURRENT" {
+			t.Fatalf("stages of the new version = %v", stages)
+		}
+		if want := d.LastRotatedDate.UTC().AddDate(0, 0, 10); d.NextRotationDate.UTC().Day() != want.Day() || d.NextRotationDate.UTC().Hour() != 0 {
+			t.Fatalf("NextRotationDate = %v", d.NextRotationDate)
+		}
+
+		// A Lambda ARN is recorded but nothing runs (schedule only).
+		must[*secretsmanager.CreateSecretOutput](t)(c.CreateSecret(ctx, &secretsmanager.CreateSecretInput{Name: aws.String("lambda"), SecretString: aws.String("x")}))
+		lo := must[*secretsmanager.RotateSecretOutput](t)(c.RotateSecret(ctx, &secretsmanager.RotateSecretInput{SecretId: aws.String("lambda"),
+			RotationLambdaARN: aws.String("arn:aws:lambda:us-east-1:123456789012:function:rotate"), RotationRules: &smtypes.RotationRulesType{AutomaticallyAfterDays: aws.Int64(30)}}))
+		if aws.ToString(lo.VersionId) != "" {
+			t.Fatalf("Lambda rotation returned VersionId %s", aws.ToString(lo.VersionId))
+		}
+		ld := must[*secretsmanager.DescribeSecretOutput](t)(c.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{SecretId: aws.String("lambda")}))
+		if len(ld.VersionIdsToStages) != 1 || aws.ToInt64(ld.RotationRules.AutomaticallyAfterDays) != 30 {
+			t.Fatalf("Lambda schedule = %+v", ld)
+		}
 	})
 
 	t.Run("BatchGetSecretValue", func(t *testing.T) {

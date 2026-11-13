@@ -161,6 +161,8 @@ type SecretRotationStore interface {
 	// SaveSecretRotationState stores upd if owner holds the lease
 	// (ErrRotationLeaseLost otherwise).
 	SaveSecretRotationState(ctx context.Context, secretID, owner string, upd SecretRotationStateUpdate) error
+	// ReleaseSecretRotation gives up owner's lease without changing state.
+	ReleaseSecretRotation(ctx context.Context, secretID, owner string) error
 	// ListDueSecretRotations returns, across all accounts, secrets with a
 	// built-in rotator whose next window or retry has come and whose lease
 	// is free.

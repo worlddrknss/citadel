@@ -299,6 +299,16 @@ WHERE account_id = $1 AND secret_name = $2 AND lease_owner = $3`,
 	return tx.Commit()
 }
 
+func (s *Store) ReleaseSecretRotation(ctx context.Context, secretID, owner string) error {
+	meta, err := s.loadSecretMetadata(ctx, secretID)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE sm_secret_rotations SET lease_owner = '', lease_until = NULL WHERE account_id = $1 AND secret_name = $2 AND lease_owner = $3`,
+		s.accountForContext(ctx), meta.Name, owner)
+	return err
+}
+
 func (s *Store) ListDueSecretRotations(ctx context.Context, now time.Time, limit int) ([]store.DueSecretRotation, error) {
 	if limit <= 0 {
 		limit = 100
