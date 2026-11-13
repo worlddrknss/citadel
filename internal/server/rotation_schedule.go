@@ -190,7 +190,7 @@ type cronExpr struct {
 	minutes, hours  uint64 // bit i set: value i allowed
 	dom             uint64 // bits 1..31
 	domLast         bool
-	domAny          bool // "?"
+	domAny          bool   // "?"
 	months          uint64 // bits 1..12
 	dow             uint64 // bits 0..6 (Sunday = 0)
 	dowAny          bool   // "?"
