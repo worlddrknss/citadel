@@ -132,8 +132,10 @@ type listSecretsRequest struct {
 	// External Secrets Operator's dataFrom.find: it lists, then reads every
 	// match, and one pending delete failed the whole ExternalSecret.
 	IncludePlannedDeletion bool `json:"IncludePlannedDeletion"`
-	// SortOrder is "asc" (default) or "desc"; secrets are ordered by name.
+	// SortOrder is "asc" (default) or "desc"; secrets are ordered by name,
+	// so SortBy may only be "name" (or omitted).
 	SortOrder string `json:"SortOrder"`
+	SortBy    string `json:"SortBy"`
 }
 
 type listSecretsResponse struct {
@@ -655,6 +657,11 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", "SortOrder must be asc or desc")
+		return
+	}
+	if req.SortBy != "" && req.SortBy != "name" {
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
+		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", "SortBy must be name: Citadel lists secrets by name")
 		return
 	}
 	after, err := decodeListMarker(markerKind, req.NextToken)
