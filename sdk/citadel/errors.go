@@ -23,11 +23,15 @@ const (
 	CodeKeyDisabled      = "key_disabled"
 	CodeInvalidState     = "invalid_state"
 	CodeInternalError    = "internal_error"
+	// CodeUpstreamError is an Agent API failure reaching or using the
+	// upstream (see APIError.Reason, e.g. "upstream_timeout").
+	CodeUpstreamError = "upstream_error"
 )
 
 // APIError is a non-2xx response from the API. The API's error body is
 // {"error": "<code>", "message": "<text>"}; Code is the stable,
-// machine-readable part.
+// machine-readable part. The Agent API adds "reason" and, for
+// approval_required, "requestId".
 type APIError struct {
 	// StatusCode is the HTTP status.
 	StatusCode int
@@ -40,20 +44,33 @@ type APIError struct {
 	Method, Path string
 	// RetryAfter is the server's Retry-After hint, when it sent one.
 	RetryAfter time.Duration
+	// Reason is the Agent API's stable denial or failure reason, such as
+	// "no_grant", "host_not_allowed", "approval_required" or
+	// "upstream_timeout". Empty for the rest of the API.
+	Reason string
+	// RequestID is the pending access request to poll when Code is
+	// "approval_required" on the Agent API (see ApprovalRequestID). Empty
+	// when the agent already has too many pending requests.
+	RequestID string
 }
 
 func (e *APIError) Error() string {
+	if e.Reason != "" && e.Reason != e.Code {
+		return fmt.Sprintf("citadel: %s %s: %d %s (%s): %s", e.Method, e.Path, e.StatusCode, e.Code, e.Reason, e.Message)
+	}
 	return fmt.Sprintf("citadel: %s %s: %d %s: %s", e.Method, e.Path, e.StatusCode, e.Code, e.Message)
 }
 
 func newAPIError(method, path string, resp *rawResponse) *APIError {
 	e := &APIError{StatusCode: resp.status, Method: method, Path: path, RetryAfter: parseRetryAfter(resp.header.Get("Retry-After"))}
 	var body struct {
-		Error   string `json:"error"`
-		Message string `json:"message"`
+		Error     string `json:"error"`
+		Message   string `json:"message"`
+		Reason    string `json:"reason"`
+		RequestID string `json:"requestId"`
 	}
 	if json.Unmarshal(resp.body, &body) == nil && body.Error != "" {
-		e.Code, e.Message = body.Error, body.Message
+		e.Code, e.Message, e.Reason, e.RequestID = body.Error, body.Message, body.Reason, body.RequestID
 	} else {
 		e.Code = fmt.Sprintf("http_%d", resp.status)
 		e.Message = http.StatusText(resp.status)
@@ -71,6 +88,31 @@ func ErrorCode(err error) string {
 	return ""
 }
 
+// ErrorReason returns the Agent API's denial or failure reason of err (an
+// *APIError, possibly wrapped), such as "no_grant" or "upstream_timeout",
+// or "" when there is none.
+func ErrorReason(err error) string {
+	var e *APIError
+	if errors.As(err, &e) {
+		return e.Reason
+	}
+	return ""
+}
+
+// ApprovalRequestID reports whether err is approval_required and returns
+// the access request the server opened for it. On the Agent API, wait for
+// it with WaitForAgentAccess and retry the call once it is approved. The ID
+// is "" when the agent already has too many pending requests, and for a
+// change to an environment with an approval policy (also
+// approval_required; submit a change request instead).
+func ApprovalRequestID(err error) (requestID string, ok bool) {
+	var e *APIError
+	if errors.As(err, &e) && e.Code == CodeApprovalRequired {
+		return e.RequestID, true
+	}
+	return "", false
+}
+
 // IsNotFound reports whether err is a 404 from the API.
 func IsNotFound(err error) bool { return statusOf(err) == http.StatusNotFound }
 
@@ -83,7 +125,8 @@ func IsUnauthorized(err error) bool { return statusOf(err) == http.StatusUnautho
 func IsForbidden(err error) bool { return statusOf(err) == http.StatusForbidden }
 
 // IsApprovalRequired reports whether the change targets an environment with
-// an approval policy; submit a change request instead.
+// an approval policy (submit a change request instead), or an agent's use
+// needs a person's approval (see ApprovalRequestID for the request).
 func IsApprovalRequired(err error) bool { return ErrorCode(err) == CodeApprovalRequired }
 
 // IsRateLimited reports whether the call was still rate limited after the

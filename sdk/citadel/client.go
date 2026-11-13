@@ -10,8 +10,15 @@
 //
 // Every method takes a context for cancellation and deadlines. Failed
 // requests return an *APIError carrying the HTTP status and the API's stable
-// error code; see IsNotFound and the other helpers. Rate-limited (429) and
-// transient server failures are retried with exponential backoff and jitter.
+// error code; see IsNotFound and the other helpers.
+//
+// Failures are retried with exponential backoff and jitter, but only where a
+// retry cannot repeat a side effect: 429, and 503 with Retry-After (the
+// server refused before acting), for every method; 500, 502, 504, timeouts
+// and connection failures only for GET and HEAD. A POST such as AgentHTTP,
+// AgentReveal or AgentRequestAccess is not repeated after those failures,
+// since the broker may already have called the upstream; opt in per call
+// with WithRetryNonIdempotent.
 //
 // The package uses only the Go standard library.
 package citadel
@@ -32,8 +39,10 @@ import (
 	"time"
 )
 
-// Version is the SDK version, sent in the User-Agent header.
-const Version = "2.1.0"
+// Version is the SDK version, sent in the User-Agent header. It is the
+// Citadel release the SDK ships with; the release workflow
+// (scripts/check-sdk-version.sh) fails a tag it doesn't match.
+const Version = "2.6.0"
 
 // Environment variables read by New when the Config leaves a field empty.
 const (
@@ -66,7 +75,8 @@ type Config struct {
 	// a method bounds the whole call, retries included.
 	Timeout time.Duration
 	// MaxRetries is how many times a retryable failure is retried (default
-	// 3). Set a negative value to disable retries.
+	// 3). Set a negative value to disable retries. Which failures are
+	// retryable is described in the package documentation.
 	MaxRetries int
 	// RetryBaseDelay and RetryMaxDelay shape the exponential backoff
 	// (defaults 200ms and 5s). Delays use full jitter; a Retry-After header
@@ -184,6 +194,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
+	repeatable := safeMethod(method) || retryNonIdempotent(ctx)
 	for attempt := 0; ; attempt++ {
 		resp, err := c.attempt(ctx, method, u, payload)
 		if err != nil {
@@ -192,7 +203,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 			}
 			// Transport failures may have reached the server; retry only
 			// requests that are safe to repeat.
-			if attempt < c.maxRetries && safeMethod(method) {
+			if attempt < c.maxRetries && repeatable {
 				if werr := c.sleep(ctx, c.backoff(attempt, 0)); werr != nil {
 					return werr
 				}
@@ -210,7 +221,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 			return nil
 		}
 		apiErr := newAPIError(method, path, resp)
-		if attempt < c.maxRetries && retryable(method, resp.status) {
+		if attempt < c.maxRetries && retryable(repeatable, resp.status, resp.header.Get("Retry-After") != "") {
 			if werr := c.sleep(ctx, c.backoff(attempt, apiErr.RetryAfter)); werr != nil {
 				return werr
 			}
@@ -259,15 +270,38 @@ func safeMethod(m string) bool {
 	return m == http.MethodGet || m == http.MethodHead
 }
 
-// retryable reports whether a failed response is worth retrying. 429, 502,
-// 503 and 504 mean the request was not processed and are retried for every
-// method; a 500 is retried only for reads, since a write may have happened.
-func retryable(method string, status int) bool {
+type retryNonIdempotentKey struct{}
+
+// WithRetryNonIdempotent returns a context under which the client also
+// retries non-idempotent calls (POST, such as AgentHTTP, AgentReveal or
+// AgentRequestAccess) after a 500, 502, 504, timeout or connection failure.
+// Those failures can happen after the server or the upstream acted (the
+// broker answers 502 or 504 when the upstream failed or timed out, possibly
+// after it changed something), so opt in only for calls you know are safe
+// to repeat.
+func WithRetryNonIdempotent(ctx context.Context) context.Context {
+	return context.WithValue(ctx, retryNonIdempotentKey{}, true)
+}
+
+func retryNonIdempotent(ctx context.Context) bool {
+	v, _ := ctx.Value(retryNonIdempotentKey{}).(bool)
+	return v
+}
+
+// retryable reports whether a failed response is worth retrying. Citadel
+// answers 429 (rate limits) and 503 with Retry-After (a busy broker) before
+// acting, so those are retried for every method. A 500, 502, 504 or a 503
+// without Retry-After (say, from a proxy) may come after the request had an
+// effect, so they are retried only when repeatable (GET and HEAD, or opted
+// in with WithRetryNonIdempotent).
+func retryable(repeatable bool, status int, hasRetryAfter bool) bool {
 	switch status {
-	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+	case http.StatusTooManyRequests:
 		return true
-	case http.StatusInternalServerError:
-		return safeMethod(method)
+	case http.StatusServiceUnavailable:
+		return repeatable || hasRetryAfter
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusGatewayTimeout:
+		return repeatable
 	}
 	return false
 }
