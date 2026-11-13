@@ -7055,6 +7055,158 @@ paths:
             $ref: "#/components/responses/TooManyRequests"
           "500":
             $ref: "#/components/responses/InternalError"
+    /v1/agents/credentials/login:
+      get:
+        operationId: getAgentLogin
+        tags: [Agents]
+        summary: Read a login credential's state (and a live TOTP preview)
+        description: |
+          The login's username and whether a password and TOTP seed are set,
+          never their values. With `code=true` the response includes the
+          current TOTP code, for the console's live preview. Needs the editor
+          role and permission to reveal values; audited.
+        x-citadel-role: editor
+        x-citadel-audit: citadel.ReadAgentLogin
+        parameters:
+          - name: name
+            in: query
+            required: true
+            schema:
+              type: string
+          - name: code
+            in: query
+            required: false
+            schema:
+              type: string
+              enum: ["true", "false"]
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentLoginState"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+      post:
+        operationId: putAgentLogin
+        tags: [Agents]
+        summary: Set a login credential's username, password and TOTP seed
+        description: |
+          Writes a new version of the login's secret (a secret in the project
+          hierarchy). Omitted fields keep their values; the TOTP seed is
+          write-only. A seed Citadel can't compute codes for is refused:
+          `totp_sha1_unsupported` for HMAC-SHA-1 seeds (not an approved
+          algorithm in FIPS 140-3 mode), `invalid_totp_seed` otherwise.
+          Protected environments need a change request, as for any secret write.
+        x-citadel-role: editor
+        x-citadel-audit: citadel.PutAgentLogin
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentLoginInput"
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentLoginState"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/anomalies:
+      get:
+        operationId: listAgentAnomalies
+        tags: [Agents]
+        summary: An agent's anomalies, alert settings and baseline
+        description: |
+          The last 100 anomalies (new host, off-hours use, rate spike, repeated
+          denials), the agent's alert settings and the baseline learned from
+          its last 14 days of activity.
+        x-citadel-role: viewer
+        parameters:
+          - name: agentId
+            in: query
+            required: true
+            schema:
+              type: string
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentAnomalies"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/anomaly-settings:
+      post:
+        operationId: putAgentAnomalySettings
+        tags: [Agents]
+        summary: Turn an agent's anomaly alerts and auto-suspend on or off
+        description: |
+          Alerts are on and auto-suspend is off by default. With auto-suspend,
+          an anomaly suspends the agent (audited as citadel.SuspendAgent by
+          the anomaly detector). The agent's owner or an account admin.
+        x-citadel-role: editor
+        x-citadel-audit: citadel.PutAgentAnomalySettings
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentAnomalySettingsInput"
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentAnomalySettings"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
     /v1/agents/settings:
       get:
         operationId: getAgentSettings
@@ -7540,8 +7692,11 @@ paths:
         description: |
           Returns the secret value behind a credential. Only works with a grant
           that explicitly includes the `reveal` action; prefer brokered use.
-          For `http_basic` and `login` credentials the value is the stored
-          JSON document. The disclosure is audited (`citadel.AgentReveal`)
+          For `http_basic` credentials the value is the stored JSON document,
+          for `login` credentials JSON `{username, password}` (never the TOTP
+          seed). Minted credentials (`aws_sts`, `github_app`,
+          `oauth2_client_credentials`) return a freshly minted or cached
+          short-lived token with `expiresAt`, never the source material. The disclosure is audited (`citadel.AgentReveal`)
           before the value is returned; the response is never cached.
           Grants with `requiresApproval` answer `approval_required` with a
           `requestId` until a person approves; a reveal under a lease returns
@@ -7573,6 +7728,91 @@ paths:
           "429":
             $ref: "#/components/responses/AgentError"
           "500":
+            $ref: "#/components/responses/AgentError"
+    /v1/agent/totp:
+      post:
+        operationId: agentGetTOTPCode
+        tags: [Agent API]
+        summary: The current TOTP code of a login credential
+        description: |
+          Needs a grant with the `totp` action. Returns the code (RFC 6238,
+          SHA-256 or SHA-512) and how long it stays current; never the seed.
+          SHA-1 seeds are refused with `totp_sha1_unsupported` (409): Citadel
+          runs in FIPS 140-3 mode, where HMAC-SHA-1 is not approved. A login
+          without a seed answers `totp_not_configured` (409). Audited as
+          `citadel.AgentTOTP` before the code is returned.
+        x-citadel-role: agent
+        x-citadel-audit: citadel.AgentTOTP
+        security:
+          - agentToken: []
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentTOTPRequest"
+        responses:
+          "200":
+            description: The code
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentTOTPCode"
+          "400":
+            $ref: "#/components/responses/AgentError"
+          "401":
+            $ref: "#/components/responses/AgentError"
+          "403":
+            $ref: "#/components/responses/AgentError"
+          "409":
+            $ref: "#/components/responses/AgentError"
+          "429":
+            $ref: "#/components/responses/AgentError"
+          "500":
+            $ref: "#/components/responses/AgentError"
+          "502":
+            $ref: "#/components/responses/AgentError"
+    /v1/agent/login:
+      post:
+        operationId: agentGetLogin
+        tags: [Agent API]
+        summary: A login's username and password for a page
+        description: |
+          Needs a grant with the `reveal` action. `url` is the absolute https
+          URL of the page the login is for; it must match one of the
+          credential's `urlPatterns` (`url_not_allowed` otherwise). Audited as
+          `citadel.AgentGetLogin` with the page's host and path (never the
+          query) before the login is returned; never cached.
+        x-citadel-role: agent
+        x-citadel-audit: citadel.AgentGetLogin
+        security:
+          - agentToken: []
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentLoginRequest"
+        responses:
+          "200":
+            description: The login
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentLogin"
+          "400":
+            $ref: "#/components/responses/AgentError"
+          "401":
+            $ref: "#/components/responses/AgentError"
+          "403":
+            $ref: "#/components/responses/AgentError"
+          "409":
+            $ref: "#/components/responses/AgentError"
+          "429":
+            $ref: "#/components/responses/AgentError"
+          "500":
+            $ref: "#/components/responses/AgentError"
+          "502":
             $ref: "#/components/responses/AgentError"
 components:
   securitySchemes:
@@ -10868,6 +11108,8 @@ components:
         reason:
           type: string
           description: Why the grant is not usable now (not_yet_valid, grant_expired, outside_window)
+        scope:
+          $ref: "#/components/schemas/AgentGrantScope"
     AgentGrantRequest:
       type: object
       required: [agentId, credential]
@@ -10899,6 +11141,8 @@ components:
         leaseTtlSeconds:
           type: integer
           description: 0 (not set) or 60 to 86400. Caps approvals; without requiresApproval, the first use opens a lease of this length
+        scope:
+          $ref: "#/components/schemas/AgentGrantScope"
     AgentDetail:
       type: object
       required: [agent, tokens, bindings, grants]
@@ -10949,7 +11193,7 @@ components:
           type: string
         kind:
           type: string
-          enum: [http_header, http_basic, http_query, login, raw]
+          enum: [http_header, http_basic, http_query, login, raw, aws_sts, github_app, oauth2_client_credentials]
         description:
           type: string
         allowedHosts:
@@ -10990,6 +11234,303 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AgentCredentialGrantRef"
+        login:
+          $ref: "#/components/schemas/AgentLoginConfig"
+        awsSts:
+          $ref: "#/components/schemas/AgentAWSSTSConfig"
+        githubApp:
+          $ref: "#/components/schemas/AgentGitHubAppConfig"
+        oauth2:
+          $ref: "#/components/schemas/AgentOAuth2Config"
+    AgentLoginConfig:
+      type: object
+      description: Login settings. urlPatterns are https://host[:port][/path], the host optionally *.example.com.
+      required: [urlPatterns]
+      properties:
+        urlPatterns:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+        totpAlgorithm:
+          type: string
+          description: For a bare base32 totpSeed (an otpauth URI carries its own); SHA1 is refused in FIPS mode
+          enum: ["", SHA256, SHA512]
+        totpDigits:
+          type: integer
+          description: 0 (6) or 6 to 8
+        totpPeriod:
+          type: integer
+          description: 0 (30) or 10 to 300 seconds
+    AgentAWSSTSConfig:
+      type: object
+      description: AssumeRole with the source keys in the secret (JSON {accessKeyId, secretAccessKey, sessionToken?}).
+      required: [roleArn]
+      properties:
+        roleArn:
+          type: string
+        endpoint:
+          type: string
+          description: STS endpoint (empty - AWS's global endpoint)
+        region:
+          type: string
+        externalId:
+          type: string
+        sessionName:
+          type: string
+        sessionPolicy:
+          type: string
+          description: Inline session policy JSON (at most 2048 bytes); grants may set one only when this is empty
+        durationSeconds:
+          type: integer
+          description: 0 (1 hour) or 900 to 43200
+        signingService:
+          type: string
+          description: AWS service to SigV4-sign brokered requests for (for example s3); empty means reveal only
+        signingRegion:
+          type: string
+          description: Signing region (default region, then us-east-1)
+    AgentGitHubAppConfig:
+      type: object
+      description: Installation tokens minted with the App private key in the secret (PEM).
+      required: [appId, installationId]
+      properties:
+        appId:
+          type: string
+        installationId:
+          type: integer
+          format: int64
+        baseUrl:
+          type: string
+          description: REST API base (empty - https://api.github.com)
+        repositories:
+          type: array
+          description: Default repositories (names without the owner); grants may narrow them
+          items:
+            type: string
+        permissions:
+          type: object
+          description: Default permissions (name to read, write or admin); grants may lower them
+          additionalProperties:
+            type: string
+    AgentOAuth2Config:
+      type: object
+      description: Client-credentials tokens; the secret holds the client secret or JSON {clientId, clientSecret}.
+      required: [tokenUrl]
+      properties:
+        tokenUrl:
+          type: string
+        clientId:
+          type: string
+        clientAuth:
+          type: string
+          enum: ["", basic, post]
+        scopes:
+          type: array
+          items:
+            type: string
+        audience:
+          type: string
+        resource:
+          type: string
+        headerName:
+          type: string
+          description: Header brokered requests carry the token in (default Authorization)
+        headerPrefix:
+          type: string
+          description: Prefix before the token (default "Bearer ")
+    AgentGrantScope:
+      type: object
+      description: |
+        Narrows a minted credential's tokens for this grant. github_app -
+        repositories and permissions (a subset of the credential's defaults;
+        required when the credential has none). aws_sts - sessionPolicy (only
+        when the credential has none). oauth2_client_credentials - scopes (a
+        subset of the credential's).
+      properties:
+        repositories:
+          type: array
+          items:
+            type: string
+        permissions:
+          type: object
+          additionalProperties:
+            type: string
+        sessionPolicy:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+    AgentTOTPRequest:
+      type: object
+      required: [credential]
+      properties:
+        credential:
+          type: string
+        taskId:
+          type: string
+    AgentTOTPCode:
+      type: object
+      required: [credential, code, expiresAt, secondsRemaining, digits, period, algorithm]
+      properties:
+        credential:
+          type: string
+        code:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        secondsRemaining:
+          type: integer
+        digits:
+          type: integer
+        period:
+          type: integer
+        algorithm:
+          type: string
+    AgentLoginRequest:
+      type: object
+      required: [credential, url]
+      properties:
+        credential:
+          type: string
+        url:
+          type: string
+          description: The absolute https URL of the page the login is for
+        taskId:
+          type: string
+    AgentLogin:
+      type: object
+      required: [credential, username, password, urlPattern]
+      properties:
+        credential:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+        urlPattern:
+          type: string
+          description: The credential's pattern the page matched
+    AgentLoginState:
+      type: object
+      required: [name, username, hasPassword, hasTotpSeed]
+      properties:
+        name:
+          type: string
+        username:
+          type: string
+        hasPassword:
+          type: boolean
+        hasTotpSeed:
+          type: boolean
+        totpStatus:
+          type: string
+          enum: ["", ok, sha1_unsupported, invalid]
+        totpMessage:
+          type: string
+        totp:
+          $ref: "#/components/schemas/AgentTOTPCode"
+    AgentLoginInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+        totpSeed:
+          type: string
+          description: An otpauth://totp/ URI or a base32 seed (write-only)
+        clearTotpSeed:
+          type: boolean
+    AgentAnomaly:
+      type: object
+      required: [anomalyId, kind, detail, detectedAt, suspended]
+      properties:
+        anomalyId:
+          type: string
+        kind:
+          type: string
+          enum: [new_host, off_hours, rate_spike, repeated_denials]
+        detail:
+          type: string
+        detectedAt:
+          type: string
+          format: date-time
+        suspended:
+          type: boolean
+          description: The agent was suspended automatically
+    AgentAnomalySettings:
+      type: object
+      required: [alertsEnabled, autoSuspend]
+      properties:
+        alertsEnabled:
+          type: boolean
+        autoSuspend:
+          type: boolean
+        updatedAt:
+          type: string
+          format: date-time
+        updatedBy:
+          type: string
+    AgentAnomalySettingsInput:
+      type: object
+      required: [agentId]
+      properties:
+        agentId:
+          type: string
+        alertsEnabled:
+          type: boolean
+        autoSuspend:
+          type: boolean
+    AgentBaseline:
+      type: object
+      required: [established, events, hosts, activeHours, meanPerHour, windowDays, rateSpikeMin, rateSpikeFactor, denialsWindowMinutes, denialsThreshold]
+      properties:
+        established:
+          type: boolean
+          description: Enough history (20 uses over more than two days) for new-host and off-hours alerts
+        events:
+          type: integer
+        hosts:
+          type: array
+          items:
+            type: string
+        activeHours:
+          type: array
+          description: UTC hours of day the agent has worked in
+          items:
+            type: integer
+        meanPerHour:
+          type: number
+        windowDays:
+          type: integer
+        rateSpikeMin:
+          type: integer
+        rateSpikeFactor:
+          type: integer
+        denialsWindowMinutes:
+          type: integer
+        denialsThreshold:
+          type: integer
+    AgentAnomalies:
+      type: object
+      required: [anomalies, settings, baseline, canManage]
+      properties:
+        anomalies:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentAnomaly"
+        settings:
+          $ref: "#/components/schemas/AgentAnomalySettings"
+        baseline:
+          $ref: "#/components/schemas/AgentBaseline"
+        canManage:
+          type: boolean
     AgentCredentialList:
       type: object
       required: [credentials, canEdit]
@@ -11020,7 +11561,7 @@ components:
           type: string
         kind:
           type: string
-          enum: [http_header, http_basic, http_query, login, raw]
+          enum: [http_header, http_basic, http_query, login, raw, aws_sts, github_app, oauth2_client_credentials]
         description:
           type: string
         allowedHosts:
@@ -11047,6 +11588,14 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: "#/components/schemas/AgentLoginConfig"
+        awsSts:
+          $ref: "#/components/schemas/AgentAWSSTSConfig"
+        githubApp:
+          $ref: "#/components/schemas/AgentGitHubAppConfig"
+        oauth2:
+          $ref: "#/components/schemas/AgentOAuth2Config"
     AgentSettings:
       type: object
       required: [agentsSuspended]
@@ -11133,6 +11682,11 @@ components:
           type: boolean
         reason:
           type: string
+        urlPatterns:
+          type: array
+          description: Login credentials only - the pages the login may be used on
+          items:
+            type: string
     AgentUsableCredentialList:
       type: object
       required: [credentials]
@@ -11644,10 +12198,18 @@ components:
           type: string
         kind:
           type: string
-          description: The credential kind (http_header, http_basic, http_query, login, raw)
+          description: The credential kind (http_header, http_basic, http_query, login, raw, aws_sts, github_app, oauth2_client_credentials)
         value:
           type: string
-          description: The secret value
+          description: |
+            The secret value. Login credentials give JSON {username, password}
+            (never the TOTP seed); minted credentials give the short-lived
+            token (aws_sts - an AWS credential_process JSON document), never
+            the source material.
+        expiresAt:
+          type: string
+          format: date-time
+          description: When a minted token stops working
         leaseId:
           type: string
           description: The lease the reveal was made under (approvals and leaseTtl grants)
