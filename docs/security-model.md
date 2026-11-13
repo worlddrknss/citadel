@@ -41,6 +41,9 @@ of running. CI runs the full test suite in that mode.
 | Derived keys | HKDF-SHA-256 from a deployment root secret |
 | Console passwords | PBKDF2-HMAC-SHA-256, 600,000 iterations |
 | Session tokens | 256-bit random; only a SHA-256 hash is stored |
+| Console MFA (TOTP) | RFC 6238 with HMAC-SHA-256 (see below); 160-bit secrets sealed with AES-256-GCM under an HKDF-derived key, bound to the username |
+| MFA recovery codes | 60 random bits each; stored as PBKDF2-HMAC-SHA-256 hashes (20,000 iterations) |
+| MFA pending-login tokens | HMAC-SHA-256 signed, 5-minute, single-use |
 | Audit chain | HMAC-SHA-256 |
 | Request signing | AWS SigV4 (HMAC-SHA-256) |
 
@@ -58,6 +61,27 @@ of running. CI runs the full test suite in that mode.
   provider with PKCE, state and nonce. Sessions are server-side, expire after
   an idle and an absolute timeout, and can be revoked. The cookie is
   `HttpOnly`, `SameSite=Strict`, `Secure`, and `__Host-` prefixed.
+- **Two-step verification (TOTP):** users can add an authenticator app (My
+  account → Security). A correct password then returns only a pending-login
+  token, with no session; `POST /v1/login/mfa` with the token and a 6-digit
+  code (or a single-use recovery code) creates the session. Codes are
+  accepted for the current 30-second step and one either side, and each step
+  works once: the last accepted step is stored per user. Attempts are rate
+  limited per user and per client address (shared across replicas with
+  PostgreSQL) and repeated failures lock the user out with exponential
+  backoff. Turning it off or creating new recovery codes needs the current
+  password and a code. The organization setting **requireMFA** sends
+  password sign-ins without MFA to a restricted session that can only enrol.
+  Single sign-on is exempt (the identity provider handles MFA), and access
+  keys are unaffected. An admin can reset a user's MFA (lost device), which
+  signs the user out everywhere.
+
+  The codes use HMAC-SHA-256, not the HMAC-SHA-1 most authenticator apps
+  default to: Go's FIPS module refuses SHA-1 HMAC in `fips140=only` mode
+  (Citadel tests this). The enrolment QR code carries `algorithm=SHA256`, so
+  the app must support SHA-256; 1Password, Authy and Microsoft Authenticator
+  do. The QR code is drawn in the browser; the secret never leaves the page
+  or reaches a third party, and is never returned again after enrolment.
 - **Native API tokens:** console access keys sent as bearer tokens act with
   their owner's role in the key's account, never more, and never with
   platform-admin rights.
@@ -149,8 +173,8 @@ multicast addresses and doesn't follow redirects.
 
 - With PostgreSQL, rate limits on sign-in, first-run setup, SSO and the
   workload token endpoint are shared across replicas (see "Rate limits" in
-  [configuration.md](configuration.md)); the failed sign-in lockout and
-  other limits (ACME, audit export) remain per replica. Shared counters fail
+  [configuration.md](configuration.md)); the failed sign-in and MFA lockouts
+  and other limits (ACME, audit export) remain per replica. Shared counters fail
   open if the database is unavailable.
 - Let's Encrypt HTTP-01 challenge responses are held in memory by the
   replica running the order. Behind several replicas, the CA's validation

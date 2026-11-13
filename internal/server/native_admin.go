@@ -98,6 +98,9 @@ func (s *Server) handleV1Login(w http.ResponseWriter, r *http.Request) {
 	a.failUser.Reset(userKey)
 	a.failIP.Reset(ip)
 	s.rehashOnLogin(r.Context(), user, req.Password)
+	if s.mfaAfterPassword(w, r, user, accountID) {
+		return
+	}
 
 	sess, err := s.issueConsoleSession(r.Context(), w, r, user.Username, accountID, store.SessionMethodPassword)
 	if err != nil {
@@ -475,6 +478,7 @@ type nativeUser struct {
 	Accounts      []string           `json:"accounts"`
 	Memberships   []nativeMembership `json:"memberships"`
 	PlatformAdmin bool               `json:"platformAdmin"`
+	MFAEnabled    bool               `json:"mfaEnabled"`
 }
 
 // adminCanManageUser reports whether sess may modify or delete user: platform
@@ -525,10 +529,11 @@ func (s *Server) handleV1ListUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		slices.SortFunc(users, func(a, b store.UIUser) int { return strings.Compare(a.Username, b.Username) })
 	}
+	mfaOn := s.mfaEnabledSet(ctx)
 	out := make([]nativeUser, 0, len(users))
 	for _, u := range users {
 		ms := s.userMemberships(ctx, u)
-		nu := nativeUser{Username: u.Username, DisplayName: u.DisplayName, Role: store.NormalizeUIRole(u.Role), Accounts: []string{}, Memberships: []nativeMembership{}, PlatformAdmin: s.isPlatformAdmin(u)}
+		nu := nativeUser{Username: u.Username, DisplayName: u.DisplayName, Role: store.NormalizeUIRole(u.Role), Accounts: []string{}, Memberships: []nativeMembership{}, PlatformAdmin: s.isPlatformAdmin(u), MFAEnabled: mfaOn[u.Username]}
 		for _, m := range ms {
 			if !sess.PlatformAdmin && m.AccountID != sess.AccountID {
 				continue

@@ -10,6 +10,7 @@
   import { toast } from '#lib/stores/toast.svelte.ts';
   import { confirm } from '#lib/stores/confirm.svelte.ts';
   import OnceSecret from './OnceSecret.svelte';
+  import SecurityPanel from './SecurityPanel.svelte';
   import { accountApi, describeAgent, relTime, type SignInSession } from './api';
 
   const MAX_KEYS = 2;
@@ -225,7 +226,7 @@ export AWS_ENDPOINT_URL=${typeof location !== 'undefined' ? location.origin : ''
   const roleTone = (r?: string) => (r === 'admin' ? 'info' : r === 'editor' ? 'success' : 'neutral') as 'info' | 'success' | 'neutral';
 </script>
 
-<PageHeader title="My account" description="Your profile, password, API access keys and signed-in sessions." />
+<PageHeader title="My account" description="Your profile, password, two-step verification, API access keys and signed-in sessions." />
 
 <div class="grid">
   <section class="card" aria-labelledby="profile-title">
@@ -306,6 +307,8 @@ export AWS_ENDPOINT_URL=${typeof location !== 'undefined' ? location.origin : ''
     {/if}
   </section>
 </div>
+
+<SecurityPanel sso={sessions.find((x) => x.current)?.method === 'sso'} />
 
 <section class="card block" aria-labelledby="keys-title">
   <div class="card-head">

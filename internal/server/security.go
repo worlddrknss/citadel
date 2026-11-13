@@ -115,7 +115,7 @@ func (s *Server) withCSRFProtection(next http.Handler) http.Handler {
 
 func (s *Server) needsCSRFHeader(r *http.Request) bool {
 	switch r.URL.Path {
-	case "/v1/login", "/v1/logout", "/v1/bootstrap":
+	case "/v1/login", "/v1/login/mfa", "/v1/logout", "/v1/bootstrap":
 		return true
 	}
 	return s.sessionToken(r) != ""

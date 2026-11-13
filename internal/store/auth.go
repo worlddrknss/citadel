@@ -55,8 +55,11 @@ type OrgSettings struct {
 	// lifetimes when non-zero.
 	SessionIdleMinutes int
 	SessionMaxHours    int
-	UpdatedAt          time.Time // zero when never saved
-	UpdatedBy          string
+	// RequireMFA forces password sign-ins without a second factor through
+	// TOTP enrolment before they get a full session (SSO is exempt).
+	RequireMFA bool
+	UpdatedAt  time.Time // zero when never saved
+	UpdatedBy  string
 }
 
 // SSOProvider is a console single sign-on (OIDC) provider. The client secret

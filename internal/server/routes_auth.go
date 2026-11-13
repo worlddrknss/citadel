@@ -40,6 +40,9 @@ func (s *Server) registerAuthRoutes(mux *http.ServeMux) {
 type authMeResponse struct {
 	nativeMeResponse
 	PlatformAdmin bool `json:"platformAdmin"`
+	// MFAEnrollmentRequired marks a restricted session that must enrol in
+	// MFA before anything else (organization policy requireMFA).
+	MFAEnrollmentRequired bool `json:"mfaEnrollmentRequired,omitempty"`
 }
 
 func meResponse(sess *uiSession) authMeResponse {
@@ -55,7 +58,8 @@ func meResponse(sess *uiSession) authMeResponse {
 			AccountID:   sess.AccountID,
 			Accounts:    accounts,
 		},
-		PlatformAdmin: sess.PlatformAdmin,
+		PlatformAdmin:         sess.PlatformAdmin,
+		MFAEnrollmentRequired: sess.Method == store.SessionMethodMFAEnrollment,
 	}
 }
 
@@ -494,6 +498,7 @@ type orgSettingsJSON struct {
 	ApprovalMinApprovers int      `json:"approvalMinApprovers"`
 	SessionIdleMinutes   int      `json:"sessionIdleMinutes"`
 	SessionMaxHours      int      `json:"sessionMaxHours"`
+	RequireMFA           bool     `json:"requireMFA"`
 	UpdatedAt            string   `json:"updatedAt,omitempty"`
 	UpdatedBy            string   `json:"updatedBy,omitempty"`
 }
@@ -505,6 +510,7 @@ func (s *Server) orgSettingsJSON(ctx context.Context, st store.OrgSettings) orgS
 		ApprovalMinApprovers: max(st.ApprovalMinApprovers, 1),
 		SessionIdleMinutes:   int(idle / time.Minute),
 		SessionMaxHours:      int(abs / time.Hour),
+		RequireMFA:           st.RequireMFA,
 		UpdatedBy:            st.UpdatedBy,
 	}
 	if out.ApprovalEnvironments == nil {
@@ -589,6 +595,7 @@ func (s *Server) handleV1PutOrgSettings(w http.ResponseWriter, r *http.Request) 
 		ApprovalMinApprovers: req.ApprovalMinApprovers,
 		SessionIdleMinutes:   req.SessionIdleMinutes,
 		SessionMaxHours:      req.SessionMaxHours,
+		RequireMFA:           req.RequireMFA,
 		UpdatedAt:            time.Now().UTC().Truncate(time.Second),
 		UpdatedBy:            sess.Username,
 	}

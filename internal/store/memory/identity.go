@@ -54,6 +54,7 @@ func (s *Store) DeleteUIUser(_ context.Context, username string) error {
 	}
 	delete(s.uiUsers, username)
 	delete(s.members, username)
+	s.deleteMFALocked(username)
 	for id, sess := range s.sessions {
 		if sess.Username == username {
 			delete(s.sessions, id)

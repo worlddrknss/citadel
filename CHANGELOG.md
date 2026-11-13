@@ -35,6 +35,34 @@ All notable changes to Citadel are documented here. The format follows
   CI builds and tests it in a new `sdk-ts` job.
 - The in-memory store supports access keys, so bearer-token authentication
   works against it in local development and tests.
+- Two-step verification (TOTP, RFC 6238) for console password sign-in.
+  Users set it up under My account → Security: the browser draws the QR code
+  locally, a code confirms it, and ten single-use recovery codes are shown
+  once (copy or download). Sign-in then asks for a 6-digit code (or a
+  recovery code) after the password: `POST /v1/login` returns
+  `{mfaRequired, mfaToken}` and `POST /v1/login/mfa` creates the session.
+  Codes are single-use per 30-second step, attempts are rate limited per
+  user and per IP (deployment-wide with PostgreSQL) with lockout, and
+  turning it off or creating new recovery codes needs the password and a
+  code. Codes use HMAC-SHA-256 (`algorithm=SHA256`), because FIPS 140-only
+  mode refuses SHA-1: the authenticator app must support SHA-256 (1Password,
+  Authy and Microsoft Authenticator do).
+- Organization setting **Require two-step verification** (`requireMFA` in
+  `/v1/admin/settings`): password sign-ins without MFA get a session that can
+  only enrol. Single sign-on and access keys are exempt.
+- Admins can reset a user's two-step verification from Administration →
+  People (type the username to confirm); the user is signed out everywhere.
+  The users list shows who has it on (`mfaEnabled`).
+- Audit events `citadel.MFAEnrollStart`, `citadel.MFAEnroll`,
+  `citadel.MFADisable`, `citadel.MFAReset`, `citadel.MFARecoveryCodesRegenerate`,
+  `citadel.LoginMFA` (success and failure) and `citadel.MFARecoveryCodeUsed`.
+- Migration `1000_console_mfa` (new tables and one constant-default column;
+  instant on large databases).
+
+### Changed
+
+- Turning on two-step verification signs the user out of their other
+  sessions.
 
 ### Security
 
@@ -43,6 +71,7 @@ All notable changes to Citadel are documented here. The format follows
   patched deepmerge exists (4.3.1 is the latest and is affected), so no
   override is possible; the plugin uses it only to merge Svelte config at
   build time.
+||||||| parent of 78292cb (docs: two-step verification (TOTP), requireMFA, MFA rate limits; changelog)
 
 ## [2.0.3]
 

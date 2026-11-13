@@ -232,6 +232,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/change-requests/approve", s.handleV1ApproveChangeRequest)
 	mux.HandleFunc("POST /v1/change-requests/reject", s.handleV1RejectChangeRequest)
 	s.registerSecretsRoutes(mux)
+	s.registerMFARoutes(mux)
 
 	// Native session + self-service + master-admin actions (replace the legacy
 	// html/template admin pages).
