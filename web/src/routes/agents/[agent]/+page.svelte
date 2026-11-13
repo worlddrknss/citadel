@@ -19,9 +19,17 @@
   import { fullTime, relTime } from '../../time';
   import { agentMenu } from '../actions';
   import GrantModal from './GrantModal.svelte';
+  import AccessDecisionModal from '../AccessDecisionModal.svelte';
   import {
+    ACCESS_STATUS,
+    LEASE_STATUS,
+    SCOPE_LABELS,
     agentsApi,
+    formatDuration,
     grantLimits,
+    timeLeft,
+    type AccessRequest,
+    type AgentLease,
     REASON_LABELS,
     STATUS_LABEL,
     STATUS_TONE,
@@ -65,7 +73,7 @@
   const agent = $derived(detail?.agent ?? null);
   const manage = $derived(!!agent?.canManage && agent.status !== 'revoked');
 
-  const TABS = ['overview', 'tokens', 'federation', 'grants', 'activity'] as const;
+  const TABS = ['overview', 'tokens', 'federation', 'grants', 'requests', 'leases', 'activity'] as const;
   type Tab = (typeof TABS)[number];
   const tab = $derived<Tab>(TABS.find((t) => t === param('tab')) ?? 'overview');
   let tabValue = $state<string>('overview');
@@ -91,7 +99,95 @@
   $effect(() => {
     if (tab === 'activity') loadEvents();
     if (tab === 'grants' && manage) loadCredentials();
+    if (tab === 'requests') loadRequests();
+    if (tab === 'leases') loadLeases();
   });
+
+  // ---- access requests (2.3) ----------------------------------------------
+  let requests = $state<AccessRequest[]>([]);
+  let requestsLoading = $state(false);
+  let requestsError = $state('');
+  async function loadRequests() {
+    requestsLoading = true;
+    requestsError = '';
+    try {
+      requests = await agentsApi.accessRequests({ agentId, status: 'all' });
+    } catch (e) {
+      requestsError = errorMessage(e, 'Could not load the access requests.');
+    } finally {
+      requestsLoading = false;
+    }
+  }
+  let decideOpen = $state(false);
+  let decideMode = $state<'approve' | 'deny'>('approve');
+  let deciding = $state<AccessRequest | null>(null);
+  function decide(r: AccessRequest, mode: 'approve' | 'deny') {
+    deciding = r;
+    decideMode = mode;
+    decideOpen = true;
+  }
+  async function decided() {
+    window.dispatchEvent(new CustomEvent('citadel:approvals-changed'));
+    await loadRequests();
+  }
+
+  // ---- leases --------------------------------------------------------------
+  let leases = $state<AgentLease[]>([]);
+  let leasesLoading = $state(false);
+  let leasesError = $state('');
+  let showEnded = $state(false);
+  async function loadLeases() {
+    leasesLoading = true;
+    leasesError = '';
+    try {
+      leases = await agentsApi.leases({ agentId, active: !showEnded });
+    } catch (e) {
+      leasesError = errorMessage(e, 'Could not load the leases.');
+    } finally {
+      leasesLoading = false;
+    }
+  }
+  async function revokeLease(l: AgentLease) {
+    const ok = await confirm({
+      title: `Revoke the lease on ${l.credential}?`,
+      message: `${agent?.name ?? 'The agent'} can no longer ${l.actions.join(' or ')} ${l.credential} under this lease. It can ask again.`,
+      confirmLabel: 'Revoke lease',
+      danger: true
+    });
+    if (!ok) return;
+    try {
+      await agentsApi.revokeLease(l.leaseId, 'revoked in the console');
+      toast.success('Lease revoked');
+      await loadLeases();
+    } catch (e) {
+      toast.error(e, 'Could not revoke the lease');
+    }
+  }
+
+  // ---- federation requirement ----------------------------------------------
+  let fedSaving = $state(false);
+  async function setRequireFederation(on: boolean) {
+    if (!agent || fedSaving) return;
+    if (on && agent.activeTokenCount > 0) {
+      const ok = await confirm({
+        title: 'Require workload identity federation?',
+        message: `${agent.name}'s ${agent.activeTokenCount} active token${agent.activeTokenCount === 1 ? '' : 's'} will be refused from the next request. It must authenticate with a federation binding.`,
+        confirmLabel: 'Require federation',
+        danger: true
+      });
+      if (!ok) return;
+    }
+    fedSaving = true;
+    try {
+      await agentsApi.update({ agentId, name: agent.name, description: agent.description, owner: agent.owner, labels: agent.labels, requireFederation: on });
+      toast.success(on ? 'Agent tokens are now refused' : 'Agent tokens are accepted again');
+      await load();
+    } catch (e) {
+      toast.error(e, 'Could not change the setting');
+    } finally {
+      fedSaving = false;
+    }
+  }
 
   // ---- tokens --------------------------------------------------------------
   let tokenOpen = $state(false);
@@ -245,6 +341,22 @@
     { id: 'state', label: 'Now', sort: (g) => (g.usableNow ? 0 : 1), hideOnMobile: true },
     { id: 'act', label: '', align: 'end', width: '96px' }
   ];
+  const requestCols: Column<AccessRequest>[] = [
+    { id: 'time', label: 'Asked', sort: (r) => r.createdAt },
+    { id: 'cred', label: 'Credential', sort: (r) => r.credential },
+    { id: 'reason', label: 'Reason', hideOnMobile: true },
+    { id: 'status', label: 'Status', sort: (r) => r.status },
+    { id: 'act', label: '', align: 'end', width: '180px' }
+  ];
+  const leaseCols: Column<AgentLease>[] = [
+    { id: 'cred', label: 'Credential', sort: (l) => l.credential },
+    { id: 'scope', label: 'Scope', sort: (l) => l.scope },
+    { id: 'uses', label: 'Uses left', sort: (l) => l.usesLeft ?? Infinity, hideOnMobile: true },
+    { id: 'expires', label: 'Expires', sort: (l) => l.expiresAt },
+    { id: 'by', label: 'Created by', sort: (l) => l.createdBy, hideOnMobile: true },
+    { id: 'last', label: 'Last used', sort: (l) => l.lastUsedAt ?? '', hideOnMobile: true },
+    { id: 'act', label: '', align: 'end', width: '56px' }
+  ];
   const eventCols: Column<AuditEvent>[] = [
     { id: 'time', label: 'Time', sort: (e) => e.createdAt },
     { id: 'action', label: 'Action', sort: (e) => e.action },
@@ -304,6 +416,8 @@
         { id: 'tokens', label: 'Tokens', count: detail?.tokens.length },
         { id: 'federation', label: 'Federation', count: detail?.bindings.length },
         { id: 'grants', label: 'Grants', count: detail?.grants.length },
+        { id: 'requests', label: 'Requests' },
+        { id: 'leases', label: 'Leases' },
         { id: 'activity', label: 'Activity' }
       ]}
       bind:active={tabValue}
@@ -328,6 +442,13 @@
         <dd>{agent.bindingCount}</dd>
         <dt>Grants</dt>
         <dd>{agent.grantCount}</dd>
+        <dt>Authentication</dt>
+        <dd>
+          <label class="check">
+            <input type="checkbox" checked={!!agent.requireFederation} disabled={!manage || fedSaving} onchange={(e) => setRequireFederation(e.currentTarget.checked)} />
+            <span>Require workload identity federation <span class="subtle small block">Agent tokens are refused; the agent authenticates only with a federation binding.</span></span>
+          </label>
+        </dd>
         {#if Object.keys(agent.labels).length}
           <dt>Labels</dt>
           <dd><span class="chips">{#each Object.entries(agent.labels) as [k, v] (k)}<span class="badge mono">{k}{v ? `=${v}` : ''}</span>{/each}</span></dd>
@@ -341,9 +462,12 @@
       </div>
     </section>
   {:else if tab === 'tokens'}
+    {#if agent.requireFederation}
+      <div class="callout callout-info note" role="note"><Icon name="info" size={16} /><span>This agent requires workload identity federation: its tokens are refused and no new ones can be issued. Turn it off on the Overview tab to use tokens.</span></div>
+    {/if}
     <DataTable caption="Agent tokens" rows={detail?.tokens ?? []} columns={tokenCols} key={(t) => t.tokenId} {loading} sortBy="expires">
       {#snippet toolbar()}
-        {#if manage}<button type="button" class="btn btn-primary btn-sm" onclick={() => { tokenName = ''; tokenDays = 90; tokenOpen = true; }}><Icon name="plus" size={14} />New token</button>{/if}
+        {#if manage}<button type="button" class="btn btn-primary btn-sm" disabled={agent?.requireFederation} onclick={() => { tokenName = ''; tokenDays = 90; tokenOpen = true; }}><Icon name="plus" size={14} />New token</button>{/if}
       {/snippet}
       {#snippet row(t)}
         <td><span class="strong">{t.name || 'Unnamed'}</span><span class="mono subtle sub">{t.prefix}…</span></td>
@@ -358,7 +482,7 @@
       {/snippet}
       {#snippet empty()}
         <EmptyState icon="key" title="No tokens" description="Issue a token and give it to the agent's MCP client or SDK. It is shown once; Citadel keeps only a hash.">
-          {#if manage}<button type="button" class="btn btn-primary btn-sm" onclick={() => (tokenOpen = true)}><Icon name="plus" size={14} />New token</button>{/if}
+          {#if manage && !agent?.requireFederation}<button type="button" class="btn btn-primary btn-sm" onclick={() => (tokenOpen = true)}><Icon name="plus" size={14} />New token</button>{/if}
         </EmptyState>
       {/snippet}
     </DataTable>
@@ -409,6 +533,83 @@
         <EmptyState icon="lock" title="No grants" description="The agent can't use any credential yet. Grant one; prefer use over reveal so the agent never holds the secret." />
       {/snippet}
     </DataTable>
+  {:else if tab === 'requests'}
+    <p class="muted small intro">The agent asks for access when a grant needs approval for each use, or when it wants a credential it wasn't granted. Approving opens a lease: once, for a time, or for one task.</p>
+    {#if requestsError}
+      <div class="callout callout-danger err" role="alert"><Icon name="alert-circle" size={16} /><span>{requestsError}</span><button type="button" class="btn btn-ghost btn-sm push" onclick={loadRequests}>Retry</button></div>
+    {/if}
+    <DataTable caption="Access requests" rows={requests} columns={requestCols} key={(r) => r.requestId} loading={requestsLoading} sortBy="time" sortDir="desc">
+      {#snippet toolbar()}
+        <button type="button" class="btn btn-ghost btn-sm" onclick={loadRequests} aria-label="Refresh"><Icon name="refresh" size={14} /></button>
+      {/snippet}
+      {#snippet row(r)}
+        <td class="nowrap"><span title={fullTime(r.createdAt)}>{relTime(r.createdAt)}</span></td>
+        <td>
+          <span class="mono">{r.credential}</span>
+          <span class="chips sub">
+            {#each r.actions as a (a)}
+              {#if a === 'reveal'}<Badge tone="danger" dot={false}><Icon name="eye" size={12} />reveal</Badge>{:else}<span class="badge">{a}</span>{/if}
+            {/each}
+            {#if r.taskId}<span class="subtle small mono">task {r.taskId}</span>{/if}
+          </span>
+        </td>
+        <td class="small hide-sm"><span class="reason">{r.reason || (r.origin === 'policy' ? 'Grant needs approval' : '')}</span></td>
+        <td>
+          <Badge tone={ACCESS_STATUS[r.status].tone} dot={false}>{ACCESS_STATUS[r.status].label}</Badge>
+          <span class="subtle small sub">
+            {#if r.status === 'pending'}expires {timeLeft(r.expiresAt)}{:else if r.decidedBy}{r.decidedBy}{r.scope ? ` · ${SCOPE_LABELS[r.scope].toLowerCase()}` : ''}{#if r.decisionComment} · {r.decisionComment}{/if}{/if}
+          </span>
+        </td>
+        <td class="end">
+          {#if r.status === 'pending' && r.canDecide}
+            <span class="cell-actions">
+              <button type="button" class="btn btn-primary btn-sm" onclick={() => decide(r, 'approve')}>Approve…</button>
+              <button type="button" class="btn btn-danger-ghost btn-sm" onclick={() => decide(r, 'deny')}>Deny…</button>
+            </span>
+          {:else if r.status === 'pending' && r.cannotDecideReason}
+            <span class="subtle small" title={r.cannotDecideReason}><Icon name="lock" size={12} /></span>
+          {/if}
+        </td>
+      {/snippet}
+      {#snippet empty()}
+        <EmptyState icon="git-pull-request" title="No access requests" description="Requests appear when the agent uses a grant that needs approval, or asks for a credential." />
+      {/snippet}
+    </DataTable>
+  {:else if tab === 'leases'}
+    <p class="muted small intro">Leases are time-boxed access from an approval or a grant's lease length. They end when they expire or are used up, when revoked, and when the agent is suspended.</p>
+    {#if leasesError}
+      <div class="callout callout-danger err" role="alert"><Icon name="alert-circle" size={16} /><span>{leasesError}</span><button type="button" class="btn btn-ghost btn-sm push" onclick={loadLeases}>Retry</button></div>
+    {/if}
+    <DataTable caption="Leases" rows={leases} columns={leaseCols} key={(l) => l.leaseId} loading={leasesLoading} sortBy="expires">
+      {#snippet toolbar()}
+        <label class="check small"><input type="checkbox" bind:checked={showEnded} />Show ended leases</label>
+        <button type="button" class="btn btn-ghost btn-sm" onclick={loadLeases} aria-label="Refresh"><Icon name="refresh" size={14} /></button>
+      {/snippet}
+      {#snippet row(l)}
+        <td>
+          <span class="mono">{l.credential}</span>
+          <span class="chips sub">
+            {#each l.actions as a (a)}
+              {#if a === 'reveal'}<Badge tone="danger" dot={false}><Icon name="eye" size={12} />reveal</Badge>{:else}<span class="badge">{a}</span>{/if}
+            {/each}
+            {#if l.status !== 'active'}<Badge tone={LEASE_STATUS[l.status].tone} dot={false}>{LEASE_STATUS[l.status].label}</Badge>{/if}
+          </span>
+        </td>
+        <td>{SCOPE_LABELS[l.scope]}{#if l.taskId}<span class="mono subtle sub">{l.taskId}</span>{/if}</td>
+        <td class="hide-sm">{l.usesLeft === null ? '∞' : l.usesLeft}<span class="subtle small"> · used {l.useCount}</span></td>
+        <td class="nowrap"><span title={fullTime(l.expiresAt)}>{l.status === 'active' ? timeLeft(l.expiresAt) : fullTime(l.expiresAt)}</span></td>
+        <td class="small hide-sm">{l.createdBy === 'policy' ? 'Grant lease length' : l.createdBy}</td>
+        <td class="subtle hide-sm">{l.lastUsedAt ? relTime(l.lastUsedAt) : 'Never'}</td>
+        <td class="end">
+          {#if l.canRevoke}
+            <button type="button" class="btn-icon danger" aria-label="Revoke lease on {l.credential}" title="Revoke" onclick={() => revokeLease(l)}><Icon name="x-circle" size={14} /></button>
+          {/if}
+        </td>
+      {/snippet}
+      {#snippet empty()}
+        <EmptyState icon="clock" title={showEnded ? 'No leases' : 'No active leases'} description="Approving an access request, or a grant with a lease length, opens a lease." />
+      {/snippet}
+    </DataTable>
   {:else}
     {#if eventsError}
       <div class="callout callout-danger err" role="alert"><Icon name="alert-circle" size={16} /><span>{eventsError}</span><button type="button" class="btn btn-ghost btn-sm push" onclick={loadEvents}>Retry</button></div>
@@ -432,6 +633,7 @@
   {/if}
 
   <GrantModal bind:open={grantOpen} {agentId} agentName={agent.name} grant={editingGrant} {credentials} onsaved={load} />
+  <AccessDecisionModal bind:open={decideOpen} request={deciding} mode={decideMode} ondone={decided} />
 {/if}
 
 <Modal bind:open={tokenOpen} title="New agent token" description="The token is shown once. Store it in the agent's secret configuration (for example CITADEL_AGENT_TOKEN)." size="sm">
@@ -574,6 +776,21 @@
   .sub {
     display: block;
     font-size: 12.5px;
+    overflow-wrap: anywhere;
+  }
+  .check {
+    display: inline-flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .check input {
+    margin-top: 3px;
+  }
+  .block {
+    display: block;
+  }
+  .reason {
+    white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
   .usage {

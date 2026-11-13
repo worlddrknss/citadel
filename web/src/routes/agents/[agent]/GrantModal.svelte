@@ -37,6 +37,9 @@
   let days = $state<string[]>([]);
   let timezone = $state('');
   let maxUses = $state(0);
+  let requiresApproval = $state(false);
+  // Lease length in minutes; 0 = not set.
+  let leaseMinutes = $state(0);
   let saving = $state(false);
   let saveError = $state('');
   const uid = Math.random().toString(36).slice(2, 8);
@@ -63,6 +66,8 @@
     days = grant?.window?.days ? [...grant.window.days] : [];
     timezone = grant?.window?.timezone || localTz;
     maxUses = grant?.maxUsesPerHour ?? 0;
+    requiresApproval = !!grant?.requiresApproval;
+    leaseMinutes = grant?.leaseTtlSeconds ? Math.round(grant.leaseTtlSeconds / 60) : 0;
     saveError = '';
   });
 
@@ -74,7 +79,9 @@
     notBefore: toISO(notBefore),
     notAfter: toISO(notAfter),
     window: windowOn ? { start, end, days, timezone } : null,
-    maxUsesPerHour: Number(maxUses) || 0
+    maxUsesPerHour: Number(maxUses) || 0,
+    requiresApproval,
+    leaseTtlSeconds: Math.round((Number(leaseMinutes) || 0) * 60)
   });
   const formError = $derived(validateGrant(input, kind));
 
@@ -195,6 +202,16 @@
       <label class="field-label" for="gr-max-{uid}">Uses per hour</label>
       <input id="gr-max-{uid}" class="input num" type="number" min="0" max="100000" bind:value={maxUses} />
       <span class="field-hint">0 means no limit. Counted across all replicas.</span>
+    </div>
+
+    <label class="check">
+      <input type="checkbox" bind:checked={requiresApproval} />
+      <span><strong>Requires approval</strong> <span class="muted">Each use needs a person to approve it in Approvals (once, for a time, or for a task).</span></span>
+    </label>
+    <div class="field">
+      <label class="field-label" for="gr-ttl-{uid}">Lease length (minutes)</label>
+      <input id="gr-ttl-{uid}" class="input num" type="number" min="0" max="1440" bind:value={leaseMinutes} />
+      <span class="field-hint">{requiresApproval ? 'The longest an approval may last. 0 means up to 24 hours.' : 'The first use opens a lease of this length that later uses are attributed to. 0 means no leases.'}</span>
     </div>
     {#if formError && credential}<span class="field-error" role="status">{formError}</span>{/if}
   </form>
