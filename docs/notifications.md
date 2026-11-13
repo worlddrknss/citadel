@@ -20,7 +20,8 @@ delivery log.
 
 | Event | When |
 |---|---|
-| `agent.approval_requested` | An agent asked for access that needs a human's approval. |
+| `agent.approval_requested` | An agent asked for access that needs a human's approval. The payload links to the request in the console (`url`) and names the agent, credential, actions, reason and task ID. |
+| `agent.access_decided` | Someone approved or denied an agent's access request (with the scope and lease expiry, or the denial reason). |
 | `agent.suspended` | An agent was suspended, by a person or automatically. |
 | `agent.anomaly` | An agent behaved unusually: a new host, off-hours use, a rate spike or repeated denials. |
 | `security.kill_switch` | Every agent in the account was suspended with the kill switch. |

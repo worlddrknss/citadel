@@ -244,13 +244,17 @@ Tools follow the agent's grants:
 | --- | --- | --- |
 | `list_credentials` | none | `{"credentials": [{name, kind, description, allowedHosts, allowedMethods, allowedPathPrefixes, actions, status}]}`; never values. |
 | `http_request` | `credential`, `url`, optional `method`, `headers`, `body`, `bodyEncoding`, `taskId` | Brokered use, exactly like `POST /v1/agent/http` (see [agents.md](agents.md)): `{status, headers, body, bodyEncoding, truncated, redacted}`. |
-| `reveal_credential` | `credential`, optional `taskId` | `{credential, kind, value}`. Listed only when the agent holds a grant with `reveal`. |
+| `reveal_credential` | `credential`, optional `taskId` | `{credential, kind, value}` (plus `leaseId`, `leaseExpiresAt` under a lease). Listed only when the agent holds a grant with `reveal`. |
+| `request_access` | `credential`, `reason`, optional `actions`, `duration` (`15m`), `taskId` | Asks a person for access (see [Approvals and leases](agents.md#approvals-and-leases)): the access request, `{requestId, status, ...}`. |
+| `get_lease` | optional `requestId`, `credential` | With `requestId`, that request's status, the approver's comment and its lease; without, `{"leases": [...]}`, the agent's active leases. |
 
 Results come as a JSON text block and as `structuredContent`. A refused or
 failed call (no grant, a host the credential may not be sent to, an
 unreachable upstream...) is a tool result with `isError: true` whose text
 starts with the reason, for example `host_not_allowed: this credential may
-not be sent to that host`, so the model can see it and adjust. Calls are
+not be sent to that host`, so the model can see it and adjust. A call that
+needs approval says `approval_required` and names the request, so the model
+can check it with `get_lease` and retry once a person approves. Calls are
 audited like their REST counterparts, with `via=mcp`.
 
 Session IDs are signed with a key derived from the deployment secret, so any

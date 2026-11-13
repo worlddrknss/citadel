@@ -52,6 +52,14 @@ identity, grants, and the kill switch. Connecting MCP clients is in
     unset), optionally on some weekdays. An end before the start runs past
     midnight and counts as the day it started.
   - `maxUsesPerHour`, counted across all replicas (0 = unlimited).
+  - `requiresApproval`: every use needs a person's approval (see
+    [Approvals and leases](#approvals-and-leases)).
+  - `leaseTtlSeconds` (60 to 86400): caps how long an approval may last;
+    without `requiresApproval`, the first use opens a lease of that length
+    and later uses within it are attributed to it.
+- **Lease.** Time-boxed access to a credential for some actions, made by an
+  approval or a grant's `leaseTtlSeconds`: single use (`once`), until it
+  expires (`duration`), or for one task ID (`task`).
 - **Kill switch.** Suspending an agent refuses all its requests immediately.
   An account admin can also suspend every agent in the account at once.
   Revoking an agent is permanent and revokes all its tokens.
@@ -224,7 +232,7 @@ Errors are JSON with a stable `reason`:
 | --- | --- |
 | 400 | `invalid_request`, `invalid_url`, `invalid_header`, `invalid_task_id`, `kind_not_brokerable`, `method_not_allowed` (a method the broker never sends) |
 | 401 | the agent token is missing, wrong, expired or revoked |
-| 403 | `no_grant`, `action_not_granted`, `not_yet_valid`, `grant_expired`, `outside_window`, `credential_unavailable`, `host_not_allowed`, `path_not_allowed`, `method_not_allowed`, `scheme_not_allowed`, `destination_blocked`, `agent_suspended` |
+| 403 | `no_grant`, `action_not_granted`, `not_yet_valid`, `grant_expired`, `outside_window`, `credential_unavailable`, `host_not_allowed`, `path_not_allowed`, `method_not_allowed`, `scheme_not_allowed`, `destination_blocked`, `agent_suspended`, `approval_required` (with `requestId`; see [Approvals and leases](#approvals-and-leases)) |
 | 413 | `body_too_large` |
 | 429 | `rate_limited` (with `Retry-After`) |
 | 502 | `upstream_unreachable`, `unsupported_content_encoding`, `credential_invalid` (the stored value doesn't fit the credential's kind) |
@@ -249,6 +257,112 @@ when the agent's grant explicitly includes `reveal`. For `http_basic` and
 never cached, and the disclosure is written to the audit log before the
 value is returned: if the audit log can't be written, the value is withheld.
 Prefer brokered use whenever the agent only needs to call an API.
+
+A reveal made under a lease also returns `leaseId` and `leaseExpiresAt`;
+treat the value as valid only until then.
+
+## Approvals and leases
+
+Some credentials should only be used when a person says so. Citadel 2.3 adds
+just-in-time access: an agent asks, a person approves in the console, and the
+agent gets a **lease** for exactly that.
+
+### When an agent needs approval
+
+- **A grant with `requiresApproval`.** Using (or revealing) the credential
+  without a lease is refused with `approval_required` and the ID of a pending
+  access request:
+
+  ```json
+  { "error": "approval_required", "reason": "approval_required",
+    "requestId": "aar_k2m4q6s8u2w4y6a3",
+    "message": "a person must approve this use; poll GET /v1/agent/access-requests/aar_k2m4q6s8u2w4y6a3 and retry once it is approved" }
+  ```
+
+  Asking again while it is pending returns the same request (one per agent,
+  credential, action and task ID).
+- **Access the agent doesn't have.** The agent asks explicitly:
+
+  ```http
+  POST /v1/agent/access-requests
+  Authorization: Bearer cagt_...
+  X-Citadel-Task-Id: release-42
+
+  { "credential": "deploy-key", "actions": ["reveal"],
+    "reason": "Tag the release; the pipeline needs the deploy key", "duration": "15m" }
+  ```
+
+  `actions` default to `["use"]`; `reason` is required (at most 512
+  characters, shown to approvers); `duration` (or `durationSeconds`) is how
+  long it is wanted, 1 minute to 24 hours; `taskId` defaults to
+  `X-Citadel-Task-Id`. The answer is `201` with the new request, or `200`
+  with the pending one for the same credential, actions and task. A request
+  for a credential that doesn't exist is accepted like any other, so agents
+  can't discover names; it can only be denied. An agent has at most 20
+  pending requests (`429 too_many_requests`).
+
+The MCP tools `request_access` and `get_lease` do the same (see
+[agents-mcp.md](agents-mcp.md)).
+
+### Waiting for a decision
+
+`GET /v1/agent/access-requests/{requestId}` returns the request with its
+`status`: `pending`, `approved`, `denied` (with the approver's reason in
+`decisionComment`), `expired` (nobody decided within an hour) or
+`cancelled` (the agent was revoked). An approved request carries its
+`lease`. `GET /v1/agent/leases` lists the agent's active leases. Then retry
+the original call: it is made under the lease.
+
+### Approving
+
+Pending requests appear in the console's **Approvals** inbox (type *Agent
+access*) and on the agent's **Requests** tab; the
+`agent.approval_requested` notification links straight to the request.
+Approvers are the agent's owner (an editor) and account admins:
+
+- only in a console session. Access keys can list requests but never decide
+  them, and an agent's own credentials never open a console session;
+- when the organization requires MFA (**Administration → Organization
+  settings**), a password session confirms the approval with a current code
+  (or a recovery code). SSO sign-ins are exempt, as they are from the MFA
+  requirement itself.
+
+An approval chooses the lease's scope:
+
+| Scope | The agent may... |
+| --- | --- |
+| Once | ...make one call. A second call needs a new approval. A single-use lease is consumed atomically, so two concurrent calls can't both use it. |
+| Duration | ...call until the lease expires. |
+| Task | ...call until the lease expires, only with the request's task ID. |
+
+The lease lasts the requested duration, or an hour, and never longer than
+24 hours, the grant's `leaseTtlSeconds` or the grant's `notAfter`. A denial
+needs a reason, which the agent sees. Approving access the agent has no
+grant for gives it exactly the approved actions for the lease's life; the
+console warns about this, and requests for `reveal` are highlighted.
+
+A decision raises `agent.access_decided` (see
+[notifications.md](notifications.md)).
+
+### When leases end
+
+Leases end when they expire or their single use is made, when someone
+revokes them (the agent's **Leases** tab, or
+`POST /v1/agents/leases/revoke`), when the agent is suspended or revoked,
+and when the account's kill switch is used. Resuming an agent does not bring
+its leases back. Revoking an agent also cancels its pending requests.
+
+Uses under a lease are attributed to it: `lease=als_...` in the
+`citadel.AgentHTTP` and `citadel.AgentReveal` events, and refusals for
+approval carry `request=aar_...`.
+
+## Requiring workload identity federation
+
+An agent can be set to **Require workload identity federation**
+(`requireFederation` on create or update). Its tokens are then refused
+(`403`, reason `federation_required`) and no new ones can be issued; it
+authenticates only with a federated token matching one of its bindings.
+Turning it off makes existing, unexpired tokens work again.
 
 ## Tokens
 
@@ -300,6 +414,13 @@ Actions: `citadel.CreateAgent`, `UpdateAgent`, `DeleteAgent`, `SuspendAgent`,
 `AgentWhoAmI`, `AgentListCredentials`, and `AgentAuth` (refused requests of
 an identified agent, with the reason as the error type).
 
+Approvals and leases: `citadel.AgentRequestAccess` (a request opened or asked
+again, by the agent or by a `requiresApproval` grant), `AgentGetAccessRequest`,
+`AgentListLeases`, `ApproveAgentAccess` (with the lease, scope and actions),
+`DenyAgentAccess`, `CreateAgentLease` (a lease opened by `leaseTtlSeconds`)
+and `RevokeAgentLease` (one lease, or every lease ended by a suspension,
+revocation or the kill switch).
+
 ### Brokered use, reveal and MCP
 
 | Action | Recorded |
@@ -328,5 +449,22 @@ The console uses `/v1/agents...` (session or access-key auth, scoped to the
 current account); see the API reference (`docs/openapi.yaml`). The Go SDK
 wraps the common calls (`CreateAgent`, `CreateAgentToken`,
 `CreateAgentCredential`, `PutAgentGrant`, `SuspendAgent`,
-`SetAgentsSuspended`, ...) and, configured with `AgentToken` (or
-`CITADEL_AGENT_TOKEN`), the Agent API (`AgentWhoAmI`, `AgentCredentials`).
+`SetAgentsSuspended`, `ListAgentAccessRequests`, `ListAgentLeases`,
+`RevokeAgentLease`, ...) and, configured with `AgentToken` (or
+`CITADEL_AGENT_TOKEN`), the Agent API (`AgentWhoAmI`, `AgentCredentials`,
+`AgentRequestAccess`, `AgentAccessRequest`, `WaitForAgentAccess`,
+`AgentLeases`). Approving and denying are console-only by design, so the SDK
+doesn't do them.
+
+Access request and lease endpoints:
+
+| Operation | Endpoint | Who |
+| --- | --- | --- |
+| Ask for access | `POST /v1/agent/access-requests` | the agent |
+| Poll a request | `GET /v1/agent/access-requests/{id}` | the agent |
+| Active leases | `GET /v1/agent/leases?credential=` | the agent |
+| List requests | `GET /v1/agents/access-requests?agentId=&status=pending` | viewer |
+| Approve | `POST /v1/agents/access-requests/approve {requestId, scope, durationSeconds?, comment?, mfaCode?}` | owner or admin, console session |
+| Deny | `POST /v1/agents/access-requests/deny {requestId, comment}` | owner or admin, console session |
+| List leases | `GET /v1/agents/leases?agentId=&active=false` | viewer |
+| Revoke a lease | `POST /v1/agents/leases/revoke {leaseId, reason?}` | owner or admin |
