@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/worlddrknss/citadel/internal/agentbroker"
+	"github.com/worlddrknss/citadel/internal/providertoken"
 	"github.com/worlddrknss/citadel/internal/store"
 )
 
@@ -290,7 +291,7 @@ func (s *Server) brokerHTTP(ctx context.Context, r *http.Request, c *agentCaller
 	}
 	ev.method, ev.host, ev.path, ev.reqBytes = pr.Method, pr.Target.Host, pr.Target.AuditPath(), len(pr.Body)
 
-	secret, err := acc.secretValue(ctx, c, use)
+	secret, err := s.mintAgentCredential(ctx, c, use)
 	if err != nil {
 		log.Printf("agent broker: credential value unavailable: %v", err)
 		return fail(&agentFailure{Status: http.StatusForbidden, Code: "forbidden", Reason: "credential_unavailable", Message: "the credential's secret is not available"}, store.AuditResultError)
@@ -320,6 +321,20 @@ func (s *Server) brokerHTTP(ctx context.Context, r *http.Request, c *agentCaller
 	}
 	record(store.AuditResultSuccess, "")
 	return resp, nil
+}
+
+// mintAgentCredential produces the credential's value for an allowed use
+// through its minter. The value must never be logged or audited.
+func (s *Server) mintAgentCredential(ctx context.Context, c *agentCaller, u agentUse) (string, error) {
+	m, err := s.agentAccess().minter(ctx, c, u)
+	if err != nil {
+		return "", err
+	}
+	tok, err := m.Mint(ctx, providertoken.Params{})
+	if err != nil {
+		return "", err
+	}
+	return tok.Value, nil
 }
 
 // auditURLParts extracts host and path (no query) from a URL the broker
@@ -411,7 +426,7 @@ func (s *Server) revealCredential(ctx context.Context, r *http.Request, c *agent
 		}
 		return fail(f, result)
 	}
-	value, err := acc.secretValue(ctx, c, use)
+	value, err := s.mintAgentCredential(ctx, c, use)
 	if err != nil {
 		log.Printf("agent reveal: credential value unavailable: %v", err)
 		return fail(&agentFailure{Status: http.StatusForbidden, Code: "forbidden", Reason: "credential_unavailable", Message: "the credential's secret is not available"}, store.AuditResultError)

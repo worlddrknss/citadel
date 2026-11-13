@@ -9,6 +9,7 @@ import (
 
 	"github.com/worlddrknss/citadel/internal/agentbroker"
 	"github.com/worlddrknss/citadel/internal/metrics"
+	"github.com/worlddrknss/citadel/internal/providertoken"
 	"github.com/worlddrknss/citadel/internal/store"
 )
 
@@ -71,8 +72,10 @@ type agentAccess interface {
 	// "reveal") with the named credential now. An allowed use or reveal
 	// counts against the grant's rate limit.
 	evaluate(ctx context.Context, c *agentCaller, credential, action string) agentUse
-	// secretValue reads the value behind an allowed use.
-	secretValue(ctx context.Context, c *agentCaller, u agentUse) (string, error)
+	// minter returns what produces the credential's value for an allowed
+	// use: providertoken.Static for a stored secret, a provider minter for
+	// credentials minted on use (2.4).
+	minter(ctx context.Context, c *agentCaller, u agentUse) (providertoken.Minter, error)
 	// credentials lists the credentials the agent holds grants for.
 	credentials(ctx context.Context, c *agentCaller) ([]agentCredentialInfo, error)
 	// auditOrigin is the audit origin of the agent's request: the agent as
@@ -209,8 +212,8 @@ func (a serverAgentAccess) evaluate(context.Context, *agentCaller, string, strin
 	return agentUse{Reason: "internal_error"}
 }
 
-func (a serverAgentAccess) secretValue(context.Context, *agentCaller, agentUse) (string, error) {
-	return "", errAccessDenied
+func (a serverAgentAccess) minter(context.Context, *agentCaller, agentUse) (providertoken.Minter, error) {
+	return nil, errAccessDenied
 }
 
 func (a serverAgentAccess) credentials(context.Context, *agentCaller) ([]agentCredentialInfo, error) {

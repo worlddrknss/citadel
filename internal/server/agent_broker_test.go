@@ -19,6 +19,7 @@ import (
 
 	"github.com/worlddrknss/citadel/internal/agentbroker"
 	"github.com/worlddrknss/citadel/internal/config"
+	"github.com/worlddrknss/citadel/internal/providertoken"
 	"github.com/worlddrknss/citadel/internal/store"
 	"github.com/worlddrknss/citadel/internal/store/memory"
 )
@@ -87,15 +88,15 @@ func (f *fakeAgentAccess) evaluate(_ context.Context, c *agentCaller, name, acti
 	return agentUse{Allowed: true, Credential: info, Profile: cred.profile, ref: name}
 }
 
-func (f *fakeAgentAccess) secretValue(_ context.Context, _ *agentCaller, u agentUse) (string, error) {
+func (f *fakeAgentAccess) minter(_ context.Context, _ *agentCaller, u agentUse) (providertoken.Minter, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name, _ := u.ref.(string)
 	c, ok := f.creds[name]
 	if !ok {
-		return "", errors.New("gone")
+		return nil, errors.New("gone")
 	}
-	return c.secret, nil
+	return providertoken.Static{Value: c.secret}, nil
 }
 
 func (f *fakeAgentAccess) credentials(_ context.Context, c *agentCaller) ([]agentCredentialInfo, error) {
