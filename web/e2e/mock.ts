@@ -1050,4 +1050,4 @@ export class MockApi {
   }
 }
 
-export const fixtures = { projects, keys, parameters, certificates, roles };
+export const fixtures = { projects, keys, parameters, certificates, roles, agentCredentials };
