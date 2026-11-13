@@ -123,6 +123,11 @@ type nativeCertificate struct {
 	// may follow it in a chain (0: it may only issue end-entity
 	// certificates). Absent on a CA without a limit.
 	PathLen *int `json:"pathLen,omitempty"`
+	// RestorableUntil: a DELETED CA can be restored until then.
+	RestorableUntil string `json:"restorableUntil,omitempty"`
+	// Outstanding counts a CA's issued certificates (and subordinate CAs)
+	// that are still valid; it must be 0 before the CA can be deleted.
+	Outstanding *int `json:"outstanding,omitempty"`
 	// ExpiringSoon: still valid but expires within 30 days.
 	ExpiringSoon bool `json:"expiringSoon"`
 }
@@ -181,6 +186,7 @@ func (s *Server) handleV1ListCertificates(w http.ResponseWriter, r *http.Request
 			row.Serial = cert.SerialNumber.String()
 			row.PathLen = caPathLength(cert)
 		}
+		s.caLifecycleRow(ctx, &row, ca, now)
 		out = append(out, row)
 		certs, err := s.store.ListCertificates(ctx, ca.CAID)
 		if err != nil {
@@ -188,6 +194,9 @@ func (s *Server) handleV1ListCertificates(w http.ResponseWriter, r *http.Request
 			return
 		}
 		for _, c := range certs {
+			if c.DeletedAt != nil {
+				continue // removed from the inventory; kept for the CRL
+			}
 			cn, alg := certInfo(c.CertB64)
 			row := nativeCertificate{
 				Source: "pca-cert", ID: c.CertID, Subject: cn, CommonName: cn, Serial: c.Serial, KeyAlgorithm: alg,

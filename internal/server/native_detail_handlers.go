@@ -353,6 +353,9 @@ func (s *Server) handleV1CertificateDetail(w http.ResponseWriter, r *http.Reques
 
 	case "pca-cert":
 		cert, err := s.store.GetCertificate(ctx, id)
+		if err == nil && cert.DeletedAt != nil {
+			err = store.ErrCertificateNotFound
+		}
 		if err != nil {
 			writeNativeError(w, http.StatusNotFound, "not_found", "certificate not found")
 			return

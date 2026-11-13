@@ -224,6 +224,7 @@ type pcaCADescription struct {
 	CertificateAuthorityConfiguration pcaCAConfig `json:"CertificateAuthorityConfiguration"`
 	KeyStorageSecurityStandard        string      `json:"KeyStorageSecurityStandard,omitempty"`
 	UsageMode                         string      `json:"UsageMode,omitempty"`
+	RestorableUntil                   *awsEpoch   `json:"RestorableUntil,omitempty"`
 }
 
 func describeCA(ca store.PCACertificateAuthority) pcaCADescription {
@@ -232,6 +233,9 @@ func describeCA(ca store.PCACertificateAuthority) pcaCADescription {
 		CreatedAt: epochPtr(ca.CreatedAt), LastStateChangeAt: epochPtr(ca.UpdatedAt),
 		NotBefore: epochPtr(ca.NotBefore), NotAfter: epochPtr(ca.NotAfter),
 		KeyStorageSecurityStandard: "FIPS_140_2_LEVEL_3_OR_HIGHER", UsageMode: "GENERAL_PURPOSE",
+	}
+	if ca.RestorableUntil != nil {
+		d.RestorableUntil = epochPtr(*ca.RestorableUntil)
 	}
 	if cert, err := parseCertificateB64(ca.CACertB64); err == nil {
 		d.Serial = colonHex(cert.SerialNumber)

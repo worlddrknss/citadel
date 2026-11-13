@@ -23,6 +23,7 @@ const sourceACMImported = "acm-imported"
 
 func (s *Server) registerPKIDisplayRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /v1/certificates/acm", s.handleV1DeleteImportedCertificate)
+	s.registerPKILifecycle(mux)
 }
 
 // handleV1DeleteImportedCertificate deletes a certificate imported through
