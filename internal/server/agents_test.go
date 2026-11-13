@@ -227,12 +227,12 @@ func TestAgentCredentialsGrantsAndPolicy(t *testing.T) {
 
 	// Usage profile validation.
 	for _, bad := range []map[string]any{
-		{"name": "gh", "project": "app", "env": "prod", "key": "GITHUB_TOKEN", "kind": "http_header"},                                                     // no hosts
-		{"name": "gh", "project": "app", "env": "prod", "key": "GITHUB_TOKEN", "kind": "http_header", "allowedHosts": []string{"*.com"}},                  // broad wildcard
+		{"name": "gh", "project": "app", "env": "prod", "key": "GITHUB_TOKEN", "kind": "http_header"},                                                        // no hosts
+		{"name": "gh", "project": "app", "env": "prod", "key": "GITHUB_TOKEN", "kind": "http_header", "allowedHosts": []string{"*.com"}},                     // broad wildcard
 		{"name": "gh", "project": "app", "env": "prod", "key": "GITHUB_TOKEN", "kind": "http_header", "allowedHosts": []string{"a.b"}, "headerName": "Host"}, // forbidden header
-		{"name": "gh", "project": "app", "env": "prod", "key": "MISSING", "kind": "raw"},                                                                  // no secret
-		{"name": "GH", "project": "app", "env": "prod", "key": "GITHUB_TOKEN", "kind": "raw"},                                                             // name
-		{"name": "gh", "project": "app", "env": "prod", "key": "GITHUB_TOKEN", "kind": "http_query", "allowedHosts": []string{"a.b"}},                     // no param
+		{"name": "gh", "project": "app", "env": "prod", "key": "MISSING", "kind": "raw"},                                                                     // no secret
+		{"name": "GH", "project": "app", "env": "prod", "key": "GITHUB_TOKEN", "kind": "raw"},                                                                // name
+		{"name": "gh", "project": "app", "env": "prod", "key": "GITHUB_TOKEN", "kind": "http_query", "allowedHosts": []string{"a.b"}},                        // no param
 		{"name": "gh", "project": "app", "env": "prod", "key": "GITHUB_TOKEN", "kind": "raw", "allowedCidrs": []string{"nope"}},
 	} {
 		wantStatus(t, e.do(http.MethodPost, "/v1/agents/credentials", bad, bob), http.StatusBadRequest)
