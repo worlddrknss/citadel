@@ -6194,7 +6194,7 @@ paths:
       get:
         operationId: getAgent
         tags: [Agents]
-        summary: Describe an agent: tokens (never their values), bindings and grants
+        summary: Describe an agent with its tokens (never their values), bindings and grants
         x-citadel-role: viewer
         parameters:
           - name: agentId

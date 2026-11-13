@@ -40,6 +40,9 @@ const (
 	EnvURL             = "CITADEL_URL"
 	EnvAccessKeyID     = "CITADEL_ACCESS_KEY_ID"
 	EnvSecretAccessKey = "CITADEL_SECRET_ACCESS_KEY"
+	// EnvAgentToken is an AI agent's token (cagt_...), used when no access
+	// key is configured.
+	EnvAgentToken = "CITADEL_AGENT_TOKEN"
 )
 
 // DefaultBaseURL is used when neither Config.BaseURL nor CITADEL_URL is set.
@@ -55,6 +58,10 @@ type Config struct {
 	// with. Default to $CITADEL_ACCESS_KEY_ID and $CITADEL_SECRET_ACCESS_KEY.
 	AccessKeyID     string
 	SecretAccessKey string
+	// AgentToken authenticates as an AI agent instead (only the Agent API
+	// accepts it). Defaults to $CITADEL_AGENT_TOKEN when no access key is
+	// configured.
+	AgentToken string
 	// Timeout bounds each HTTP attempt (default 30s). The context passed to
 	// a method bounds the whole call, retries included.
 	Timeout time.Duration
@@ -98,17 +105,27 @@ func New(cfg Config) (*Client, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, fmt.Errorf("citadel: invalid base URL %q", base)
 	}
-	id := firstNonEmpty(cfg.AccessKeyID, os.Getenv(EnvAccessKeyID))
-	secret := firstNonEmpty(cfg.SecretAccessKey, os.Getenv(EnvSecretAccessKey))
-	if id == "" || secret == "" {
-		return nil, ErrNoCredentials
-	}
-	if strings.Contains(id, ":") {
-		return nil, errors.New("citadel: access key ID must not contain ':'")
+	token := ""
+	if agent := strings.TrimSpace(cfg.AgentToken); agent != "" {
+		token = agent
+	} else {
+		id := firstNonEmpty(cfg.AccessKeyID, os.Getenv(EnvAccessKeyID))
+		secret := firstNonEmpty(cfg.SecretAccessKey, os.Getenv(EnvSecretAccessKey))
+		switch {
+		case id != "" && secret != "":
+			if strings.Contains(id, ":") {
+				return nil, errors.New("citadel: access key ID must not contain ':'")
+			}
+			token = id + ":" + secret
+		case strings.TrimSpace(os.Getenv(EnvAgentToken)) != "":
+			token = strings.TrimSpace(os.Getenv(EnvAgentToken))
+		default:
+			return nil, ErrNoCredentials
+		}
 	}
 	c := &Client{
 		baseURL:    strings.TrimRight(base, "/"),
-		token:      id + ":" + secret,
+		token:      token,
 		timeout:    cfg.Timeout,
 		maxRetries: cfg.MaxRetries,
 		baseDelay:  cfg.RetryBaseDelay,
