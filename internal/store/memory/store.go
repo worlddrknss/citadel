@@ -39,10 +39,11 @@ type Store struct {
 	params       map[string]*memParameter
 	appr         memApprovals
 	awsCompatState
-	pki pkiState
-	ak  accessKeyState
-	kms *memKMS
-	mfa *memMFA
+	pki    pkiState
+	ak     accessKeyState
+	kms    *memKMS
+	mfa    *memMFA
+	rotSeq int64
 }
 
 var _ store.Store = (*Store)(nil)

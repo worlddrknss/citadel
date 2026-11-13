@@ -563,7 +563,8 @@ func (s *Store) CancelRotateSecret(ctx context.Context, secretID string) (store.
 	meta.RotationLambdaARN = ""
 	meta.RotationDays = 0
 	meta.NextRotationDate = nil
-	store.RemoveSecretStage(&meta, store.PendingVersionStage, "")
+	// AWSPENDING stays: as in AWS, cancelling leaves an unfinished
+	// rotation's version for the operator (or the next rotation) to resolve.
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return store.SecretMetadataRecord{}, err

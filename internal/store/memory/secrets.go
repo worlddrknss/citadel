@@ -17,6 +17,10 @@ type inMemorySecret struct {
 	metadata store.SecretMetadataRecord
 	versions map[string]inMemorySecretVersion
 	byToken  map[string]string
+	// rotation is the built-in rotation row (nil until configured) and
+	// rotHistory its attempts, oldest first.
+	rotation   *store.SecretRotation
+	rotHistory []store.SecretRotationEvent
 }
 
 // memSecretKey builds the composite map key used by the in-memory store so two
@@ -417,7 +421,8 @@ func (s *Store) CancelRotateSecret(ctx context.Context, secretID string) (store.
 	secret.metadata.RotationLambdaARN = ""
 	secret.metadata.RotationDays = 0
 	secret.metadata.NextRotationDate = nil
-	store.RemoveSecretStage(&secret.metadata, store.PendingVersionStage, "")
+	// AWSPENDING stays: as in AWS, cancelling leaves an unfinished
+	// rotation's version for the operator (or the next rotation) to resolve.
 	return secret.metadata, nil
 }
 
