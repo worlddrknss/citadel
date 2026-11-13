@@ -19,6 +19,8 @@ type memAgents struct {
 	credentials map[string]store.AgentCredential
 	grants      map[string]store.AgentGrant // grantID -> grant
 	settings    map[string]store.AgentSettings
+	requests    map[string]store.AgentAccessRequest // requestID -> request
+	leases      map[string]store.AgentLease         // leaseID -> lease
 }
 
 func credKey(accountID, name string) string { return accountID + "\x00" + name }
@@ -30,6 +32,7 @@ func (s *Store) agentsLocked() *memAgents {
 		s.agents = &memAgents{
 			agents: map[string]store.Agent{}, tokens: map[string]store.AgentToken{}, bindings: map[string]store.AgentBinding{},
 			credentials: map[string]store.AgentCredential{}, grants: map[string]store.AgentGrant{}, settings: map[string]store.AgentSettings{},
+			requests: map[string]store.AgentAccessRequest{}, leases: map[string]store.AgentLease{},
 		}
 	}
 	return s.agents
@@ -137,6 +140,7 @@ func (s *Store) UpdateAgent(_ context.Context, a store.Agent) error {
 		}
 	}
 	cur.Name, cur.Description, cur.Owner, cur.Labels, cur.UpdatedAt = a.Name, a.Description, a.Owner, maps.Clone(a.Labels), a.UpdatedAt
+	cur.RequireFederation = a.RequireFederation
 	m.agents[a.AgentID] = cur
 	return nil
 }
@@ -187,6 +191,16 @@ func (s *Store) DeleteAgent(_ context.Context, accountID, agentID string) error 
 	for id, g := range m.grants {
 		if g.AgentID == agentID {
 			delete(m.grants, id)
+		}
+	}
+	for id, r := range m.requests {
+		if r.AgentID == agentID {
+			delete(m.requests, id)
+		}
+	}
+	for id, l := range m.leases {
+		if l.AgentID == agentID {
+			delete(m.leases, id)
 		}
 	}
 	return nil

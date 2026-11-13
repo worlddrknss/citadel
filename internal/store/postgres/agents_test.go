@@ -17,3 +17,13 @@ func TestAgentStore(t *testing.T) {
 		return st
 	})
 }
+
+func TestAgentAccessStore(t *testing.T) {
+	storetest.AgentAccessStore(t, func(t *testing.T) store.Store {
+		st, err := Open(context.Background(), testDB(t), testOptions())
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		return st
+	})
+}
