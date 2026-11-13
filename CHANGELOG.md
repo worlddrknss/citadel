@@ -10,7 +10,6 @@ All notable changes to Citadel are documented here. The format follows
 
 - Images are published for `linux/arm64` as well as `linux/amd64`, built by
   cross-compiling (both are FIPS builds).
-
 - Certificate authorities in `GET /v1/certificates` and
   `GET /v1/certificates/detail` carry `isCA` and `pathLen` (the
   basic-constraints path length; absent when unlimited). The CA tree shows it
@@ -60,7 +59,6 @@ All notable changes to Citadel are documented here. The format follows
   2.0 events, the link from the last pre-2.0 event to the first 2.0 one, and
   sequence gaps stay strict. The next verification after upgrading walks the
   chain from the start (migration 0901).
-
 - Parameter names follow AWS's rules when a parameter is created or
   overwritten (SSM `PutParameter` and `POST /v1/parameters`): names beginning
   with `aws` or `ssm` in any case (the first level of a hierarchy) are refused,
