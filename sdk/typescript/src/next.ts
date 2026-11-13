@@ -1,4 +1,4 @@
-import { Citadel } from './client.js';
+import { Citadel, trimSlashes } from './client.js';
 import type { RequestOptions } from './http.js';
 import type { FolderRef } from './types.js';
 
@@ -128,7 +128,7 @@ function cacheKey(client: Citadel, o: LoadSecretsOptions): string {
 }
 
 function normalizePath(path: string | undefined): string {
-  return (path ?? '').replace(/^\/+|\/+$/g, '');
+  return trimSlashes(path ?? '', true, true);
 }
 
 async function fetchFolder(client: Citadel, o: LoadSecretsOptions): Promise<Record<string, string>> {

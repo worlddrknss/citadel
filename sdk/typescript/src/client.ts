@@ -111,7 +111,7 @@ export class Citadel {
     if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
       throw new TypeError('Citadel: baseUrl must be an http(s) URL');
     }
-    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.baseUrl = trimSlashes(baseUrl, false, true);
 
     const accessKeyId = options.accessKeyId ?? env('CITADEL_ACCESS_KEY_ID');
     const secretAccessKey = options.secretAccessKey ?? env('CITADEL_SECRET_ACCESS_KEY');
@@ -354,3 +354,16 @@ function folderQuery(ref: FolderRef): Record<string, string | undefined> {
 function secretQuery(ref: SecretRef): Record<string, string | undefined> {
   return { ...folderQuery(ref), key: ref.key };
 }
+
+/**
+ * Removes leading and/or trailing '/' characters with a linear scan. (A regex
+ * like /\/+$/ backtracks quadratically on long runs of slashes.)
+ */
+export function trimSlashes(value: string, leading: boolean, trailing: boolean): string {
+  let start = 0;
+  let end = value.length;
+  if (leading) while (start < end && value.charCodeAt(start) === 47) start++;
+  if (trailing) while (end > start && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(start, end);
+}
+
