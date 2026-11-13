@@ -81,6 +81,7 @@
   let busy = $state(false);
   let editMeta = $state(false);
   let editTags = $state(false);
+  let rotationStarted = $state(0);
   let heading = $state<HTMLHeadingElement>();
   let panel = $state<HTMLElement>();
 
@@ -145,6 +146,7 @@
     try {
       await rotationApi.rotateNow({ project: detail.project, env: detail.env, path: detail.path, key: detail.key });
       toast.success(`Rotation started for ${detail.key}`);
+      rotationStarted++;
       ontab('rotation');
     } catch (e) {
       toast.error(e, 'Could not start rotation');
@@ -377,7 +379,7 @@
         />
       {/if}
     {:else if tab === 'rotation'}
-      <RotationTab {coord} {canEdit} {deleted} {requireApproval} onchanged={refresh} />
+      <RotationTab {coord} {canEdit} {deleted} {requireApproval} started={rotationStarted} onchanged={refresh} />
     {:else}
       <section class="sec">
         <span class="label">Who can read this</span>

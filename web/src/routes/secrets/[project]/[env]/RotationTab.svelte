@@ -34,12 +34,15 @@
     canEdit,
     deleted,
     requireApproval,
+    started = 0,
     onchanged
   }: {
     coord: Coord;
     canEdit: boolean;
     deleted: boolean;
     requireApproval: boolean;
+    /** Bump after starting a rotation elsewhere (the drawer footer) to follow it. */
+    started?: number;
     onchanged: () => void;
   } = $props();
 
@@ -67,7 +70,7 @@
       const s = await rotationApi.status(coord);
       status = s;
       if (!editing) form = formFromStatus(s);
-      if (s.status === 'running') schedulePoll();
+      if (!quiet && s.status === 'running') follow(s.history.length);
     } catch (e) {
       error = errorMessage(e);
     } finally {
@@ -75,15 +78,15 @@
     }
   }
 
-  function schedulePoll(tries = 30) {
+  /** Polls until a rotation started after the history had `baseline` entries has finished. */
+  function follow(baseline = status?.history.length ?? 0, tries = 30) {
     clearTimeout(poll);
     if (tries <= 0) return;
     poll = setTimeout(async () => {
-      const before = status?.history.length ?? 0;
       await load(true);
-      if (status && (status.status === 'running' || status.history.length === before)) schedulePoll(tries - 1);
+      if (status && (status.status === 'running' || status.history.length <= baseline)) follow(baseline, tries - 1);
       else onchanged();
-    }, 1000);
+    }, 700);
   }
   onDestroy(() => clearTimeout(poll));
 
@@ -97,6 +100,13 @@
       status = null;
       load();
     });
+  });
+
+  $effect(() => {
+    if (started > 0)
+      untrack(() => {
+        follow();
+      });
   });
 
   function startEdit() {
@@ -117,8 +127,9 @@
         signingSecret = res.signingSecret;
         signingOpen = true;
       }
+      const baseline = status?.history.length ?? 0;
       await load(true);
-      if (res.versionId) schedulePoll();
+      if (res.versionId) follow(baseline);
       onchanged();
     } catch (err) {
       toast.error(err, 'Could not save rotation');
@@ -137,10 +148,10 @@
     if (!ok) return;
     busy = true;
     try {
+      const baseline = status?.history.length ?? 0;
       await rotationApi.rotateNow(coord);
       toast.success(`Rotation started for ${coord.key}`);
-      await load(true);
-      schedulePoll();
+      follow(baseline);
     } catch (e) {
       toast.error(e, 'Could not start rotation');
     } finally {
