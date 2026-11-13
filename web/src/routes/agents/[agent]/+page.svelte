@@ -505,6 +505,16 @@
       {/snippet}
     </DataTable>
   {:else if tab === 'grants'}
+    {#if manage && !loading && credentials.length === 0}
+      <div class="callout callout-info grant-hint" role="note">
+        <Icon name="info" size={16} />
+        <span>
+          There are no agent credentials to grant yet. A credential is a secret with an agent usage profile: open a secret in
+          <a href="{base}/secrets">Secrets</a>, go to its <strong>Agent access</strong> tab and add a profile (how it is sent and to which hosts).
+          It then appears here.
+        </span>
+      </div>
+    {/if}
     <DataTable caption="Grants" rows={detail?.grants ?? []} columns={grantCols} key={(g) => g.grantId} {loading}>
       {#snippet toolbar()}
         {#if manage}<button type="button" class="btn btn-primary btn-sm" onclick={() => openGrant(null)} disabled={credentials.length === 0} title={credentials.length === 0 ? 'Add an agent usage profile to a secret first' : undefined}><Icon name="plus" size={14} />Grant credential</button>{/if}
@@ -718,6 +728,8 @@
 </Modal>
 
 <style>
+  .grant-hint { margin-bottom: var(--space-3, 12px); }
+  .grant-hint a { text-decoration: underline; }
   .back {
     display: inline-flex;
     align-items: center;
