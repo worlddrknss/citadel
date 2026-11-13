@@ -10,6 +10,7 @@
   import Icon from '#lib/components/Icon.svelte';
   import { errorMessage } from '#lib/api.ts';
   import { base } from '#lib/paths.ts';
+  import { DOC_LINKS } from '#lib/docs-links.ts';
   import { confirm } from '#lib/stores/confirm.svelte.ts';
   import { session } from '#lib/stores/session.svelte.ts';
   import { toast } from '#lib/stores/toast.svelte.ts';
@@ -154,7 +155,7 @@
           <h3>Keep events</h3>
           <p class="muted small">
             Older events are deleted by an hourly job, oldest first, in small batches. Verification continues from a signed anchor, so pruning doesn't break the
-            chain. <a href="{base}/audit">Audit log</a>
+            chain. <a href="{base}{DOC_LINKS.auditRetention}">Learn more about retention</a>
           </p>
         </div>
         <div class="gbody">

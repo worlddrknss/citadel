@@ -10,5 +10,7 @@ export const DOC_LINKS = {
   /** Granting a credential to an agent. */
   grants: '/docs/getting-started-agents#step-4-grant-the-credential',
   /** Refusal reasons and their fixes. */
-  troubleshooting: '/docs/getting-started-agents#troubleshooting'
+  troubleshooting: '/docs/getting-started-agents#troubleshooting',
+  /** Audit retention: how pruning works and what it keeps. */
+  auditRetention: '/docs/audit#retention'
 } as const;
