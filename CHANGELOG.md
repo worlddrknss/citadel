@@ -6,6 +6,8 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-11-13
+
 ### Fixed
 
 - The MCP server reported its version as `dev` in release images. The release
