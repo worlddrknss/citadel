@@ -4807,9 +4807,12 @@ paths:
         description: |
           Returns every private CA in the caller's account, each followed by the
           certificates it issued, then the account's Let's Encrypt certificates,
-          in one flat unpaginated list. Rows are told apart by `source`
-          (`pca-ca`, `pca-cert`, `lets-encrypt`). An issued certificate past its
-          notAfter is reported as EXPIRED even before the expiry job has run.
+          in one flat unpaginated list, then the certificates imported through
+          ACM `ImportCertificate`. Rows are told apart by `source` (`pca-ca`,
+          `pca-cert`, `lets-encrypt`, `acm-imported`). An issued certificate past
+          its notAfter is reported as EXPIRED even before the expiry job has run.
+          Deleted certificates are left out; a CA scheduled for deletion is
+          listed as DELETED with `restorableUntil`.
         x-citadel-role: viewer
         responses:
           "200":
@@ -4830,6 +4833,106 @@ paths:
               application/json:
                 schema:
                   $ref: "#/components/schemas/Error"
+      delete:
+        operationId: deleteCertificate
+        tags: [Certificates]
+        summary: Delete a certificate from the inventory
+        description: |
+          Removes an issued certificate (`pca-cert`), a Let's Encrypt
+          certificate (`lets-encrypt`) or an imported certificate
+          (`acm-imported`). A private-CA certificate that is still valid is
+          revoked first (reason CessationOfOperation, `revoked: true`) and then
+          hidden, so it stays on the CA's CRL. Certificate authorities are
+          deleted with deleteCertificateAuthority instead.
+        x-citadel-role: admin
+        x-citadel-audit: citadel.DeleteCertificate
+        parameters:
+          - name: source
+            in: query
+            required: true
+            schema:
+              type: string
+              enum: [pca-cert, lets-encrypt, acm-imported]
+          - name: id
+            in: query
+            required: true
+            description: The certificate ID (the ARN for acm-imported)
+            schema:
+              type: string
+        responses:
+          "200":
+            description: The certificate was deleted
+            content:
+              application/json:
+                schema:
+                  type: object
+                  required: [source, id, deleted, revoked]
+                  properties:
+                    source:
+                      type: string
+                    id:
+                      type: string
+                    deleted:
+                      type: boolean
+                    revoked:
+                      type: boolean
+                      description: The certificate was still valid and was revoked before deletion
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "500":
+            $ref: "#/components/responses/InternalError"
+          "501":
+            description: The configured store does not support this operation (`unsupported`)
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/Error"
+    /v1/certificates/acm:
+      delete:
+        operationId: deleteImportedCertificate
+        tags: [Certificates]
+        summary: Delete a certificate imported through ACM
+        description: |
+          Deletes a certificate imported with ACM `ImportCertificate`.
+          Certificates Citadel issued are refused (revoke them instead).
+        x-citadel-role: admin
+        x-citadel-audit: citadel.DeleteImportedCertificate
+        parameters:
+          - name: arn
+            in: query
+            required: true
+            description: The ACM certificate ARN
+            schema:
+              type: string
+        responses:
+          "200":
+            description: The certificate was deleted
+            content:
+              application/json:
+                schema:
+                  type: object
+                  required: [arn, deleted]
+                  properties:
+                    arn:
+                      type: string
+                    deleted:
+                      type: boolean
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "500":
+            $ref: "#/components/responses/InternalError"
     /v1/certificates/authorities:
       post:
         operationId: createCertificateAuthority
@@ -4895,6 +4998,115 @@ paths:
             $ref: "#/components/responses/Unauthorized"
           "403":
             $ref: "#/components/responses/Forbidden"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/certificates/authorities/status:
+      post:
+        operationId: setCertificateAuthorityStatus
+        tags: [Certificates]
+        summary: Enable or disable a certificate authority
+        description: |
+          Sets `status` to `ACTIVE` or `DISABLED`. A disabled CA issues
+          nothing; an expired CA can't be enabled.
+        x-citadel-role: admin
+        x-citadel-audit: citadel.UpdateCAStatus
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CertificateAuthorityActionRequest"
+        responses:
+          "200":
+            description: The CA's new state
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/CertificateAuthorityActionResponse"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/certificates/authorities/delete:
+      post:
+        operationId: deleteCertificateAuthority
+        tags: [Certificates]
+        summary: Schedule a certificate authority for deletion
+        description: |
+          As in AWS ACM PCA: the CA must be DISABLED (or expired, or never
+          activated). It becomes DELETED and can be restored until
+          `restorableUntil`, `permanentDeletionTimeInDays` (7 to 30, default 30)
+          from now; a background job then removes it and its certificates.
+          Refused with 409 `conflict` while the CA has issued certificates or
+          subordinate CAs that are still valid (unexpired and unrevoked): revoke
+          them first. The list row's `outstanding` counts them.
+        x-citadel-role: admin
+        x-citadel-audit: citadel.DeleteCA
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CertificateAuthorityActionRequest"
+        responses:
+          "200":
+            description: The CA's new state
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/CertificateAuthorityActionResponse"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/certificates/authorities/restore:
+      post:
+        operationId: restoreCertificateAuthority
+        tags: [Certificates]
+        summary: Restore a certificate authority scheduled for deletion
+        description: |
+          Within the restore window, returns a DELETED CA to DISABLED.
+        x-citadel-role: admin
+        x-citadel-audit: citadel.RestoreCA
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CertificateAuthorityActionRequest"
+        responses:
+          "200":
+            description: The CA's new state
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/CertificateAuthorityActionResponse"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
           "500":
             $ref: "#/components/responses/InternalError"
     /v1/certificates/issue:
@@ -5048,9 +5260,12 @@ paths:
         summary: Get one certificate's metadata and PEM
         description: |
           Returns the full metadata and PEM material of a CA (`pca-ca`), an
-          issued certificate (`pca-cert`) or a Let's Encrypt certificate
-          (`lets-encrypt`). For an issued certificate `chainPem` is the issuing
-          CA's certificate; for a CA it is the CA certificate itself.
+          issued certificate (`pca-cert`), a Let's Encrypt certificate
+          (`lets-encrypt`) or an imported certificate (`acm-imported`). For an
+          issued certificate `chainPem` is the issuing CA's certificate; for a
+          CA it is the CA certificate itself. `chain` lists every certificate
+          from this one up to the root (leaf, intermediates, root), as far as
+          Citadel holds the issuers.
         x-citadel-role: viewer
         parameters:
           - name: source
@@ -5058,7 +5273,7 @@ paths:
             required: true
             schema:
               type: string
-              enum: [pca-ca, pca-cert, lets-encrypt]
+              enum: [pca-ca, pca-cert, lets-encrypt, acm-imported]
           - name: id
             in: query
             required: true
@@ -5138,6 +5353,59 @@ paths:
             $ref: "#/components/responses/InternalError"
           "501":
             description: Requires a database-backed store (`unsupported`)
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/Error"
+    /v1/certificates/letsencrypt/auto-renew:
+      post:
+        operationId: setLetsEncryptAutoRenew
+        tags: [Certificates]
+        summary: Turn automatic renewal of a Let's Encrypt certificate on or off
+        description: |
+          HTTP-01 certificates renew automatically 30 days before expiry
+          (on by default); failures are retried with backoff and audited as
+          `citadel.LetsEncryptAutoRenewFailed`. DNS-01 certificates can't renew
+          automatically (400): they are renewed by requesting them again.
+        x-citadel-role: editor
+        x-citadel-audit: citadel.SetLetsEncryptAutoRenew
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [certId, autoRenew]
+                properties:
+                  certId:
+                    type: string
+                  autoRenew:
+                    type: boolean
+        responses:
+          "200":
+            description: The certificate's renewal state
+            content:
+              application/json:
+                schema:
+                  type: object
+                  required: [certId, renewal]
+                  properties:
+                    certId:
+                      type: string
+                    renewal:
+                      $ref: "#/components/schemas/LetsEncryptRenewal"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "500":
+            $ref: "#/components/responses/InternalError"
+          "501":
+            description: The configured store does not support this operation (`unsupported`)
             content:
               application/json:
                 schema:
@@ -5547,10 +5815,17 @@ paths:
           - name: result
             in: query
             required: false
-            description: Outcome filter
+            description: Outcome filter (`pending` selects write-ahead attempts)
             schema:
               type: string
-              enum: [success, denied, error]
+              enum: [success, denied, error, pending]
+          - name: correlation
+            in: query
+            required: false
+            description: Exact correlation ID, matching a write-ahead attempt and its outcomes
+            schema:
+              type: string
+              maxLength: 64
           - name: limit
             in: query
             required: false
@@ -5693,10 +5968,17 @@ paths:
           - name: result
             in: query
             required: false
-            description: Outcome filter
+            description: Outcome filter (`pending` selects write-ahead attempts)
             schema:
               type: string
-              enum: [success, denied, error]
+              enum: [success, denied, error, pending]
+          - name: correlation
+            in: query
+            required: false
+            description: Exact correlation ID, matching a write-ahead attempt and its outcomes
+            schema:
+              type: string
+              maxLength: 64
         responses:
           "200":
             description: The export file
@@ -5707,7 +5989,8 @@ paths:
                   description: |
                     Header row id, createdAt, actor, actorType, actorDisplayName,
                     accessKeyId, action, resource, keyId, result, errorType,
-                    sourceIp, userAgent, chainSeq, prevHash, hash; CRLF line ends.
+                    sourceIp, userAgent, chainSeq, prevHash, hash, correlationId; CRLF
+                    line ends.
               application/json:
                 schema:
                   type: array
@@ -8113,7 +8396,7 @@ components:
       properties:
         source:
           type: string
-          enum: [pca-ca, pca-cert, lets-encrypt]
+          enum: [pca-ca, pca-cert, lets-encrypt, acm-imported]
         id:
           type: string
           description: CA ID or certificate ID
@@ -8157,6 +8440,18 @@ components:
         expiringSoon:
           type: boolean
           description: Still valid but expires within 30 days
+        issuer:
+          type: string
+          description: Issuer DN of an acm-imported certificate
+        restorableUntil:
+          type: string
+          format: date-time
+          description: A DELETED CA can be restored until then
+        outstanding:
+          type: integer
+          description: A CA's still-valid issued certificates and subordinate CAs; must be 0 before it can be deleted
+        renewal:
+          $ref: "#/components/schemas/LetsEncryptRenewal"
     CertificateList:
       type: object
       required: [certificates]
@@ -8171,7 +8466,7 @@ components:
       properties:
         source:
           type: string
-          enum: [pca-ca, pca-cert, lets-encrypt]
+          enum: [pca-ca, pca-cert, lets-encrypt, acm-imported]
         id:
           type: string
         status:
@@ -8221,6 +8516,91 @@ components:
         chainPem:
           type: string
           description: The chain in PEM form
+        chain:
+          type: array
+          description: This certificate first, then each issuer up to the root
+          items:
+            $ref: "#/components/schemas/CertificateChainEntry"
+        renewal:
+          $ref: "#/components/schemas/LetsEncryptRenewal"
+    CertificateChainEntry:
+      type: object
+      required: [role, subject, issuer, serial, notBefore, notAfter, isCA, selfSigned, pem]
+      properties:
+        role:
+          type: string
+          enum: [leaf, intermediate, root]
+        subject:
+          type: string
+        issuer:
+          type: string
+        serial:
+          type: string
+        notBefore:
+          type: string
+          format: date-time
+        notAfter:
+          type: string
+          format: date-time
+        isCA:
+          type: boolean
+        selfSigned:
+          type: boolean
+        pem:
+          type: string
+    CertificateAuthorityActionRequest:
+      type: object
+      required: [caId]
+      properties:
+        caId:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, DISABLED]
+          description: For setCertificateAuthorityStatus
+        permanentDeletionTimeInDays:
+          type: integer
+          minimum: 7
+          maximum: 30
+          description: For deleteCertificateAuthority (default 30)
+    CertificateAuthorityActionResponse:
+      type: object
+      required: [caId, status]
+      properties:
+        caId:
+          type: string
+        status:
+          type: string
+          description: e.g. ACTIVE, DISABLED, DELETED
+        restorableUntil:
+          type: string
+          format: date-time
+    LetsEncryptRenewal:
+      type: object
+      required: [kind, autoRenew, manual]
+      properties:
+        kind:
+          type: string
+          description: http-01, dns-01, or empty for certificates issued before 2.1
+        autoRenew:
+          type: boolean
+        manual:
+          type: boolean
+          description: DNS-01; renewed by requesting the certificate again
+        nextRenewalAt:
+          type: string
+          format: date-time
+        lastAttemptAt:
+          type: string
+          format: date-time
+        lastError:
+          type: string
+        attempts:
+          type: integer
+          description: Consecutive failed automatic renewals
+        renewedBy:
+          type: string
+          description: The certificate that replaced this one
     CertificateCreateCARequest:
       type: object
       properties:
@@ -8606,7 +8986,11 @@ components:
           type: string
         result:
           type: string
-          enum: [success, denied, error]
+          enum: [success, denied, error, pending]
+          description: |
+            `pending` marks a write-ahead attempt, appended before a state
+            change runs; its outcome is a later event with the same
+            `correlationId`.
         errorType:
           type: string
         sourceIp:
@@ -8622,6 +9006,9 @@ components:
           type: string
         hashValid:
           type: boolean
+        correlationId:
+          type: string
+          description: Links a write-ahead attempt to its outcome events
     AuditEventPage:
       type: object
       required: [events, total, limit, offset]

@@ -6,6 +6,71 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.1.1]
+
+### Security
+
+- Write-ahead audit: no state change takes effect without an audit record.
+  Before a state-changing action runs (AWS APIs, native API, STS, password
+  and two-step sign-in, SSO, bootstrap, the ACME server and background jobs
+  such as KMS rotation and deletion, scheduled secret rotation, the secret
+  purge, certificate expiry, CA purge and Let's Encrypt renewal), Citadel
+  appends an attempt event (result `pending`) and refuses the request,
+  changing nothing, if that fails. Previously the change was committed and
+  only the response was refused. Outcome events carry the attempt's
+  `correlationId`. An outcome that can't be written goes to a retry queue,
+  logged and exposed as `citadel_audit_outcome_queue_depth`. See
+  docs/security-model.md.
+
+### Added
+
+- Audit events have a `correlationId` (API, CSV export, CEF `cs6`), the
+  audit API accepts `result=pending` and `correlation=<id>`, and the console
+  shows pending attempts and links them to their outcomes. Migration 1100
+  adds the column without rewriting the table.
+- Secrets Manager `DeleteResourcePolicy`, and `SortOrder` (`asc`/`desc`, by
+  name) on `ListSecrets`. `SortBy` other than `name` is rejected.
+- SSM `UnlabelParameterVersion` on the AWS API.
+- ACM `RequestCertificate` honours `IdempotencyToken`: the same token and
+  parameters within an hour return the same certificate ARN (stored per
+  account, migration 1110). `ImportCertificate` accepts one as a Citadel
+  extension.
+- ACM PCA subordinate CAs over the AWS API, following AWS's flow:
+  `CreateCertificateAuthority` with `SUBORDINATE` creates a CA in
+  `PENDING_CERTIFICATE`, `GetCertificateAuthorityCsr` returns its CSR,
+  `IssueCertificate` on the parent with a `SubordinateCACertificate_PathLenN/V1`
+  template signs it, and `ImportCertificateAuthorityCertificate` activates it.
+- Certificates imported through ACM `ImportCertificate` appear in the console
+  certificates list and drawer (source `acm-imported`). They are read-only
+  (no renew or revoke); admins can delete them, also through the new
+  `DELETE /v1/certificates/acm?arn=...` (audited as
+  `citadel.DeleteImportedCertificate`).
+- `GET /v1/certificates/detail` returns `chain`: every certificate from this
+  one to the root (leaf, intermediates, root), each with subject, issuer,
+  serial, validity and PEM. The chain is built from the stored issuer chain
+  and the account's CAs, and stops where Citadel doesn't hold the next
+  issuer. The drawer's Chain tab lists each certificate with a PEM download.
+- Delete certificates: `DELETE /v1/certificates?source=&id=` for private CA,
+  Let's Encrypt and imported certificates (admin, audited as
+  `citadel.DeleteCertificate`). A private CA certificate that is still valid
+  is revoked first and stays on the CRL. The console asks for the name of a
+  certificate that is still valid.
+- Disable, delete and restore CAs with AWS ACM PCA semantics: the native
+  `POST /v1/certificates/authorities/status|delete|restore` and the ACM PCA
+  `UpdateCertificateAuthority`, `DeleteCertificateAuthority` and
+  `RestoreCertificateAuthority` actions. A CA must be disabled and have no
+  certificates still valid; it stays restorable for 7–30 days (default 30),
+  after which the `pki-ca-purge` job removes it. The CA drawer explains what
+  blocks deletion and shows the restore window.
+- Let's Encrypt automatic renewal: HTTP-01 certificates renew 30 days before
+  expiry (`letsencrypt-renew` job), with retries and backoff, and failures
+  audited as `citadel.LetsEncryptAutoRenewFailed`. Auto-renew can be turned
+  off per certificate (`POST /v1/certificates/letsencrypt/auto-renew`). The
+  console shows the renewal state; DNS-01 certificates are marked for manual
+  renewal with an expiry countdown.
+- Migration `1190_pki_lifecycle` (metadata-only column additions; backfills
+  the challenge type of Let's Encrypt certificates from their order rows).
+
 ## [2.1.0]
 
 ### Added
@@ -79,11 +144,13 @@ All notable changes to Citadel are documented here. The format follows
   `citadel.LoginMFA` (success and failure) and `citadel.MFARecoveryCodeUsed`.
 - Migration `1000_console_mfa` (new tables and one constant-default column;
   instant on large databases).
-
 ### Changed
 
 - Turning on two-step verification signs the user out of their other
   sessions.
+- `RotateSecret` with a Lambda ARN (or none) and `RotateImmediately` no longer
+  creates an `AWSPENDING` copy of the current value, and `CancelRotateSecret`
+  no longer removes `AWSPENDING` (both now match AWS).
 
 ### Security
 
@@ -92,13 +159,6 @@ All notable changes to Citadel are documented here. The format follows
   patched deepmerge exists (4.3.1 is the latest and is affected), so no
   override is possible; the plugin uses it only to merge Svelte config at
   build time.
-||||||| parent of 78292cb (docs: two-step verification (TOTP), requireMFA, MFA rate limits; changelog)
-
-### Changed
-
-- `RotateSecret` with a Lambda ARN (or none) and `RotateImmediately` no longer
-  creates an `AWSPENDING` copy of the current value, and `CancelRotateSecret`
-  no longer removes `AWSPENDING` (both now match AWS).
 
 ## [2.0.3]
 

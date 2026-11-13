@@ -494,6 +494,11 @@ func (s *Store) PutSecretResourcePolicy(ctx context.Context, secretID, policyDoc
 	if err != nil {
 		return err
 	}
+	if strings.TrimSpace(policyDocument) == "" {
+		// An empty document removes the policy (DeleteResourcePolicy).
+		_, err = s.db.ExecContext(ctx, `DELETE FROM sm_secret_policies WHERE account_id = $1 AND secret_name = $2`, s.accountForContext(ctx), meta.Name)
+		return err
+	}
 	const q = `
 INSERT INTO sm_secret_policies (account_id, secret_name, policy_document)
 VALUES ($3, $1, $2)

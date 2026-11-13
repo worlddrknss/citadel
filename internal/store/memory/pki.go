@@ -68,6 +68,10 @@ func copyCA(ca store.PCACertificateAuthority) store.PCACertificateAuthority {
 		pl := *ca.PathLength
 		ca.PathLength = &pl
 	}
+	if ca.RestorableUntil != nil {
+		t := *ca.RestorableUntil
+		ca.RestorableUntil = &t
+	}
 	return ca
 }
 
@@ -114,6 +118,10 @@ func copyCert(c store.PCACertificate) store.PCACertificate {
 	if c.RevokedAt != nil {
 		t := *c.RevokedAt
 		c.RevokedAt = &t
+	}
+	if c.DeletedAt != nil {
+		t := *c.DeletedAt
+		c.DeletedAt = &t
 	}
 	return c
 }

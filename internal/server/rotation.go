@@ -405,10 +405,23 @@ func (s *Server) executeRotation(ctx context.Context, account string, meta store
 			}
 		}
 	}()
+	// Write-ahead audit (audit_writeahead.go): a scheduled run records its
+	// attempt before any step changes the secret; a run started by a request
+	// is already covered by that request's attempt. If the attempt can't be
+	// written nothing runs and the lease is released for a later retry.
+	ctx, aerr := s.ensureAudit(ctx, store.AuditEvent{Action: "secretsmanager.RotateSecret", AuditOrigin: store.AuditOrigin{
+		Actor: rotationActor, ActorType: store.AuditActorSystem, Resource: name,
+	}})
+	if aerr != nil {
+		log.Printf("secret rotation: skipped, the audit log is unavailable")
+		_ = s.store.ReleaseSecretRotation(ctx, name, owner)
+		return
+	}
 	started := time.Now().UTC()
 	rot, err := s.store.GetSecretRotation(ctx, name)
 	if err != nil {
 		log.Printf("secret rotation: could not load the rotation configuration: %v", err)
+		s.finishAudit(ctx, store.AuditResultError, "InternalError")
 		return
 	}
 	if rot.Attempts > 0 && trigger == "schedule" {

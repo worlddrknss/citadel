@@ -44,6 +44,7 @@ type Store struct {
 	kms    *memKMS
 	mfa    *memMFA
 	rotSeq int64
+	parity memPKIParity
 }
 
 var _ store.Store = (*Store)(nil)

@@ -270,6 +270,16 @@ func (s *Server) handleKMS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	target := r.Header.Get("X-Amz-Target")
+	// Write-ahead audit: a state-changing action is recorded as attempted
+	// before it runs, or refused (audit_writeahead.go).
+	if awsWriteAhead(target) {
+		origin := s.auditOrigin(r)
+		origin.Resource = resourceFromBody(r)
+		if err := s.beginAuditAttempt(r.Context(), store.AuditEvent{Action: target, AuditOrigin: origin}); err != nil {
+			writeAWSJSONError(w, http.StatusInternalServerError, "InternalFailure", "the audit log could not be written; nothing was changed")
+			return
+		}
+	}
 	if s.servePKITarget(w, r, target) {
 		return
 	}
@@ -348,6 +358,8 @@ func (s *Server) handleKMS(w http.ResponseWriter, r *http.Request) {
 		s.handleGetSecretResourcePolicy(w, r)
 	case "secretsmanager.PutResourcePolicy":
 		s.handlePutSecretResourcePolicy(w, r)
+	case "secretsmanager.DeleteResourcePolicy":
+		s.handleDeleteSecretResourcePolicy(w, r)
 	case "secretsmanager.ValidateResourcePolicy":
 		s.handleValidateSecretResourcePolicy(w, r)
 	case "secretsmanager.RotateSecret":
@@ -374,6 +386,8 @@ func (s *Server) handleKMS(w http.ResponseWriter, r *http.Request) {
 		s.handleSSMGetParameterHistory(w, r)
 	case "AmazonSSM.LabelParameterVersion":
 		s.handleSSMLabelParameterVersion(w, r)
+	case "AmazonSSM.UnlabelParameterVersion":
+		s.handleSSMUnlabelParameterVersion(w, r)
 	case "AmazonSSM.AddTagsToResource":
 		s.handleSSMAddTagsToResource(w, r)
 	case "AmazonSSM.RemoveTagsFromResource":

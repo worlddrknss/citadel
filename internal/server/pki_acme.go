@@ -98,6 +98,12 @@ func (s *Server) recordACMEAudit(ctx context.Context, action, acmeAccountID, res
 		AuditOrigin: store.AuditOrigin{Actor: "acme:" + acmeAccountID, ActorType: auditActorACME, Resource: resource}})
 }
 
+// beginACMEAttempt writes the write-ahead attempt for an ACME change.
+func (s *Server) beginACMEAttempt(ctx context.Context, action, acmeAccountID, resource string) error {
+	return s.beginAuditAttempt(ctx, store.AuditEvent{Action: action, KeyID: resource,
+		AuditOrigin: store.AuditOrigin{Actor: "acme:" + acmeAccountID, ActorType: auditActorACME, Resource: resource}})
+}
+
 // acmeIssuingCA returns the account's configured issuing CA, or its first
 // active CA when none is configured. ctx must carry the account.
 func (s *Server) acmeIssuingCA(ctx context.Context) (store.PCACertificateAuthority, error) {
@@ -159,6 +165,9 @@ func (i acmeIssuer) Issue(ctx context.Context, req acme.IssueRequest) ([]byte, e
 	if notAfter.IsZero() {
 		notAfter = time.Now().Add(acmeDefaultLifetime)
 	}
+	if err := i.s.beginACMEAttempt(ctx, "citadel.ACMEIssueCertificate", req.AccountID, req.OrderID); err != nil {
+		return nil, err
+	}
 	leaf, err := i.s.pkiIssueLeaf(ctx, leafRequest{CA: ca, CSR: req.CSR, Template: templateServer, CommonName: cn,
 		ExtraSANs: names, ExactNames: true, NotAfter: notAfter})
 	if err != nil {
@@ -187,6 +196,10 @@ func (i acmeIssuer) Revoke(ctx context.Context, serial *big.Int, reason int) err
 	name, ok := consoleReasonNames[reason]
 	if !ok {
 		name = consoleReasonNames[0]
+	}
+	if err := i.s.beginAuditAttempt(actx, store.AuditEvent{Action: "citadel.ACMERevokeCertificate", KeyID: cert.CertID,
+		AuditOrigin: store.AuditOrigin{Actor: "acme", ActorType: auditActorACME, Resource: cert.CertID}}); err != nil {
+		return err
 	}
 	err = i.s.store.RevokeCertificate(actx, cert.CertID, name)
 	if errors.Is(err, store.ErrCertificateAlreadyRevoked) {
@@ -222,6 +235,9 @@ func (e acmeEAB) Bind(ctx context.Context, kid, accountID string) error {
 	}
 	clear(k.HMACKey)
 	actx := acmeAuditCtx(ctx, k.AccountID)
+	if err := e.s.beginACMEAttempt(actx, "citadel.ACMEBindAccount", accountID, kid); err != nil {
+		return err
+	}
 	if err := e.s.store.BindEABKey(actx, kid, accountID, time.Now().UTC()); err != nil {
 		e.s.recordACMEAudit(actx, "citadel.ACMEBindAccount", accountID, kid, "error", "EABKeyUnavailable")
 		return err

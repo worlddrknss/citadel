@@ -34,6 +34,11 @@ const (
 	AuditResultSuccess = "success"
 	AuditResultDenied  = "denied"
 	AuditResultError   = "error"
+	// AuditResultPending marks a write-ahead attempt: the action was about
+	// to be performed. Its outcome is a later event with the same
+	// CorrelationID; an attempt without one means the outcome is unknown
+	// (for example the process stopped in between).
+	AuditResultPending = "pending"
 )
 
 // Actor types recorded on audit events.
@@ -61,6 +66,9 @@ type AuditOrigin struct {
 	Resource         string
 	SourceIP         string
 	UserAgent        string
+	// CorrelationID links a write-ahead attempt (Result pending) to its
+	// outcome events. Empty for events written without an attempt.
+	CorrelationID string
 }
 
 // AuditEvent is an event to append to the audit log.
@@ -126,6 +134,11 @@ func AuditMAC(key []byte, rec AuditRecord) string {
 	field(rec.AccessKeyID)
 	field(rec.SourceIP)
 	field(rec.UserAgent)
+	// Added in 2.1. Hashed only when set, so every earlier row keeps its MAC.
+	if rec.CorrelationID != "" {
+		field("correlation")
+		field(rec.CorrelationID)
+	}
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -146,6 +159,8 @@ func NormalizeAuditResult(result, errorType string) string {
 		return AuditResultSuccess
 	case "denied":
 		return AuditResultDenied
+	case "pending":
+		return AuditResultPending
 	}
 	et := strings.ToLower(errorType)
 	if strings.Contains(et, "accessdenied") || strings.Contains(et, "forbidden") || strings.Contains(et, "unauthorized") {
@@ -181,6 +196,7 @@ func SanitizeAuditEvent(ev AuditEvent) AuditEvent {
 	ev.Resource = truncateAuditField(ev.Resource, 1024)
 	ev.SourceIP = truncateAuditField(ev.SourceIP, 64)
 	ev.UserAgent = truncateAuditField(ev.UserAgent, 512)
+	ev.CorrelationID = truncateAuditField(ev.CorrelationID, 64)
 	if ev.Actor == "" {
 		ev.Actor = AuditActorAnonymous
 		if ev.ActorType == "" {

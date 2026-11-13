@@ -28,7 +28,9 @@ type observabilityRuntime struct {
 	httpDur  *metrics.HistogramVec
 	awsReqs  *metrics.CounterVec
 	info     *metrics.GaugeVec
-	draining atomic.Bool
+	// auditQueue is the depth of the write-ahead outcome retry queue.
+	auditQueue *metrics.GaugeVec
+	draining   atomic.Bool
 }
 
 func (s *Server) obsRuntime() *observabilityRuntime {
@@ -40,6 +42,7 @@ func (s *Server) obsRuntime() *observabilityRuntime {
 		o.awsReqs = o.reg.NewCounterVec("citadel_aws_requests_total", "AWS-protocol requests by service, action and status code.", "service", "action", "code")
 		o.info = o.reg.NewGaugeVec("citadel_build_info", "Always 1; labels describe the running build.", "app", "fips")
 		o.info.Set(1, AppName, strconv.FormatBool(fips140.Enabled()))
+		o.auditQueue = o.reg.NewGaugeVec("citadel_audit_outcome_queue_depth", "Audit outcome events waiting to be retried after a failed write (their write-ahead attempts are recorded).")
 	})
 	return o
 }

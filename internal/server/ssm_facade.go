@@ -1088,6 +1088,71 @@ func (s *Server) handleSSMLabelParameterVersion(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, ssmLabelParameterVersionResponse{InvalidLabels: invalid, ParameterVersion: version})
 }
 
+// ---- UnlabelParameterVersion -----------------------------------------------
+
+type ssmUnlabelParameterVersionRequest struct {
+	Name             string   `json:"Name"`
+	ParameterVersion int64    `json:"ParameterVersion"`
+	Labels           []string `json:"Labels"`
+}
+
+type ssmUnlabelParameterVersionResponse struct {
+	InvalidLabels []string `json:"InvalidLabels"`
+	RemovedLabels []string `json:"RemovedLabels"`
+}
+
+// handleSSMUnlabelParameterVersion detaches labels from one parameter
+// version. As in AWS, labels the version does not carry come back in
+// InvalidLabels rather than failing the call.
+func (s *Server) handleSSMUnlabelParameterVersion(w http.ResponseWriter, r *http.Request) {
+	const action = "AmazonSSM.UnlabelParameterVersion"
+	ctx := r.Context()
+	ps, ok := s.ssmParamStore(w)
+	if !ok {
+		return
+	}
+	var req ssmUnlabelParameterVersionRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		s.ssmValidation(w, r, action, err.Error())
+		return
+	}
+	name, err := normalizeParameterName(ssmNameFromInput(req.Name))
+	if err != nil {
+		s.ssmValidation(w, r, action, err.Error())
+		return
+	}
+	if req.ParameterVersion < 1 {
+		s.ssmValidation(w, r, action, "ParameterVersion must be a positive number")
+		return
+	}
+	if len(req.Labels) == 0 || len(req.Labels) > 10 {
+		s.ssmValidation(w, r, action, "Labels must contain between 1 and 10 labels")
+		return
+	}
+	if _, err := ps.GetParameter(ctx, name); err != nil {
+		errType := ssmParameterError(w, err)
+		s.recordAudit(ctx, store.AuditEvent{Action: action, Result: "error", ErrorType: errType, AuditOrigin: s.auditOrigin(r)})
+		return
+	}
+	removed, err := s.store.UnlabelParameterVersion(ctx, name, req.ParameterVersion, req.Labels)
+	if err != nil {
+		if errors.Is(err, store.ErrParameterNotFound) {
+			err = errParameterVersionNotFound
+		}
+		errType := ssmParameterError(w, err)
+		s.recordAudit(ctx, store.AuditEvent{Action: action, Result: "error", ErrorType: errType, AuditOrigin: s.auditOrigin(r)})
+		return
+	}
+	invalid := []string{}
+	for _, l := range req.Labels {
+		if !store.ContainsString(removed, l) && !store.ContainsString(invalid, l) {
+			invalid = append(invalid, l)
+		}
+	}
+	s.recordAudit(ctx, store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
+	writeJSON(w, http.StatusOK, ssmUnlabelParameterVersionResponse{InvalidLabels: invalid, RemovedLabels: removed})
+}
+
 // ---- Tags ------------------------------------------------------------------
 
 // ssmTagTarget validates ResourceType/ResourceId; only parameters are

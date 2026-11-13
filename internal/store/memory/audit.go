@@ -123,6 +123,9 @@ func auditMatches(rec store.AuditRecord, account string, q store.AuditQuery) boo
 	if q.Resource != "" && !containsFold(rec.Resource, q.Resource) && !containsFold(rec.KeyID, q.Resource) {
 		return false
 	}
+	if q.Correlation != "" && rec.CorrelationID != q.Correlation {
+		return false
+	}
 	if q.Result != "" && store.NormalizeAuditResult(rec.Result, rec.ErrorType) != q.Result {
 		return false
 	}

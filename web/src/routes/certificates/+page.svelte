@@ -6,9 +6,11 @@
   import { errorMessage } from '#lib/api.ts';
   import { api } from '#lib/api.ts';
   import { session } from '#lib/stores/session.svelte.ts';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import { param, setParams } from '#lib/url.ts';
   import { certApi, type CertRow } from './api';
-  import { cnOf, firstDomain, rowKey, safeFileName, type Filter, type SortKey } from './certs';
+  import { cnOf, deleteCertMessage, deleteNeedsTypeToConfirm, firstDomain, isImported, rowKey, safeFileName, type Filter, type SortKey } from './certs';
   import CATree from './CATree.svelte';
   import CertTable from './CertTable.svelte';
   import CertDrawer from './CertDrawer.svelte';
@@ -17,6 +19,7 @@
   import RenewModal from './RenewModal.svelte';
   import CreateCAModal from './CreateCAModal.svelte';
   import ImportCAModal from './ImportCAModal.svelte';
+  import DeleteCAModal from './DeleteCAModal.svelte';
   import LetsEncryptPanel from './LetsEncryptPanel.svelte';
   import AcmeServerPanel from './AcmeServerPanel.svelte';
   import OnceSecret from './OnceSecret.svelte';
@@ -101,11 +104,14 @@
     if (c.source === 'pca-ca') return cnOf(c.subject) || c.id;
     if (c.source === 'lets-encrypt') return firstDomain(c.subject) || c.id;
     if (c.commonName) return c.commonName;
+    if (isImported(c)) return c.subject || c.id;
     const serial = c.serial || c.subject;
     return serial ? `serial ${serial.length > 16 ? serial.slice(0, 16) + '…' : serial}` : c.id;
   }
   function issuerOf(c: CertRow): string {
-    return c.source === 'lets-encrypt' ? "Let's Encrypt" : caName(c.issuerCaId) || '—';
+    if (c.source === 'lets-encrypt') return "Let's Encrypt";
+    if (isImported(c)) return cnOf(c.issuer) || c.issuer || '—';
+    return caName(c.issuerCaId) || '—';
   }
 
   // ---- URL state -----------------------------------------------------------
@@ -146,6 +152,7 @@
   let importOpen = $state(false);
   let revokeOpen = $state(false);
   let renewOpen = $state(false);
+  let deleteCAOpen = $state(false);
   let target = $state<CertRow | null>(null);
   let generated = $state<NonNullable<IssueResult['generated']> | null>(null);
   let generatedOpen = $state(false);
@@ -168,6 +175,31 @@
     renewOpen = true;
   }
 
+  /**
+   * Deletes a certificate. One that is still valid asks for its name: a
+   * private CA certificate is revoked first, others keep working where
+   * they are deployed.
+   */
+  async function askDelete(c: CertRow) {
+    const name = nameOf(c);
+    const ok = await confirm({
+      title: isImported(c) ? 'Delete imported certificate?' : 'Delete certificate?',
+      message: `${deleteCertMessage(c, name)} This can't be undone.`,
+      confirmLabel: 'Delete',
+      danger: true,
+      typeToConfirm: deleteNeedsTypeToConfirm(c) ? name : undefined
+    });
+    if (!ok) return;
+    try {
+      const r = await certApi.deleteCertificate(c.source, c.id);
+      toast.success(r.revoked ? 'Certificate revoked and deleted' : 'Certificate deleted');
+      if (selectedKey === rowKey(c)) closeDrawer();
+      await load();
+    } catch (e) {
+      toast.error(e);
+    }
+  }
+
   async function issued(r: IssueResult) {
     await load();
     if (r.generated) {
@@ -185,7 +217,7 @@
   }
 </script>
 
-<PageHeader title="Certificates" description="Private CA hierarchy and public certificates from Let's Encrypt, in one place.">
+<PageHeader title="Certificates" description="Private CA hierarchy, public certificates from Let's Encrypt and certificates imported through ACM, in one place.">
   {#snippet actions()}
     {#if canAdmin}
       <button type="button" class="btn btn-secondary" onclick={() => (importOpen = true)}><Icon name="upload" size={16} />Import</button>
@@ -263,6 +295,7 @@
       onopen={openCert}
       onrenew={askRenew}
       onrevoke={askRevoke}
+      ondelete={askDelete}
       onissue={() => issue()}
     />
   </div>
@@ -279,6 +312,12 @@
   onclose={closeDrawer}
   onrenew={askRenew}
   onrevoke={askRevoke}
+  ondelete={askDelete}
+  ondeleteca={(ca) => {
+    target = ca;
+    deleteCAOpen = true;
+  }}
+  onchanged={load}
   onissuefrom={(ca) => issue(ca.id)}
   onsubordinate={(ca) => newCA(ca.id)}
 />
@@ -287,6 +326,7 @@
 <CreateCAModal bind:open={caOpen} {cas} initialParent={caParent} oncreated={(id) => load().then(() => setParams({ cert: `pca-ca:${id}`, tab: null }))} />
 <ImportCAModal bind:open={importOpen} onimported={(id) => load().then(() => setParams({ cert: `pca-ca:${id}`, tab: null }))} />
 <RevokeModal bind:open={revokeOpen} cert={target} name={target ? nameOf(target) : ''} ondone={load} />
+<DeleteCAModal bind:open={deleteCAOpen} ca={target} name={target ? nameOf(target) : ''} ondone={load} />
 <RenewModal bind:open={renewOpen} cert={target} name={target ? nameOf(target) : ''} ondone={load} />
 
 {#if generated}

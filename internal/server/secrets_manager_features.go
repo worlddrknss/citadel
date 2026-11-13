@@ -251,6 +251,47 @@ func (s *Server) handlePutSecretResourcePolicy(w http.ResponseWriter, r *http.Re
 	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
 }
 
+type deleteSecretResourcePolicyResponse struct {
+	ARN  string `json:"ARN"`
+	Name string `json:"Name"`
+}
+
+// handleDeleteSecretResourcePolicy removes a secret's resource policy; the
+// secret falls back to the account default policy, as in AWS.
+func (s *Server) handleDeleteSecretResourcePolicy(w http.ResponseWriter, r *http.Request) {
+	const action = "secretsmanager.DeleteResourcePolicy"
+	var req secretPolicyRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
+		return
+	}
+	if strings.TrimSpace(req.SecretID) == "" {
+		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", "SecretId is required")
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
+		return
+	}
+	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
+	if err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
+		return
+	}
+	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:DeleteResourcePolicy"); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
+		return
+	}
+	// An empty document removes the stored policy.
+	if err := s.store.PutSecretResourcePolicy(r.Context(), meta.Name, ""); err != nil {
+		secretError(w, err)
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
+		return
+	}
+	writeJSON(w, http.StatusOK, deleteSecretResourcePolicyResponse{ARN: meta.ARN, Name: meta.Name})
+	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
+}
+
 func (s *Server) handleValidateSecretResourcePolicy(w http.ResponseWriter, r *http.Request) {
 	var req secretPolicyRequest
 	if err := decodeJSONBody(r, &req); err != nil {

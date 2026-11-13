@@ -74,7 +74,10 @@ func (s *Store) ListSecretsPage(ctx context.Context, q store.SecretPageQuery) ([
 	var out []store.SecretMetadataRecord
 	for _, secret := range s.secrets {
 		m := secret.metadata
-		if secret.account != account || m.Name <= q.After {
+		if secret.account != account {
+			continue
+		}
+		if q.After != "" && ((!q.Descending && m.Name <= q.After) || (q.Descending && m.Name >= q.After)) {
 			continue
 		}
 		if m.DeletedDate != nil && !q.IncludeDeleted {
@@ -83,7 +86,12 @@ func (s *Store) ListSecretsPage(ctx context.Context, q store.SecretPageQuery) ([
 		m.Tags = append([]store.SecretTag(nil), m.Tags...)
 		out = append(out, m)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	sort.Slice(out, func(i, j int) bool {
+		if q.Descending {
+			return out[i].Name > out[j].Name
+		}
+		return out[i].Name < out[j].Name
+	})
 	if len(out) > limit {
 		return out[:limit], true, nil
 	}

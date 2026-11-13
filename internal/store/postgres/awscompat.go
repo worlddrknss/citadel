@@ -120,12 +120,23 @@ func (s *Store) ListSecretsPage(ctx context.Context, q store.SecretPageQuery) ([
 	limit := pageLimit(q.Limit)
 	var args sqlArgs
 	query := `SELECT name, arn, description, kms_key_id, current_version_id, previous_version_id, rotation_enabled, rotation_lambda_arn, rotation_days, next_rotation_date, deleted_date, created_at, updated_at
-FROM sm_secrets WHERE name COLLATE "C" > ` + args.add(q.After)
+FROM sm_secrets WHERE `
+	order := ` ORDER BY name COLLATE "C"`
+	if q.Descending {
+		order += ` DESC`
+		if q.After != "" {
+			query += `name COLLATE "C" < ` + args.add(q.After)
+		} else {
+			query += `TRUE`
+		}
+	} else {
+		query += `name COLLATE "C" > ` + args.add(q.After)
+	}
 	if !q.IncludeDeleted {
 		query += ` AND deleted_date IS NULL`
 	}
 	query += s.accountCond(ctx, "account_id", &args)
-	query += ` ORDER BY name COLLATE "C" LIMIT ` + args.add(limit+1)
+	query += order + ` LIMIT ` + args.add(limit+1)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, false, err

@@ -132,6 +132,10 @@ type listSecretsRequest struct {
 	// External Secrets Operator's dataFrom.find: it lists, then reads every
 	// match, and one pending delete failed the whole ExternalSecret.
 	IncludePlannedDeletion bool `json:"IncludePlannedDeletion"`
+	// SortOrder is "asc" (default) or "desc"; secrets are ordered by name,
+	// so SortBy may only be "name" (or omitted).
+	SortOrder string `json:"SortOrder"`
+	SortBy    string `json:"SortBy"`
 }
 
 type listSecretsResponse struct {
@@ -644,18 +648,35 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
 		return
 	}
-	after, err := decodeListMarker("s", req.NextToken)
+	// The marker kind binds a NextToken to its sort order.
+	markerKind, descending := "s", false
+	switch req.SortOrder {
+	case "", "asc":
+	case "desc":
+		markerKind, descending = "sd", true
+	default:
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
+		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", "SortOrder must be asc or desc")
+		return
+	}
+	if req.SortBy != "" && req.SortBy != "name" {
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidParameterException", AuditOrigin: s.auditOrigin(r)})
+		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", "SortBy must be name: Citadel lists secrets by name")
+		return
+	}
+	after, err := decodeListMarker(markerKind, req.NextToken)
 	if err != nil {
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InvalidNextTokenException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "InvalidNextTokenException", "NextToken is invalid")
 		return
 	}
-	items, next, err := s.scanSecrets(r.Context(), after, limit, req.IncludePlannedDeletion, func(m store.SecretMetadataRecord) bool {
+	items, next, err := s.scanSecretsOrdered(r.Context(), after, limit, req.IncludePlannedDeletion, descending, func(m store.SecretMetadataRecord) bool {
 		return listableSecret(m, req)
 	})
 	if err != nil {
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InternalServiceError", AuditOrigin: s.auditOrigin(r)})
-		writeAWSJSONError(w, http.StatusInternalServerError, "InternalServiceError", "list secrets failed: "+err.Error())
+		log.Printf("secrets manager: list secrets: %v", err)
+		writeAWSJSONError(w, http.StatusInternalServerError, "InternalServiceError", "list secrets failed")
 		return
 	}
 	entries := make([]secretListEntry, 0, len(items))
@@ -673,7 +694,7 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "ok", AuditOrigin: s.auditOrigin(r)})
-	writeJSON(w, http.StatusOK, listSecretsResponse{SecretList: entries, NextToken: encodeListMarker("s", next)})
+	writeJSON(w, http.StatusOK, listSecretsResponse{SecretList: entries, NextToken: encodeListMarker(markerKind, next)})
 }
 
 // secretTagMatches matches value as a case-insensitive prefix of any tag key

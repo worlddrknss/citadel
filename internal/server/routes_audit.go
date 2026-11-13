@@ -67,6 +67,9 @@ type auditEventJSON struct {
 	PrevHash         string `json:"prevHash,omitempty"`
 	Hash             string `json:"hash,omitempty"`
 	HashValid        *bool  `json:"hashValid,omitempty"`
+	// CorrelationID links a write-ahead attempt (result pending) to its
+	// outcome events.
+	CorrelationID string `json:"correlationId,omitempty"`
 }
 
 func toAuditEventJSON(rec store.AuditRecord) auditEventJSON {
@@ -88,6 +91,7 @@ func toAuditEventJSON(rec store.AuditRecord) auditEventJSON {
 		PrevHash:         rec.PrevHash,
 		Hash:             rec.EventHash,
 		HashValid:        rec.HashValid,
+		CorrelationID:    rec.CorrelationID,
 	}
 }
 
@@ -127,10 +131,16 @@ func parseAuditFilters(r *http.Request) (store.AuditQuery, string) {
 		*f.dst = v
 	}
 	switch v := strings.ToLower(strings.TrimSpace(q.Get("result"))); v {
-	case "", store.AuditResultSuccess, store.AuditResultDenied, store.AuditResultError:
+	case "", store.AuditResultSuccess, store.AuditResultDenied, store.AuditResultError, store.AuditResultPending:
 		out.Result = v
 	default:
-		return out, "result must be success, denied or error"
+		return out, "result must be success, denied, error or pending"
+	}
+	if v := strings.TrimSpace(q.Get("correlation")); v != "" {
+		if len(v) > 64 || strings.Trim(v, "0123456789abcdef") != "" {
+			return out, "correlation must be a correlation ID"
+		}
+		out.Correlation = v
 	}
 	return out, ""
 }
@@ -329,13 +339,13 @@ func csvSafe(v string) string {
 	return v
 }
 
-var auditCSVColumns = []string{"id", "createdAt", "actor", "actorType", "actorDisplayName", "accessKeyId", "action", "resource", "keyId", "result", "errorType", "sourceIp", "userAgent", "chainSeq", "prevHash", "hash"}
+var auditCSVColumns = []string{"id", "createdAt", "actor", "actorType", "actorDisplayName", "accessKeyId", "action", "resource", "keyId", "result", "errorType", "sourceIp", "userAgent", "chainSeq", "prevHash", "hash", "correlationId"}
 
 func auditCSVRow(e auditEventJSON) []string {
 	row := []string{
 		strconv.FormatInt(e.ID, 10), e.CreatedAt, e.Actor, e.ActorType, e.ActorDisplayName, e.AccessKeyID,
 		e.Action, e.Resource, e.KeyID, e.Result, e.ErrorType, e.SourceIP, e.UserAgent,
-		strconv.FormatInt(e.ChainSeq, 10), e.PrevHash, e.Hash,
+		strconv.FormatInt(e.ChainSeq, 10), e.PrevHash, e.Hash, e.CorrelationID,
 	}
 	for i := range row {
 		row[i] = csvSafe(row[i])

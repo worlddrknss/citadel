@@ -20,6 +20,9 @@ type SecretPageQuery struct {
 	After          string // exclusive cursor: last secret name of the previous page
 	Limit          int
 	IncludeDeleted bool // include secrets scheduled for deletion
+	// Descending orders names Z..A; After is then an exclusive upper bound
+	// (names sorting before it).
+	Descending bool
 }
 
 // ParameterPageQuery selects one page of parameters ordered by name.

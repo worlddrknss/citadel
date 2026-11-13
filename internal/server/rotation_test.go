@@ -167,6 +167,16 @@ func TestRotationRandomJSONKeyAndScheduleJob(t *testing.T) {
 	if want := time.Now().UTC().AddDate(0, 0, 7); meta.NextRotationDate == nil || meta.NextRotationDate.Day() != want.Day() {
 		t.Fatalf("next rotation = %v", meta.NextRotationDate)
 	}
+	// Write-ahead audit: the scheduled run wrote its attempt first, and the
+	// step and outcome events are linked to it.
+	attempts, _ := e.st.QueryAuditEvents(rotationCtxA(), store.AuditQuery{Action: "secretsmanager.RotateSecret", Result: store.AuditResultPending})
+	if len(attempts) != 1 || attempts[0].Actor != rotationActor || attempts[0].CorrelationID == "" {
+		t.Fatalf("rotation attempts = %+v", attempts)
+	}
+	linked, _ := e.st.QueryAuditEvents(rotationCtxA(), store.AuditQuery{Correlation: attempts[0].CorrelationID})
+	if len(linked) != 6 || linked[0].Action != "secretsmanager.RotationSucceeded" {
+		t.Fatalf("events linked to the rotation attempt = %d, newest %q", len(linked), linked[0].Action)
+	}
 }
 
 // webhookTestServer is an https rotation endpoint that checks signatures.

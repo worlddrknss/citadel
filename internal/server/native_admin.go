@@ -97,6 +97,10 @@ func (s *Server) handleV1Login(w http.ResponseWriter, r *http.Request) {
 	}
 	a.failUser.Reset(userKey)
 	a.failIP.Reset(ip)
+	if err := s.beginAuditAttempt(r.Context(), store.AuditEvent{Action: "citadel.Login", KeyID: accountID, AuditOrigin: s.userAuditOrigin(r, user.Username, accountID)}); err != nil {
+		writeNativeError(w, http.StatusInternalServerError, "audit_unavailable", "the audit log could not be written; sign-in was not completed")
+		return
+	}
 	s.rehashOnLogin(r.Context(), user, req.Password)
 	if s.mfaAfterPassword(w, r, user, accountID) {
 		return
@@ -139,6 +143,13 @@ func loginThrottled(a *authState, ip, userKey string) (time.Duration, bool) {
 func (s *Server) handleV1Logout(w http.ResponseWriter, r *http.Request) {
 	if token := s.sessionToken(r); token != "" {
 		if row, err := s.store.GetConsoleSessionByTokenHash(r.Context(), hashSessionToken(token)); err == nil {
+			if err := s.beginAuditAttempt(r.Context(), store.AuditEvent{Action: "citadel.Logout", KeyID: row.AccountID, AuditOrigin: s.userAuditOrigin(r, row.Username, row.AccountID)}); err != nil {
+				// The server-side session stays until it expires; the
+				// browser forgets it either way.
+				s.clearSessionCookie(w)
+				writeNativeError(w, http.StatusInternalServerError, "audit_unavailable", "the audit log could not be written; the session was not revoked on the server")
+				return
+			}
 			if err := s.store.DeleteConsoleSession(r.Context(), row.Username, row.ID); err != nil && !errors.Is(err, store.ErrConsoleSessionNotFound) {
 				log.Printf("logout: delete session failed: %v", err)
 			}

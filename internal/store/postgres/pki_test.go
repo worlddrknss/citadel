@@ -31,6 +31,38 @@ func TestPKIStoreContract(t *testing.T) {
 	})
 }
 
+func TestPKIParityStoreContract(t *testing.T) {
+	st := openTestStore(t)
+	storetest.RunPKIParity(t, storetest.PKIEnv{
+		Store: st,
+		NewCAKey: func(ctx context.Context) string {
+			k, err := st.CreateKey(ctx, "ca key", store.KeyUsageSignVerify, store.KeySpecECCP256)
+			if err != nil {
+				t.Fatalf("create CA key: %v", err)
+			}
+			return k.ID
+		},
+	})
+}
+
 func TestACMEServerStoreContract(t *testing.T) {
 	storetest.RunACMEStore(t, openTestStore(t).ACMEServerStore())
+}
+
+func TestPKILifecycleStoreContract(t *testing.T) {
+	st := openTestStore(t)
+	storetest.RunPKILifecycle(t, storetest.PKIEnv{
+		Store: st,
+		NewCAKey: func(ctx context.Context) string {
+			k, err := st.CreateKey(ctx, "ca key", store.KeyUsageSignVerify, store.KeySpecECCP256)
+			if err != nil {
+				t.Fatalf("create CA key: %v", err)
+			}
+			return k.ID
+		},
+	})
+}
+
+func TestLERenewalStoreContract(t *testing.T) {
+	storetest.RunLERenewal(t, openTestStore(t))
 }

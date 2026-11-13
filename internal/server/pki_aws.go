@@ -85,14 +85,16 @@ var acmActions = map[string]awsPKIHandler{
 }
 
 var pcaActions = map[string]awsPKIHandler{
-	"CreateCertificateAuthority":         (*Server).pcaCreateCertificateAuthority,
-	"DescribeCertificateAuthority":       (*Server).pcaDescribeCertificateAuthority,
-	"ListCertificateAuthorities":         (*Server).pcaListCertificateAuthorities,
-	"GetCertificateAuthorityCertificate": (*Server).pcaGetCertificateAuthorityCertificate,
-	"IssueCertificate":                   (*Server).pcaIssueCertificate,
-	"GetCertificate":                     (*Server).pcaGetCertificate,
-	"RevokeCertificate":                  (*Server).pcaRevokeCertificate,
-	"GetCRL":                             (*Server).pcaGetCRL, // Citadel extension
+	"CreateCertificateAuthority":            (*Server).pcaCreateCertificateAuthority,
+	"DescribeCertificateAuthority":          (*Server).pcaDescribeCertificateAuthority,
+	"ListCertificateAuthorities":            (*Server).pcaListCertificateAuthorities,
+	"GetCertificateAuthorityCertificate":    (*Server).pcaGetCertificateAuthorityCertificate,
+	"IssueCertificate":                      (*Server).pcaIssueCertificate,
+	"GetCertificate":                        (*Server).pcaGetCertificate,
+	"RevokeCertificate":                     (*Server).pcaRevokeCertificate,
+	"GetCRL":                                (*Server).pcaGetCRL, // Citadel extension
+	"GetCertificateAuthorityCsr":            (*Server).pcaGetCertificateAuthorityCsr,
+	"ImportCertificateAuthorityCertificate": (*Server).pcaImportCertificateAuthorityCertificate,
 }
 
 // servePKITarget handles ACM and ACM PCA targets. It reports false for any
@@ -185,12 +187,23 @@ func (s *Server) pcaCreateCertificateAuthority(ctx context.Context, body []byte)
 	if caType == "" {
 		caType = req.Type
 	}
-	if strings.EqualFold(caType, "SUBORDINATE") {
-		return nil, "", pkiInvalid("subordinate CAs signed by a Citadel CA are created with POST /v1/certificates/authorities (parentCaId)")
-	}
 	cfg := req.CertificateAuthorityConfiguration
 	subj := subjectConfig{Country: cfg.Subject.Country, State: cfg.Subject.State, Locality: cfg.Subject.Locality,
 		Organization: cfg.Subject.Organization, OrganizationUnit: cfg.Subject.OrganizationalUnit, CommonName: cfg.Subject.CommonName}
+	switch strings.ToUpper(strings.TrimSpace(caType)) {
+	case "", "ROOT":
+	case "SUBORDINATE":
+		// As in AWS: the CA starts in PENDING_CERTIFICATE with a CSR for its
+		// parent to sign (GetCertificateAuthorityCsr, then
+		// ImportCertificateAuthorityCertificate).
+		rec, err := s.pkiCreatePendingSubordinateCA(ctx, cfg.KeyAlgorithm, subj)
+		if err != nil {
+			return nil, "", err
+		}
+		return map[string]string{"CertificateAuthorityArn": rec.ARN}, rec.ARN, nil
+	default:
+		return nil, "", pkiInvalid("CertificateAuthorityType must be ROOT or SUBORDINATE")
+	}
 	rec, err := s.pkiCreateCA(ctx, caCreateRequest{Type: "ROOT", KeyAlgorithm: cfg.KeyAlgorithm, Subject: subj})
 	if err != nil {
 		return nil, "", err
@@ -211,6 +224,7 @@ type pcaCADescription struct {
 	CertificateAuthorityConfiguration pcaCAConfig `json:"CertificateAuthorityConfiguration"`
 	KeyStorageSecurityStandard        string      `json:"KeyStorageSecurityStandard,omitempty"`
 	UsageMode                         string      `json:"UsageMode,omitempty"`
+	RestorableUntil                   *awsEpoch   `json:"RestorableUntil,omitempty"`
 }
 
 func describeCA(ca store.PCACertificateAuthority) pcaCADescription {
@@ -219,6 +233,9 @@ func describeCA(ca store.PCACertificateAuthority) pcaCADescription {
 		CreatedAt: epochPtr(ca.CreatedAt), LastStateChangeAt: epochPtr(ca.UpdatedAt),
 		NotBefore: epochPtr(ca.NotBefore), NotAfter: epochPtr(ca.NotAfter),
 		KeyStorageSecurityStandard: "FIPS_140_2_LEVEL_3_OR_HIGHER", UsageMode: "GENERAL_PURPOSE",
+	}
+	if ca.RestorableUntil != nil {
+		d.RestorableUntil = epochPtr(*ca.RestorableUntil)
 	}
 	if cert, err := parseCertificateB64(ca.CACertB64); err == nil {
 		d.Serial = colonHex(cert.SerialNumber)
@@ -354,6 +371,9 @@ func (s *Server) pcaGetCertificateAuthorityCertificate(ctx context.Context, body
 	if err != nil {
 		return nil, req.CertificateAuthorityArn, err
 	}
+	if ca.State == store.CAStatePendingCertificate {
+		return nil, ca.ARN, pkiConflict("InvalidStateException", "certificate authority has no certificate yet; import one with ImportCertificateAuthorityCertificate")
+	}
 	chain, err := s.pkiChain(ctx, ca)
 	if err != nil {
 		return nil, ca.ARN, err
@@ -432,6 +452,7 @@ func (s *Server) pcaIssueCertificate(ctx context.Context, body []byte) (any, str
 		return nil, req.CertificateAuthorityArn, err
 	}
 	tmpl := templateServer
+	subCAPathLen := -1
 	if req.TemplateArn != "" {
 		name := req.TemplateArn[strings.LastIndex(req.TemplateArn, "template/")+len("template/"):]
 		switch name {
@@ -439,7 +460,11 @@ func (s *Server) pcaIssueCertificate(ctx context.Context, body []byte) (any, str
 		case "EndEntityClientAuthCertificate/V1":
 			tmpl = templateClient
 		default:
-			return nil, ca.ARN, pkiInvalid("TemplateArn %q is not supported", name)
+			pl, ok := subordinateCATemplates[name]
+			if !ok {
+				return nil, ca.ARN, pkiInvalid("TemplateArn %q is not supported", name)
+			}
+			subCAPathLen = pl
 		}
 	}
 	notAfter, err := validityToNotAfter(req.Validity, time.Now().UTC())
@@ -449,6 +474,14 @@ func (s *Server) pcaIssueCertificate(ctx context.Context, body []byte) (any, str
 	csr, err := parseCSRInput(req.Csr)
 	if err != nil {
 		return nil, ca.ARN, err
+	}
+	if subCAPathLen >= 0 {
+		rec, err := s.pkiIssueSubordinateCACert(ctx, ca, csr, subCAPathLen, notAfter)
+		if err != nil {
+			return nil, ca.ARN, err
+		}
+		certARN := s.pcaCertARN(ctx, ca.CAID, rec.CertID)
+		return map[string]string{"CertificateArn": certARN}, certARN, nil
 	}
 	leaf, err := s.pkiIssueLeaf(ctx, leafRequest{CA: ca, CSR: csr, Template: tmpl, NotAfter: notAfter})
 	if err != nil {
@@ -645,6 +678,7 @@ func (s *Server) acmRequestCertificate(ctx context.Context, body []byte) (any, s
 		SubjectAlternativeNames []string `json:"SubjectAlternativeNames"`
 		CertificateAuthorityArn string   `json:"CertificateAuthorityArn"`
 		KeyAlgorithm            string   `json:"KeyAlgorithm"`
+		IdempotencyToken        string   `json:"IdempotencyToken"`
 	}
 	if err := decodeAWS(body, &req); err != nil {
 		return nil, "", err
@@ -668,12 +702,24 @@ func (s *Server) acmRequestCertificate(ctx context.Context, body []byte) (any, s
 		return nil, req.CertificateAuthorityArn, err
 	}
 	sans := append([]string{domain}, req.SubjectAlternativeNames...)
+	certARN, err := s.acmIdempotent(ctx, "RequestCertificate", req.IdempotencyToken, s.acmCertARN(ctx, cryptoutil.RandomHex(16)),
+		[]any{domain, req.SubjectAlternativeNames, ca.ARN, keyAlg}, func(certARN string) error {
+			return s.acmIssuePrivate(ctx, ca, certARN, domain, sans, keyAlg)
+		})
+	if err != nil {
+		return nil, certARN, err
+	}
+	return map[string]string{"CertificateArn": certARN}, certARN, nil
+}
+
+// acmIssuePrivate issues a private certificate for ACM with a generated key
+// and stores it under certARN.
+func (s *Server) acmIssuePrivate(ctx context.Context, ca store.PCACertificateAuthority, certARN, domain string, sans []string, keyAlg string) error {
 	leaf, keyDER, err := s.issueWithGeneratedKey(ctx, ca, keyAlg, domain, sans, templateServer, 395*24*time.Hour)
 	if err != nil {
-		return nil, ca.ARN, err
+		return err
 	}
 	defer clear(keyDER)
-	certARN := s.acmCertARN(ctx, cryptoutil.RandomHex(16))
 	now := time.Now().UTC()
 	c := store.ACMCertificate{
 		ARN: certARN, Type: store.ACMTypePrivate, CAID: ca.CAID, PCACertID: leaf.rec.CertID,
@@ -681,10 +727,7 @@ func (s *Server) acmRequestCertificate(ctx context.Context, body []byte) (any, s
 		ChainPEM: string(leaf.chainPEM), KeyDER: keyDER, Status: "ISSUED",
 		NotBefore: leaf.rec.NotBefore, NotAfter: leaf.rec.NotAfter, CreatedAt: now, UpdatedAt: now,
 	}
-	if err := s.store.CreateACMCertificate(ctx, c); err != nil {
-		return nil, certARN, err
-	}
-	return map[string]string{"CertificateArn": certARN}, certARN, nil
+	return s.store.CreateACMCertificate(ctx, c)
 }
 
 func acmCertARNArg(body []byte) (string, error) {
@@ -889,10 +932,12 @@ func (s *Server) acmImportCertificate(ctx context.Context, body []byte) (any, st
 		Certificate      []byte `json:"Certificate"`
 		PrivateKey       []byte `json:"PrivateKey"`
 		CertificateChain []byte `json:"CertificateChain"`
+		IdempotencyToken string `json:"IdempotencyToken"` // Citadel extension
 	}
 	if err := decodeAWS(body, &req); err != nil {
 		return nil, "", err
 	}
+	defer clear(req.PrivateKey)
 	if len(req.Certificate) == 0 || len(req.PrivateKey) == 0 {
 		return nil, req.CertificateArn, pkiInvalid("Certificate and PrivateKey are required")
 	}
@@ -937,27 +982,34 @@ func (s *Server) acmImportCertificate(ctx context.Context, body []byte) (any, st
 	if now.After(cert.NotAfter) {
 		c.Status = "EXPIRED"
 	}
-	if req.CertificateArn != "" {
-		// Re-import replaces an imported certificate in place.
-		prev, err := s.store.GetACMCertificate(ctx, req.CertificateArn)
-		if err != nil {
-			return nil, req.CertificateArn, err
-		}
-		clear(prev.KeyDER)
-		if prev.Type != store.ACMTypeImported {
-			return nil, req.CertificateArn, pkiInvalid("only imported certificates can be re-imported")
-		}
-		c.ARN = prev.ARN
-		if err := s.store.UpdateACMCertificate(ctx, c); err != nil {
-			return nil, c.ARN, err
-		}
-		return map[string]string{"CertificateArn": c.ARN}, c.ARN, nil
+	newARN := req.CertificateArn
+	if newARN == "" {
+		newARN = s.acmCertARN(ctx, cryptoutil.RandomHex(16))
 	}
-	c.ARN = s.acmCertARN(ctx, cryptoutil.RandomHex(16))
-	if err := s.store.CreateACMCertificate(ctx, c); err != nil {
-		return nil, c.ARN, err
+	// The certificate fixes the key, so the key itself is not part of the
+	// parameters compared for an idempotent retry.
+	arnOut, err := s.acmIdempotent(ctx, "ImportCertificate", req.IdempotencyToken, newARN,
+		[]any{req.CertificateArn, cert.Raw, chain.String()}, func(certARN string) error {
+			if req.CertificateArn != "" {
+				// Re-import replaces an imported certificate in place.
+				prev, err := s.store.GetACMCertificate(ctx, req.CertificateArn)
+				if err != nil {
+					return err
+				}
+				clear(prev.KeyDER)
+				if prev.Type != store.ACMTypeImported {
+					return pkiInvalid("only imported certificates can be re-imported")
+				}
+				c.ARN = prev.ARN
+				return s.store.UpdateACMCertificate(ctx, c)
+			}
+			c.ARN = certARN
+			return s.store.CreateACMCertificate(ctx, c)
+		})
+	if err != nil {
+		return nil, arnOut, err
 	}
-	return map[string]string{"CertificateArn": c.ARN}, c.ARN, nil
+	return map[string]string{"CertificateArn": arnOut}, arnOut, nil
 }
 
 func (s *Server) acmExportCertificate(ctx context.Context, body []byte) (any, string, error) {

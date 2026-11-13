@@ -114,12 +114,22 @@ type nativeCertificate struct {
 	IssuerCAID   string `json:"issuerCaId,omitempty"`
 	Template     string `json:"template,omitempty"`
 	RevokedAt    string `json:"revokedAt,omitempty"`
+	// Issuer is the issuer DN of certificates Citadel did not issue
+	// (acm-imported rows).
+	Issuer string `json:"issuer,omitempty"`
 	// IsCA marks certificate authorities (pca-ca rows).
 	IsCA bool `json:"isCA,omitempty"`
 	// PathLen is a CA's basic-constraints pathLenConstraint: how many CAs
 	// may follow it in a chain (0: it may only issue end-entity
 	// certificates). Absent on a CA without a limit.
 	PathLen *int `json:"pathLen,omitempty"`
+	// RestorableUntil: a DELETED CA can be restored until then.
+	RestorableUntil string `json:"restorableUntil,omitempty"`
+	// Outstanding counts a CA's issued certificates (and subordinate CAs)
+	// that are still valid; it must be 0 before the CA can be deleted.
+	Outstanding *int `json:"outstanding,omitempty"`
+	// Renewal is a Let's Encrypt certificate's automatic renewal state.
+	Renewal *leRenewalJSON `json:"renewal,omitempty"`
 	// ExpiringSoon: still valid but expires within 30 days.
 	ExpiringSoon bool `json:"expiringSoon"`
 }
@@ -152,7 +162,8 @@ func certInfo(b64 string) (cn, keyAlg string) {
 }
 
 // handleV1ListCertificates returns the account's CAs, the certificates they
-// issued, and its Let's Encrypt certificates.
+// issued, its Let's Encrypt certificates and the certificates imported
+// through ACM.
 func (s *Server) handleV1ListCertificates(w http.ResponseWriter, r *http.Request) {
 	_, ctx, ok := s.nativeSession(w, r, "viewer")
 	if !ok {
@@ -177,6 +188,7 @@ func (s *Server) handleV1ListCertificates(w http.ResponseWriter, r *http.Request
 			row.Serial = cert.SerialNumber.String()
 			row.PathLen = caPathLength(cert)
 		}
+		s.caLifecycleRow(ctx, &row, ca, now)
 		out = append(out, row)
 		certs, err := s.store.ListCertificates(ctx, ca.CAID)
 		if err != nil {
@@ -184,6 +196,9 @@ func (s *Server) handleV1ListCertificates(w http.ResponseWriter, r *http.Request
 			return
 		}
 		for _, c := range certs {
+			if c.DeletedAt != nil {
+				continue // removed from the inventory; kept for the CRL
+			}
 			cn, alg := certInfo(c.CertB64)
 			row := nativeCertificate{
 				Source: "pca-cert", ID: c.CertID, Subject: cn, CommonName: cn, Serial: c.Serial, KeyAlgorithm: alg,
@@ -205,11 +220,16 @@ func (s *Server) handleV1ListCertificates(w http.ResponseWriter, r *http.Request
 			out = append(out, nativeCertificate{
 				Source: "lets-encrypt", ID: c.CertID, Subject: c.Domains, CommonName: cn, Serial: c.Serial, KeyAlgorithm: alg,
 				Status: displayStatus(c.Status, c.NotAfter, now), NotBefore: fmtTime(c.NotBefore), NotAfter: fmtTime(c.NotAfter),
-				ExpiringSoon: expiringSoon(c.Status, c.NotAfter, now),
+				ExpiringSoon: expiringSoon(c.Status, c.NotAfter, now), Renewal: leRenewalOut(c, now),
 			})
 		}
 	} else if !errors.Is(err, store.ErrUnsupported) {
 		log.Printf("pki: list Let's Encrypt certificates: %v", err)
+	}
+	if imported, err := s.importedCertificateRows(ctx, now); err == nil {
+		out = append(out, imported...)
+	} else if !errors.Is(err, store.ErrUnsupported) {
+		log.Printf("pki: list imported certificates: %v", err)
 	}
 	writeNativeJSON(w, http.StatusOK, map[string]any{"certificates": out})
 }
@@ -530,6 +550,9 @@ func (s *Server) handleV1RenewCert(w http.ResponseWriter, r *http.Request) {
 		}
 		if prev.Status == "REVOKED" {
 			return nil, pkiConflict("InvalidStateException", "a revoked certificate cannot be renewed")
+		}
+		if isSubordinateCATemplate(prev.Template) {
+			return nil, pkiConflict("InvalidStateException", "subordinate CA certificates are not renewed as leaf certificates; issue a new one with the subordinate CA template")
 		}
 		csrPEMBytes, err := base64.StdEncoding.DecodeString(prev.CSRB64)
 		if err != nil || len(csrPEMBytes) == 0 {

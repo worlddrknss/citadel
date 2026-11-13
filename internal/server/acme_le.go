@@ -289,14 +289,17 @@ func (s *Server) issueLetsEncryptCertificate(ctx context.Context, domains []stri
 	}
 
 	progress("Finalizing and downloading the certificate")
-	return s.finalizeAndStoreLECert(ctx, client, orderURL, order.FinalizeURL, domains, directoryURL)
+	return s.finalizeAndStoreLECert(ctx, client, orderURL, order.FinalizeURL, domains, directoryURL, store.ACMELEOrderHTTP01)
 }
 
 // finalizeAndStoreLECert generates the leaf key pair and CSR, finalizes the ACME
 // order, and persists the issued certificate (with its wrapped private key). It
 // is shared by the HTTP-01 and manual DNS-01 issuance paths once all of an
 // order's authorizations are valid.
-func (s *Server) finalizeAndStoreLECert(ctx context.Context, client *acme.Client, orderURL, finalizeURL string, domains []string, directoryURL string) (store.ACMELECertificate, error) {
+//
+// kind is the challenge type that validated the order; HTTP-01 certificates
+// renew automatically by default, DNS-01 ones need the operator.
+func (s *Server) finalizeAndStoreLECert(ctx context.Context, client *acme.Client, orderURL, finalizeURL string, domains []string, directoryURL, kind string) (store.ACMELECertificate, error) {
 	// Generate the leaf key pair and CSR.
 	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -345,6 +348,10 @@ func (s *Server) finalizeAndStoreLECert(ctx context.Context, client *acme.Client
 		Status:       "ISSUED",
 		NotBefore:    leaf.NotBefore,
 		NotAfter:     leaf.NotAfter,
+		// Let's Encrypt can renew HTTP-01 names unattended (the challenge is
+		// served by Citadel); DNS-01 needs new TXT records each time.
+		ChallengeKind: kind,
+		AutoRenew:     kind == store.ACMELEOrderHTTP01,
 	}
 	if err := s.store.CreateACMELECertificate(ctx, cert); err != nil {
 		return store.ACMELECertificate{}, fmt.Errorf("store certificate: %w", err)
@@ -489,7 +496,7 @@ func (s *Server) completeLEDNSOrder(ctx context.Context, orderRec store.ACMELEOr
 	}
 
 	progress("Finalizing and downloading the certificate")
-	return s.finalizeAndStoreLECert(cctx, client, orderRec.OrderURL, order.FinalizeURL, domains, directoryURL)
+	return s.finalizeAndStoreLECert(cctx, client, orderRec.OrderURL, order.FinalizeURL, domains, directoryURL, store.ACMELEOrderDNS01)
 }
 
 // finalizeOrderCert submits the CSR to finalize the order and returns the issued

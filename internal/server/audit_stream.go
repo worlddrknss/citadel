@@ -36,6 +36,9 @@ type auditRuntime struct {
 	jobStop chan struct{}
 	jobDone chan struct{}
 
+	// outcomes holds write-ahead outcome events awaiting retry.
+	outcomes auditOutcomeQueue
+
 	// client overrides the webhook HTTP client (tests).
 	client *http.Client
 }
@@ -205,6 +208,10 @@ func auditCEF(rec store.AuditRecord) string {
 	if rec.AccessKeyID != "" {
 		add("cs5Label", "accessKeyId")
 		add("cs5", rec.AccessKeyID)
+	}
+	if rec.CorrelationID != "" {
+		add("cs6Label", "correlationId")
+		add("cs6", rec.CorrelationID)
 	}
 	return fmt.Sprintf("CEF:0|Citadel|Citadel|1|%s|%s|%s|%s",
 		cefHeaderEscape(rec.Action), cefHeaderEscape(rec.Action), severity, strings.Join(ext, " "))

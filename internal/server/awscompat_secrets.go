@@ -19,9 +19,14 @@ import (
 // paging through the store rather than loading every secret. next is the
 // cursor for the following call ("" when the listing is exhausted).
 func (s *Server) scanSecrets(ctx context.Context, after string, limit int, includeDeleted bool, keep func(store.SecretMetadataRecord) bool) (out []store.SecretMetadataRecord, next string, err error) {
+	return s.scanSecretsOrdered(ctx, after, limit, includeDeleted, false, keep)
+}
+
+// scanSecretsOrdered is scanSecrets in ascending or descending name order.
+func (s *Server) scanSecretsOrdered(ctx context.Context, after string, limit int, includeDeleted, descending bool, keep func(store.SecretMetadataRecord) bool) (out []store.SecretMetadataRecord, next string, err error) {
 	cursor := after
 	for {
-		page, more, err := s.store.ListSecretsPage(ctx, store.SecretPageQuery{After: cursor, Limit: limit, IncludeDeleted: includeDeleted})
+		page, more, err := s.store.ListSecretsPage(ctx, store.SecretPageQuery{After: cursor, Limit: limit, IncludeDeleted: includeDeleted, Descending: descending})
 		if err != nil {
 			return nil, "", err
 		}

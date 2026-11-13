@@ -1,5 +1,5 @@
-<!-- Certificates card: leaf certificates from every private CA and from
-     Let's Encrypt, with a lifetime-remaining bar. -->
+<!-- Certificates card: leaf certificates from every private CA, from
+     Let's Encrypt and imported through ACM, with a lifetime-remaining bar. -->
 <script lang="ts">
   import Icon from '#lib/components/Icon.svelte';
   import Badge from '#lib/components/Badge.svelte';
@@ -7,7 +7,7 @@
   import Seg from './Seg.svelte';
   import RowMenu, { type MenuItem } from './RowMenu.svelte';
   import type { CertRow } from './api';
-  import { certStatus, daysLeft, lifetimeDays, isRevoked, isExpiring, fmtDate, rowKey, type Filter, type SortKey } from './certs';
+  import { certStatus, daysLeft, lifetimeDays, isRevoked, isExpiring, canRenewOrRevoke, sourceLabel, fmtDate, rowKey, type Filter, type SortKey } from './certs';
 
 
   let {
@@ -26,6 +26,7 @@
     onopen,
     onrenew,
     onrevoke,
+    ondelete,
     onissue
   }: {
     rows: CertRow[];
@@ -43,6 +44,7 @@
     onopen: (c: CertRow) => void;
     onrenew: (c: CertRow) => void;
     onrevoke: (c: CertRow) => void;
+    ondelete: (c: CertRow) => void;
     onissue: () => void;
   } = $props();
 
@@ -82,9 +84,10 @@
 
   function menu(c: CertRow): MenuItem[] {
     const items: MenuItem[] = [{ label: 'View details', icon: 'file', onselect: () => onopen(c) }];
-    if (!isRevoked(c) && c.source === 'pca-cert' && canIssue) items.push({ label: 'Renew', icon: 'refresh', onselect: () => onrenew(c) });
-    if (!isRevoked(c) && c.source === 'pca-cert' && canRevoke)
-      items.push({ label: 'Revoke', icon: 'x', danger: true, onselect: () => onrevoke(c) });
+    if (canRenewOrRevoke(c) && canIssue) items.push({ label: 'Renew', icon: 'refresh', onselect: () => onrenew(c) });
+    if (canRenewOrRevoke(c) && canRevoke) items.push({ label: 'Revoke', icon: 'x', danger: true, onselect: () => onrevoke(c) });
+    // Deleting is an admin action, like revoke; imported certificates allow nothing else.
+    if (canRevoke) items.push({ label: 'Delete', icon: 'trash', danger: true, onselect: () => ondelete(c) });
     return items;
   }
 
@@ -161,7 +164,7 @@
                   <button type="button" class="row-link mono cn" onclick={() => onopen(c)}>{nameOf(c)}</button>
                 </td>
                 <td class="muted">{issuerOf(c)}</td>
-                <td><span class="badge outline">{c.source === 'lets-encrypt' ? 'ACME' : 'Private CA'}</span></td>
+                <td><span class="badge outline">{sourceLabel(c.source)}</span></td>
                 <td>
                   <Badge tone={st.tone} dot={false}><Icon name={st.icon} size={12} />{st.label}</Badge>
                 </td>
