@@ -41,9 +41,11 @@ test('imported ACM certificates are listed read-only, with the chain to the root
 
   await drawer.getByRole('button', { name: 'Delete' }).click();
   const confirmDlg = page.getByRole('dialog', { name: 'Delete imported certificate?' });
+  // Still valid: the name must be typed.
+  await confirmDlg.getByRole('textbox').fill('legacy.acme.test');
   await confirmDlg.getByRole('button', { name: 'Delete' }).click();
   await expect(page.getByText('Certificate deleted')).toBeVisible();
-  expect(api.log).toContain(`DELETE /v1/certificates/acm?${new URLSearchParams({ arn: IMPORTED_ARN })}`);
+  expect(api.log).toContain(`DELETE /v1/certificates?${new URLSearchParams({ source: 'acm-imported', id: IMPORTED_ARN })}`);
 });
 
 test('a private CA certificate shows its chain up to the root CA', async ({ page }) => {

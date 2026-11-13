@@ -9,8 +9,9 @@
   import CopyButton from '#lib/components/CopyButton.svelte';
   import Icon from '#lib/components/Icon.svelte';
   import { api, errorMessage } from '#lib/api.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import { certApi, type CertRow, type CertificateDetail } from './api';
-  import { certStatus, cnOf, fmtDateTime, keyAlgLabel, titleCase, downloadText, safeFileName, isRevoked, isImported, canRenewOrRevoke, sourceLabel, chainRoleLabel, chainComplete, firstDomain, pathLenDescription } from './certs';
+  import { certStatus, cnOf, fmtDateTime, keyAlgLabel, titleCase, downloadText, safeFileName, isRevoked, isImported, canRenewOrRevoke, caDeleteBlocker, restoreDaysLeft, renewalSummary, fmtDate, sourceLabel, chainRoleLabel, chainComplete, firstDomain, pathLenDescription } from './certs';
 
   let {
     open = $bindable(false),
@@ -24,6 +25,8 @@
     onrenew,
     onrevoke,
     ondelete,
+    ondeleteca,
+    onchanged,
     onissuefrom,
     onsubordinate
   }: {
@@ -38,6 +41,8 @@
     onrenew: (c: CertRow) => void;
     onrevoke: (c: CertRow) => void;
     ondelete: (c: CertRow) => void;
+    ondeleteca: (ca: CertRow) => void;
+    onchanged: () => void;
     onissuefrom: (ca: CertRow) => void;
     onsubordinate: (ca: CertRow) => void;
   } = $props();
@@ -103,6 +108,27 @@
   );
   const crlHref = $derived(row && isCA ? api.crlUrl(row.id) : '');
   const file = $derived(safeFileName(name));
+
+  const caStatus = $derived((row?.status ?? '').toUpperCase());
+  const caBlocker = $derived(row && isCA ? caDeleteBlocker(row) : null);
+  const restoreLeft = $derived(restoreDaysLeft(row?.restorableUntil));
+  const renewal = $derived(row?.source === 'lets-encrypt' ? (row.renewal ?? detail?.renewal) : undefined);
+  const renewalInfo = $derived(renewal ? renewalSummary(renewal, row?.notAfter) : null);
+
+  let busy = $state(false);
+  async function act(fn: () => Promise<unknown>, done: string) {
+    if (busy) return;
+    busy = true;
+    try {
+      await fn();
+      toast.success(done);
+      onchanged();
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      busy = false;
+    }
+  }
 </script>
 
 <Drawer bind:open title={name} subtitle={row?.id} width={560} {onclose}>
@@ -266,7 +292,61 @@
             <dd class="idrow"><span class="mono">{detail.id}</span><CopyButton value={detail.id} label="Copy ID" /></dd>
           </dl>
 
+          {#if renewal && renewalInfo}
+            <section class="panel" aria-labelledby="renew-title" data-testid="le-renewal">
+              <div class="panelhead">
+                <h3 id="renew-title">Renewal</h3>
+                <Badge tone={renewalInfo.tone} dot={false}>{renewalInfo.label}</Badge>
+              </div>
+              <p class="muted small" class:danger-text={renewalInfo.tone === 'danger'}>{renewalInfo.detail}</p>
+              {#if !renewal.manual && !renewal.renewedBy}
+                <label class="check">
+                  <input
+                    type="checkbox"
+                    checked={renewal.autoRenew}
+                    disabled={!canIssue || busy}
+                    onchange={(e) => {
+                      const on = (e.currentTarget as HTMLInputElement).checked;
+                      act(() => certApi.setAutoRenew(row.id, on), on ? 'Automatic renewal on' : 'Automatic renewal off');
+                    }}
+                  />
+                  Renew automatically (HTTP-01)
+                </label>
+              {/if}
+              <dl class="kv small">
+                {#if renewal.nextRenewalAt}
+                  <dt>Next renewal</dt>
+                  <dd data-testid="le-next-renewal">{fmtDate(renewal.nextRenewalAt)}</dd>
+                {/if}
+                {#if renewal.lastAttemptAt}
+                  <dt>Last attempt</dt>
+                  <dd>{fmtDateTime(renewal.lastAttemptAt)}{renewal.attempts ? ` · ${renewal.attempts} failed` : ''}</dd>
+                {/if}
+                {#if renewal.renewedBy}
+                  <dt>Replaced by</dt>
+                  <dd class="mono">{renewal.renewedBy}</dd>
+                {/if}
+              </dl>
+            </section>
+          {/if}
+
           {#if isCA}
+            <section class="panel" aria-labelledby="lc-title" data-testid="ca-lifecycle">
+              <h3 id="lc-title">Deletion</h3>
+              {#if caStatus === 'DELETED'}
+                <p class="muted small">
+                  Deleted. {#if restoreLeft}It can be restored until {fmtDateTime(row.restorableUntil)} ({restoreLeft} day{restoreLeft === 1 ? '' : 's'} left); then it is removed permanently with its certificates.{:else}Its restore window has ended; it will be removed shortly.{/if}
+                </p>
+              {:else if caBlocker}
+                <p class="muted small">{caBlocker}</p>
+                {#if caStatus === 'ACTIVE' && row.outstanding}
+                  <p class="muted small">{row.outstanding} certificate{row.outstanding === 1 ? '' : 's'} issued by this CA {row.outstanding === 1 ? 'is' : 'are'} still valid; revoke {row.outstanding === 1 ? 'it' : 'them'} too.</p>
+                {/if}
+              {:else}
+                <p class="muted small">It can be deleted. Deleted CAs stay restorable for 7 to 30 days.</p>
+              {/if}
+            </section>
+
             <section class="crl" aria-labelledby="crl-title">
               <h3 id="crl-title">Revocation list</h3>
               <p class="muted small">Relying parties fetch the CRL from this public URL. It updates whenever a certificate from this CA is revoked.</p>
@@ -290,17 +370,32 @@
         {#if canAdmin && (row.status ?? '').toUpperCase() === 'ACTIVE' && (row.caType ?? '').toUpperCase() !== 'SUBORDINATE'}
           <button type="button" class="btn btn-secondary btn-sm" onclick={() => onsubordinate(row)}><Icon name="git-pull-request" size={14} />New subordinate</button>
         {/if}
+        {#if canAdmin}
+          {#if caStatus === 'ACTIVE'}
+            <button type="button" class="btn btn-danger-ghost btn-sm end" disabled={busy} onclick={() => act(() => certApi.setCAStatus(row.id, 'DISABLED'), `Disabled ${name}`)}><Icon name="x" size={14} />Disable</button>
+          {:else if caStatus === 'DISABLED'}
+            <button type="button" class="btn btn-secondary btn-sm" disabled={busy} onclick={() => act(() => certApi.setCAStatus(row.id, 'ACTIVE'), `Enabled ${name}`)}><Icon name="play" size={14} />Enable</button>
+          {:else if caStatus === 'DELETED' && restoreLeft}
+            <button type="button" class="btn btn-secondary btn-sm" disabled={busy} onclick={() => act(() => certApi.restoreCA(row.id), `Restored ${name} (disabled)`)}><Icon name="history" size={14} />Restore</button>
+          {/if}
+          {#if caStatus === 'DISABLED' || caStatus === 'EXPIRED'}
+            <button type="button" class="btn btn-danger-ghost btn-sm end" onclick={() => ondeleteca(row)}><Icon name="trash" size={14} />Delete</button>
+          {/if}
+        {/if}
       {:else if canRenewOrRevoke(row)}
         {#if canIssue}
           <button type="button" class="btn btn-secondary btn-sm" onclick={() => onrenew(row)}><Icon name="refresh" size={14} />Renew</button>
         {/if}
         {#if canAdmin}
           <button type="button" class="btn btn-danger-ghost btn-sm end" onclick={() => onrevoke(row)}><Icon name="x" size={14} />Revoke</button>
+          <button type="button" class="btn btn-danger-ghost btn-sm" onclick={() => ondelete(row)}><Icon name="trash" size={14} />Delete</button>
         {/if}
-      {:else if row.source === 'lets-encrypt'}
-        <span class="subtle small">Renew Let's Encrypt certificates by requesting the same domains again.</span>
-      {:else if isImported(row)}
-        <span class="subtle small">Imported through ACM. Replace it with ACM ImportCertificate.</span>
+      {:else}
+        {#if isImported(row)}
+          <span class="subtle small">Imported through ACM. Replace it with ACM ImportCertificate.</span>
+        {:else if row.source === 'lets-encrypt' && renewal?.manual}
+          <span class="subtle small">Renew by requesting the same domains again.</span>
+        {/if}
         {#if canAdmin}
           <button type="button" class="btn btn-danger-ghost btn-sm end" onclick={() => ondelete(row)}><Icon name="trash" size={14} />Delete</button>
         {/if}
@@ -416,6 +511,36 @@
   }
   .chainkv dd {
     overflow-wrap: anywhere;
+  }
+  .panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+  .panel h3 {
+    margin: 0;
+    font-size: var(--text-base);
+  }
+  .panel p {
+    margin: 0;
+  }
+  .panelhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .danger-text {
+    color: var(--danger);
+  }
+  .check {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--text-sm);
   }
   .crl {
     display: flex;

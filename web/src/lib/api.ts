@@ -286,6 +286,23 @@ export interface CertificateDetail {
   chainPem?: string;
   /** The full chain, this certificate first and the root last, as far as Citadel holds the issuers. */
   chain?: ChainCertificate[];
+  /** A Let's Encrypt certificate's automatic renewal state. */
+  renewal?: LERenewal;
+}
+
+/** Automatic renewal state of a Let's Encrypt certificate. */
+export interface LERenewal {
+  /** http-01, dns-01, or "" when issued before Citadel recorded it. */
+  kind: string;
+  autoRenew: boolean;
+  /** DNS-01: renewed by requesting the certificate again. */
+  manual: boolean;
+  nextRenewalAt?: string;
+  lastAttemptAt?: string;
+  lastError?: string;
+  attempts?: number;
+  /** The certificate that replaced this one. */
+  renewedBy?: string;
 }
 
 export interface AuditEvent {

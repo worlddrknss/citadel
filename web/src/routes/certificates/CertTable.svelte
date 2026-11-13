@@ -7,7 +7,7 @@
   import Seg from './Seg.svelte';
   import RowMenu, { type MenuItem } from './RowMenu.svelte';
   import type { CertRow } from './api';
-  import { certStatus, daysLeft, lifetimeDays, isRevoked, isExpiring, isImported, canRenewOrRevoke, sourceLabel, fmtDate, rowKey, type Filter, type SortKey } from './certs';
+  import { certStatus, daysLeft, lifetimeDays, isRevoked, isExpiring, canRenewOrRevoke, sourceLabel, fmtDate, rowKey, type Filter, type SortKey } from './certs';
 
 
   let {
@@ -86,8 +86,8 @@
     const items: MenuItem[] = [{ label: 'View details', icon: 'file', onselect: () => onopen(c) }];
     if (canRenewOrRevoke(c) && canIssue) items.push({ label: 'Renew', icon: 'refresh', onselect: () => onrenew(c) });
     if (canRenewOrRevoke(c) && canRevoke) items.push({ label: 'Revoke', icon: 'x', danger: true, onselect: () => onrevoke(c) });
-    // Imported certificates are read-only apart from deletion (an admin action, like revoke).
-    if (isImported(c) && canRevoke) items.push({ label: 'Delete', icon: 'trash', danger: true, onselect: () => ondelete(c) });
+    // Deleting is an admin action, like revoke; imported certificates allow nothing else.
+    if (canRevoke) items.push({ label: 'Delete', icon: 'trash', danger: true, onselect: () => ondelete(c) });
     return items;
   }
 

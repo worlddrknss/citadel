@@ -1,6 +1,6 @@
 // Pure helpers shared by the certificate page components.
 
-import type { CertRow } from './api';
+import type { CertRow, LERenewal } from './api';
 
 export type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
 
@@ -145,6 +145,85 @@ export function chainRoleLabel(role: string): string {
  */
 export function chainComplete(chain?: { selfSigned: boolean }[]): boolean {
   return !!chain?.length && chain[chain.length - 1].selfSigned;
+}
+
+/** Whether a certificate is still trusted (neither revoked nor expired). */
+export function isLive(c: { status?: string; notAfter?: string }, now = Date.now()): boolean {
+  if (isRevoked(c)) return false;
+  const left = daysLeft(c.notAfter, now);
+  return left === null || left >= 0;
+}
+
+/** Deleting a certificate that is still valid asks the user to type its name. */
+export function deleteNeedsTypeToConfirm(c: { status?: string; notAfter?: string }, now = Date.now()): boolean {
+  return isLive(c, now);
+}
+
+/** What deleting a certificate does, for the confirmation dialog. */
+export function deleteCertMessage(c: { source?: string; status?: string; notAfter?: string }, name: string, now = Date.now()): string {
+  const live = isLive(c, now);
+  switch (c.source) {
+    case 'pca-cert':
+      return live
+        ? `${name} is still valid, so Citadel revokes it first (cessation of operation) and then removes it from the list. It stays on the CA's revocation list until it expires.`
+        : `${name} is removed from the list. Its CA's revocation list doesn't change.`;
+    case 'lets-encrypt':
+      return `${name} and its private key are removed from Citadel.${live ? " It isn't revoked at Let's Encrypt, so copies already deployed keep working until they expire." : ''}`;
+    case SOURCE_IMPORTED:
+      return `${name} and its private key are removed from Citadel. Anything that reads it through ACM stops finding it.`;
+    default:
+      return `${name} is removed from Citadel.`;
+  }
+}
+
+/** Days a deleted CA can still be restored (0 when the window has ended). */
+export function restoreDaysLeft(restorableUntil?: string, now = Date.now()): number | null {
+  if (!restorableUntil) return null;
+  const t = Date.parse(restorableUntil);
+  if (isNaN(t)) return null;
+  return Math.max(0, Math.ceil((t - now) / DAY));
+}
+
+/**
+ * Why a CA can't be deleted yet, or null when it can. AWS PCA semantics: a
+ * CA must be disabled first, and Citadel also refuses while certificates it
+ * issued are still valid.
+ */
+export function caDeleteBlocker(ca: { status?: string; outstanding?: number }): string | null {
+  const s = (ca.status ?? '').toUpperCase();
+  if (s === 'DELETED') return 'This CA is already deleted.';
+  if (s === 'ACTIVE') return 'Disable the CA before deleting it.';
+  const n = ca.outstanding ?? 0;
+  if (n > 0) {
+    return `${n} certificate${n === 1 ? '' : 's'} issued by this CA ${n === 1 ? 'is' : 'are'} still valid. Revoke ${n === 1 ? 'it' : 'them'} before deleting the CA.`;
+  }
+  return null;
+}
+
+export const CA_DELETION_DAYS = { min: 7, max: 30, default: 30 } as const;
+
+export interface RenewalSummary {
+  label: string;
+  tone: Tone;
+  detail: string;
+}
+
+/** How a Let's Encrypt certificate gets renewed, for the drawer. */
+export function renewalSummary(r: LERenewal | undefined, notAfter?: string, now = Date.now()): RenewalSummary | null {
+  if (!r) return null;
+  if (r.renewedBy) return { label: 'Renewed', tone: 'neutral', detail: 'A replacement certificate was issued automatically.' };
+  const left = daysLeft(notAfter, now);
+  const countdown = left === null ? '' : left < 0 ? ` It expired ${-left} day${left === -1 ? '' : 's'} ago.` : ` It expires in ${left} day${left === 1 ? '' : 's'}.`;
+  if (r.manual) {
+    return {
+      label: 'Manual renewal',
+      tone: left !== null && left <= 30 ? 'warning' : 'neutral',
+      detail: `DNS-01 certificates can't renew automatically: request the same domains again and publish the new TXT records.${countdown}`
+    };
+  }
+  if (!r.autoRenew) return { label: 'Auto-renew off', tone: left !== null && left <= 30 ? 'warning' : 'neutral', detail: `Renew it by requesting the same domains again.${countdown}` };
+  if (r.lastError) return { label: 'Renewal failing', tone: 'danger', detail: r.lastError };
+  return { label: 'Auto-renew on', tone: 'success', detail: 'Citadel renews it 30 days before it expires.' };
 }
 
 export function rowKey(c: { source: string; id: string }): string {

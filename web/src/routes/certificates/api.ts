@@ -3,7 +3,7 @@
 // redesign report; the server rejects unknown JSON fields, so optional new
 // fields are only sent when they carry a value.
 
-import { req, api, type Certificate, type CertificateDetail, type ChainCertificate, type LEOrder } from '#lib/api.ts';
+import { req, api, type Certificate, type CertificateDetail, type ChainCertificate, type LEOrder, type LERenewal } from '#lib/api.ts';
 
 /**
  * A row of GET /v1/certificates. The extra fields are part of the extended
@@ -20,6 +20,12 @@ export interface CertRow extends Certificate {
   isCA?: boolean;
   /** A CA's pathLenConstraint; absent when unlimited. */
   pathLen?: number;
+  /** A DELETED CA can be restored until then. */
+  restorableUntil?: string;
+  /** A CA's issued certificates (and subordinate CAs) that are still valid. */
+  outstanding?: number;
+  /** A Let's Encrypt certificate's automatic renewal state. */
+  renewal?: LERenewal;
 }
 
 export type KeyAlgorithm = 'EC_prime256v1' | 'EC_secp384r1' | 'RSA_2048' | 'RSA_3072' | 'RSA_4096';
@@ -31,6 +37,30 @@ export const certApi = {
   /** Deletes a certificate imported through ACM ImportCertificate (admin). */
   deleteImported: (arn: string) =>
     req<{ arn: string; deleted: boolean }>(`/v1/certificates/acm?${new URLSearchParams({ arn })}`, { method: 'DELETE' }),
+  /**
+   * Deletes a private CA, Let's Encrypt or imported certificate (admin). A
+   * private CA certificate that is still valid is revoked first.
+   */
+  deleteCertificate: (source: string, id: string) =>
+    req<{ deleted: boolean; revoked: boolean }>(`/v1/certificates?${new URLSearchParams({ source, id })}`, { method: 'DELETE' }),
+  /** Enables or disables a CA (admin). */
+  setCAStatus: (caId: string, status: 'ACTIVE' | 'DISABLED') =>
+    req<CALifecycleResult>('/v1/certificates/authorities/status', { method: 'POST', body: JSON.stringify({ caId, status }) }),
+  /** Schedules a disabled CA's deletion; it can be restored for `days` days (7–30). */
+  deleteCA: (caId: string, days: number) =>
+    req<CALifecycleResult>('/v1/certificates/authorities/delete', {
+      method: 'POST',
+      body: JSON.stringify({ caId, permanentDeletionTimeInDays: days })
+    }),
+  /** Restores a deleted CA (to DISABLED) within its restore window. */
+  restoreCA: (caId: string) =>
+    req<CALifecycleResult>('/v1/certificates/authorities/restore', { method: 'POST', body: JSON.stringify({ caId }) }),
+  /** Turns a Let's Encrypt certificate's automatic renewal on or off (editor). */
+  setAutoRenew: (certId: string, autoRenew: boolean) =>
+    req<{ certId: string; renewal: LERenewal }>('/v1/certificates/letsencrypt/auto-renew', {
+      method: 'POST',
+      body: JSON.stringify({ certId, autoRenew })
+    }),
 
   createCA: (body: {
     caType: 'ROOT' | 'SUBORDINATE';
@@ -118,6 +148,12 @@ export const certApi = {
     })
 };
 
+export interface CALifecycleResult {
+  caId: string;
+  status: string;
+  restorableUntil?: string;
+}
+
 export interface AcmeSettingsInput {
   /** "" lets the server pick the oldest active, unexpired CA. */
   issuingCaId: string;
@@ -150,7 +186,7 @@ export interface EabKey {
   acmeAccountId?: string;
 }
 
-export type { Certificate, CertificateDetail, ChainCertificate };
+export type { Certificate, CertificateDetail, ChainCertificate, LERenewal };
 
 /** How often the console polls a running Let's Encrypt order. */
 export const LE_POLL_INTERVAL_MS = 2_000;

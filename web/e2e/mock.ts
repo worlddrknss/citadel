@@ -151,10 +151,15 @@ const parameters = [
 
 const certificates = [
   // Real list rows: source is pca-ca, pca-cert, lets-encrypt or acm-imported; template is server|client.
-  { source: 'pca-ca', id: 'ca-root-1', subject: 'CN=Acme Root CA', commonName: 'Acme Root CA', status: 'ACTIVE', notBefore: ago(100 * DAY), notAfter: ahead(3000 * DAY), caType: 'ROOT', serial: '01', keyAlgorithm: 'EC_secp384r1', expiringSoon: false, isCA: true },
-  { source: 'pca-ca', id: 'ca-sub-1', subject: 'CN=Acme Issuing CA', commonName: 'Acme Issuing CA', status: 'ACTIVE', notBefore: ago(90 * DAY), notAfter: ahead(1500 * DAY), caType: 'SUBORDINATE', parentCaId: 'ca-root-1', serial: '04', keyAlgorithm: 'EC_prime256v1', expiringSoon: false, isCA: true, pathLen: 0 },
+  { source: 'pca-ca', id: 'ca-root-1', subject: 'CN=Acme Root CA', commonName: 'Acme Root CA', status: 'ACTIVE', notBefore: ago(100 * DAY), notAfter: ahead(3000 * DAY), caType: 'ROOT', serial: '01', keyAlgorithm: 'EC_secp384r1', expiringSoon: false, isCA: true, outstanding: 1 },
+  { source: 'pca-ca', id: 'ca-sub-1', subject: 'CN=Acme Issuing CA', commonName: 'Acme Issuing CA', status: 'ACTIVE', notBefore: ago(90 * DAY), notAfter: ahead(1500 * DAY), caType: 'SUBORDINATE', parentCaId: 'ca-root-1', serial: '04', keyAlgorithm: 'EC_prime256v1', expiringSoon: false, isCA: true, pathLen: 0, outstanding: 0 },
+  { source: 'pca-ca', id: 'ca-old-1', subject: 'CN=Acme Old CA', commonName: 'Acme Old CA', status: 'DISABLED', notBefore: ago(400 * DAY), notAfter: ahead(600 * DAY), caType: 'ROOT', serial: '06', keyAlgorithm: 'EC_prime256v1', expiringSoon: false, isCA: true, outstanding: 0 },
+  { source: 'pca-ca', id: 'ca-gone-1', subject: 'CN=Acme Retired CA', commonName: 'Acme Retired CA', status: 'DELETED', notBefore: ago(500 * DAY), notAfter: ahead(500 * DAY), caType: 'ROOT', serial: '07', keyAlgorithm: 'EC_prime256v1', expiringSoon: false, isCA: true, restorableUntil: ahead(12 * DAY) },
   { source: 'pca-cert', id: 'cert-api-1', subject: 'api.acme.test', commonName: 'api.acme.test', status: 'ISSUED', notBefore: ago(80 * DAY), notAfter: ahead(10 * DAY), issuerCaId: 'ca-root-1', serial: '02', keyAlgorithm: 'EC_prime256v1', template: 'server', expiringSoon: true },
-  { source: 'lets-encrypt', id: 'cert-www-1', subject: 'www.acme.test', commonName: 'www.acme.test', status: 'ISSUED', notBefore: ago(20 * DAY), notAfter: ahead(70 * DAY), serial: '03', keyAlgorithm: 'EC_prime256v1', expiringSoon: false },
+  { source: 'lets-encrypt', id: 'cert-www-1', subject: 'www.acme.test', commonName: 'www.acme.test', status: 'ISSUED', notBefore: ago(20 * DAY), notAfter: ahead(70 * DAY), serial: '03', keyAlgorithm: 'EC_prime256v1', expiringSoon: false,
+    renewal: { kind: 'http-01', autoRenew: true, manual: false, nextRenewalAt: ahead(40 * DAY) } },
+  { source: 'lets-encrypt', id: 'cert-dns-1', subject: 'dns.acme.test', commonName: 'dns.acme.test', status: 'ISSUED', notBefore: ago(70 * DAY), notAfter: ahead(20 * DAY), serial: '08', keyAlgorithm: 'EC_prime256v1', expiringSoon: true,
+    renewal: { kind: 'dns-01', autoRenew: false, manual: true } },
   { source: 'acm-imported', id: 'arn:aws:acm:us-east-1:000000000000:certificate/imp1', subject: 'legacy.acme.test', commonName: 'legacy.acme.test', status: 'ISSUED', notBefore: ago(30 * DAY), notAfter: ahead(200 * DAY), serial: '05', keyAlgorithm: 'EC_prime256v1', issuer: 'CN=External Issuing CA,O=Example', expiringSoon: false }
 ];
 
@@ -552,6 +557,11 @@ const WRITE: Record<string, Handler> = {
   'POST /v1/kms/grants': () => ({ grantId: 'grant-1', grantToken: 'grant-token-1' }),
   'DELETE /v1/kms/grants': () => ({ revoked: true }),
   'DELETE /v1/certificates/acm': (q) => ({ arn: q.get('arn'), deleted: true }),
+  'DELETE /v1/certificates': (q) => ({ source: q.get('source'), id: q.get('id'), deleted: true, revoked: q.get('source') === 'pca-cert' }),
+  'POST /v1/certificates/authorities/status': (_q, b) => ({ caId: b.caId, status: b.status }),
+  'POST /v1/certificates/authorities/delete': (_q, b) => ({ caId: b.caId, status: 'DELETED', restorableUntil: ahead(Number(b.permanentDeletionTimeInDays) * DAY) }),
+  'POST /v1/certificates/authorities/restore': (_q, b) => ({ caId: b.caId, status: 'DISABLED' }),
+  'POST /v1/certificates/letsencrypt/auto-renew': (_q, b) => ({ certId: b.certId, renewal: { kind: 'http-01', autoRenew: b.autoRenew, manual: false } }),
   'POST /v1/kms/keys/tags': () => ({ tagged: true }),
   'DELETE /v1/kms/keys/tags': () => ({ untagged: true }),
   'POST /v1/kms/encrypt': (_, b) => ({ keyId: b.keyId, ciphertextBlob: 'Y2lwaGVydGV4dA==', encryptionAlgorithm: b.encryptionAlgorithm }),
