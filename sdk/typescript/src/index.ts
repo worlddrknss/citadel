@@ -11,6 +11,8 @@ import { assertServerRuntime } from './guard.js';
 assertServerRuntime();
 
 export { Citadel, type CitadelOptions } from './client.js';
+export { AgentHttpResult, CitadelAgent, type CitadelAgentOptions, type WaitForAccessOptions } from './agent.js';
+export { VERSION } from './version.js';
 export { CitadelConnectionError, CitadelError, CitadelTimeoutError } from './errors.js';
 export type { CallSpec, NextFetchOptions, RequestOptions } from './http.js';
 export { clearSecretsCache, loadSecrets, type LoadSecretsOptions } from './next.js';

@@ -19,6 +19,18 @@ export class CitadelError extends Error {
   readonly attempts: number;
   /** Retry-After hint from the server, in milliseconds, when present. */
   readonly retryAfterMs: number | undefined;
+  /**
+   * The Agent API's stable denial or failure reason (`reason` field), e.g.
+   * `no_grant`, `host_not_allowed`, `approval_required`,
+   * `upstream_timeout`. Undefined for the rest of the API.
+   */
+  readonly reason: string | undefined;
+  /**
+   * For `approval_required` on the Agent API: the pending access request
+   * to wait for (see {@link CitadelAgent.waitForAccess}) before retrying.
+   * Undefined when the agent already has too many pending requests.
+   */
+  readonly requestId: string | undefined;
 
   constructor(init: {
     status: number;
@@ -27,6 +39,8 @@ export class CitadelError extends Error {
     operation?: string;
     attempts?: number;
     retryAfterMs?: number;
+    reason?: string;
+    requestId?: string;
     cause?: unknown;
   }) {
     super(init.message, init.cause === undefined ? undefined : { cause: init.cause });
@@ -35,6 +49,17 @@ export class CitadelError extends Error {
     this.operation = init.operation ?? '';
     this.attempts = init.attempts ?? 1;
     this.retryAfterMs = init.retryAfterMs;
+    this.reason = init.reason;
+    this.requestId = init.requestId;
+  }
+
+  /**
+   * True for `approval_required`: an agent's use needs a person's approval
+   * (`requestId` names the access request), or a change targets an
+   * environment with an approval policy.
+   */
+  get isApprovalRequired(): boolean {
+    return this.code === 'approval_required';
   }
 
   /** True when the resource does not exist (HTTP 404). */

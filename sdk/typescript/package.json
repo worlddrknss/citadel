@@ -1,6 +1,6 @@
 {
   "name": "@worlddrknss/citadel",
-  "version": "2.1.0",
+  "version": "2.6.0",
   "description": "TypeScript client for the Citadel native /v1 API: secrets, parameters, KMS, certificates and workload identity. Zero dependencies; Node 18+ and edge runtimes.",
   "license": "AGPL-3.0-or-later",
   "author": "worlddrknss",

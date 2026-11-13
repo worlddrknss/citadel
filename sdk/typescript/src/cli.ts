@@ -8,6 +8,7 @@
  */
 import { McpBridge } from './mcp/bridge.js';
 import { lines, parseMcpArgs, USAGE } from './mcp/config.js';
+import { VERSION } from './version.js';
 
 // The library is typed without Node's globals (it also runs on edge
 // runtimes), so describe the little of `process` this file uses.
@@ -109,7 +110,7 @@ async function runMcp(args: string[]) {
     token: parsed.config.token,
     write: writeStdout,
     log: warn,
-    userAgent: 'citadel-mcp-bridge',
+    userAgent: `citadel-mcp-bridge/${VERSION}`,
   });
 
   let stopping = false;

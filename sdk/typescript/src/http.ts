@@ -17,6 +17,16 @@ export interface RequestOptions {
   /** Maximum retries for this call; overrides the client default. */
   maxRetries?: number;
   /**
+   * Also retry this call after a 500, 502, 504, a timeout or a network
+   * failure when it is not idempotent (POST). Off by default: those
+   * failures can come after the server, or the upstream behind the Agent
+   * API's broker, already acted, so a retry could repeat a side effect
+   * (a payment, a message, a deploy). Set it only for calls you know are
+   * safe to repeat. 429 and 503 with Retry-After, which Citadel answers
+   * before acting, are retried either way.
+   */
+  retryNonIdempotent?: boolean;
+  /**
    * Next.js `fetch` cache options. Ignored by other runtimes. Responses
    * that carry secret values are only cached server-side by Next.js; they
    * never reach the browser.
@@ -26,7 +36,12 @@ export interface RequestOptions {
   cache?: RequestCache;
 }
 
-/** Retry policy for 429 and 5xx responses and network failures. */
+/**
+ * Retry policy. 429 and 503 with Retry-After are retried for every method;
+ * 500, 502, 503 without Retry-After, 504, timeouts and network failures only
+ * for idempotent methods (GET, HEAD, PUT, DELETE) unless the call sets
+ * {@link RequestOptions.retryNonIdempotent}.
+ */
 export interface RetryOptions {
   /** Retries after the first attempt (default 3; 0 disables retries). */
   maxRetries: number;
@@ -60,8 +75,30 @@ export interface CallSpec {
   authorization?: string;
 }
 
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const IDEMPOTENT = new Set(['GET', 'DELETE', 'HEAD', 'PUT']);
+
+/**
+ * Reports whether a failed response may be retried. Citadel answers 429
+ * (rate limits) and 503 with Retry-After (a busy broker) before acting, so
+ * those are safe for every method. A 500, 502, 504 or a bare 503 (from a
+ * proxy, say) can follow a request that took effect; for example the Agent
+ * API's broker answers 502 or 504 when the upstream failed or timed out,
+ * possibly after it acted. Those are retried only when repeatable.
+ */
+export function retryableStatus(status: number, repeatable: boolean, hasRetryAfter: boolean): boolean {
+  switch (status) {
+    case 429:
+      return true;
+    case 503:
+      return repeatable || hasRetryAfter;
+    case 500:
+    case 502:
+    case 504:
+      return repeatable;
+    default:
+      return false;
+  }
+}
 
 /** Default per-attempt timeout: 30 seconds. */
 export const DEFAULT_TIMEOUT_MS = 30_000;
@@ -129,6 +166,7 @@ export async function call<T>(cfg: TransportConfig, spec: CallSpec, opts: Reques
   const timeoutMs = opts.timeoutMs ?? cfg.timeoutMs;
   const sleep = cfg.sleep ?? defaultSleep;
   const random = cfg.random ?? Math.random;
+  const repeatable = IDEMPOTENT.has(spec.method) || opts.retryNonIdempotent === true;
 
   const headers: Record<string, string> = { Accept: 'application/json', ...cfg.headers };
   const authorization = spec.authorization ?? (spec.auth === false ? undefined : cfg.authorization);
@@ -175,7 +213,7 @@ export async function call<T>(cfg: TransportConfig, spec: CallSpec, opts: Reques
         : new CitadelConnectionError({ status: 0, code: 'connection_error', message: `${operation} failed: ${errorText(err)}`, operation, attempts: attempt, cause: err });
       // Without a response we can't know whether the server applied the
       // request, so only idempotent methods are retried.
-      if (attempt <= maxRetries && IDEMPOTENT.has(spec.method)) {
+      if (attempt <= maxRetries && repeatable) {
         await sleep(backoffDelay(attempt, cfg.retry, random), opts.signal);
         continue;
       }
@@ -206,8 +244,9 @@ export async function call<T>(cfg: TransportConfig, spec: CallSpec, opts: Reques
       }
     }
 
-    const retryAfterMs = parseRetryAfter(res.headers.get('Retry-After'));
-    if (RETRYABLE_STATUS.has(res.status) && attempt <= maxRetries) {
+    const retryAfterHeader = res.headers.get('Retry-After');
+    const retryAfterMs = parseRetryAfter(retryAfterHeader);
+    if (attempt <= maxRetries && retryableStatus(res.status, repeatable, retryAfterHeader !== null && retryAfterHeader.trim() !== '')) {
       const delay = Math.min(cfg.retry.maxDelayMs, retryAfterMs ?? backoffDelay(attempt, cfg.retry, random));
       await sleep(delay, opts.signal);
       continue;
@@ -229,13 +268,17 @@ function errorText(err: unknown): string {
 export function errorFromResponse(status: number, text: string, operation: string, attempts: number, retryAfterMs?: number): CitadelError {
   let code = `http_${status}`;
   let message = `${operation} failed with HTTP ${status}`;
+  let reason: string | undefined;
+  let requestId: string | undefined;
   try {
-    const parsed = JSON.parse(text) as { error?: unknown; message?: unknown; error_description?: unknown };
+    const parsed = JSON.parse(text) as { error?: unknown; message?: unknown; error_description?: unknown; reason?: unknown; requestId?: unknown };
     if (typeof parsed.error === 'string' && parsed.error) code = parsed.error;
     if (typeof parsed.message === 'string' && parsed.message) message = parsed.message;
     else if (typeof parsed.error_description === 'string' && parsed.error_description) message = parsed.error_description;
+    if (typeof parsed.reason === 'string' && parsed.reason) reason = parsed.reason;
+    if (typeof parsed.requestId === 'string' && parsed.requestId) requestId = parsed.requestId;
   } catch {
     // Not JSON (a proxy error page, say): keep the generic code and message.
   }
-  return new CitadelError({ status, code, message, operation, attempts, retryAfterMs });
+  return new CitadelError({ status, code, message, operation, attempts, retryAfterMs, reason, requestId });
 }
