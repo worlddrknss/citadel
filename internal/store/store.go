@@ -47,6 +47,7 @@ type Store interface {
 	PKIParityStore
 	PKILifecycleStore
 	AgentStore
+	NotificationStore
 }
 
 // KeyStore persists KMS keys, aliases, key policies and grants.

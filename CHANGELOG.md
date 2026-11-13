@@ -48,6 +48,20 @@ All notable changes to Citadel are documented here. The format follows
   and runs under a timeout; errors carry no tokens, keys or secrets.
 - `internal/sigv4.SignRequest`: client-side SigV4 signing, checked against
   the AWS SDK signer.
+- Notifications (2.3 groundwork): account-scoped notification channels in
+  Administration → Notifications. A channel is a signed webhook
+  (`X-Citadel-Signature: t=<unix>,v1=<HMAC-SHA256 of "t.body">`, with a
+  per-channel secret shown once, rotatable, sealed at rest), a Slack incoming
+  webhook (`hooks.slack.com` only, URL sealed at rest) or email through the
+  deployment's SMTP server (new `KMS_SMTP_*` settings; STARTTLS or implicit
+  TLS, never plaintext). Channels subscribe to typed events
+  (`agent.approval_requested`, `agent.suspended`, `agent.anomaly`,
+  `security.kill_switch`, plus `test`). Deliveries go through a durable
+  outbox processed by a worker on every replica (`FOR UPDATE SKIP LOCKED`),
+  with exponential backoff, dead-lettering after 10 attempts, retry from the
+  console, and a per-channel delivery log. Admin API under
+  `/v1/notifications`, write-ahead audited; Go SDK methods and
+  `VerifyNotificationSignature`. See docs/notifications.md. Migration 1400.
 - TypeScript SDK: an MCP stdio bridge, `npx @worlddrknss/citadel mcp`, for
   MCP clients that only start local servers (such as Claude Desktop). It
   forwards newline-delimited JSON-RPC from stdin to Citadel's `/mcp` endpoint

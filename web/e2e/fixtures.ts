@@ -59,6 +59,7 @@ export const PAGES = [
   { path: '/audit', heading: 'Audit log' },
   { path: '/approvals', heading: 'Approvals' },
   { path: '/admin', heading: 'Administration' },
+  { path: '/admin?tab=notifications', heading: 'Administration' },
   { path: '/api-reference', heading: 'API reference' }
 ] as const;
 

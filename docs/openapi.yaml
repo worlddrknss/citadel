@@ -78,6 +78,8 @@ tags:
     description: AI agents, their tokens, federation bindings, grants and credential usage profiles
   - name: Agent API
     description: Endpoints AI agents call with an agent token or federated token
+  - name: Notifications
+    description: Notification channels (signed webhooks, Slack, email) and their delivery log
   - name: Server
     description: Server metadata and this document
 paths:
@@ -6856,6 +6858,274 @@ paths:
             $ref: "#/components/responses/Forbidden"
           "429":
             $ref: "#/components/responses/TooManyRequests"
+    /v1/notifications/channels:
+      get:
+        operationId: listNotificationChannels
+        tags: [Notifications]
+        summary: List notification channels
+        description: |
+          The account's notification channels, the event types they can subscribe
+          to, and whether email channels are available (an SMTP server is
+          configured). Secrets are never returned: a webhook channel says whether
+          it has a signing secret, and a Slack channel shows a `urlHint` without
+          the URL's secret part.
+        x-citadel-role: admin
+        responses:
+          "200":
+            description: The channels and the event catalog
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/NotificationChannelList"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "500":
+            $ref: "#/components/responses/InternalError"
+      post:
+        operationId: createNotificationChannel
+        tags: [Notifications]
+        summary: Create a notification channel
+        description: |
+          Creates a `webhook` (any https URL; requests are signed), `slack` (an
+          incoming webhook URL on hooks.slack.com, stored encrypted) or `email`
+          (needs the server's SMTP settings; `email_unavailable` otherwise)
+          channel. A webhook's signing secret is returned once, in
+          `signingSecret`. `test` is always delivered and is dropped from
+          `events`.
+        x-citadel-role: admin
+        x-citadel-audit: citadel.CreateNotificationChannel
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationChannelCreateRequest"
+        responses:
+          "201":
+            description: The new channel
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/NotificationChannelSaved"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+      delete:
+        operationId: deleteNotificationChannel
+        tags: [Notifications]
+        summary: Delete a notification channel
+        description: Deletes the channel and its delivery log.
+        x-citadel-role: admin
+        x-citadel-audit: citadel.DeleteNotificationChannel
+        parameters:
+          - name: id
+            in: query
+            required: true
+            schema:
+              type: string
+        responses:
+          "200":
+            description: Deleted
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/DeletedFlag"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/notifications/channels/update:
+      post:
+        operationId: updateNotificationChannel
+        tags: [Notifications]
+        summary: Update a notification channel
+        description: |
+          Omitted members keep their value. A channel's type can't change. A Slack
+          URL is write-only: send `url` to replace it.
+        x-citadel-role: admin
+        x-citadel-audit: citadel.UpdateNotificationChannel
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationChannelUpdateRequest"
+        responses:
+          "200":
+            description: The updated channel
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/NotificationChannelSaved"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/notifications/channels/test:
+      post:
+        operationId: testNotificationChannel
+        tags: [Notifications]
+        summary: Send a test notification
+        description: |
+          Queues a `test` event for the channel (even a disabled one) and starts
+          delivery now. The outcome appears in the delivery log.
+        x-citadel-role: admin
+        x-citadel-audit: citadel.TestNotificationChannel
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationChannelRef"
+        responses:
+          "202":
+            description: Queued
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/NotificationTestQueued"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/notifications/channels/signing-secret:
+      post:
+        operationId: rotateNotificationSigningSecret
+        tags: [Notifications]
+        summary: Rotate a webhook channel's signing secret
+        description: |
+          Replaces the signing secret and returns the new one once. Deliveries
+          from then on are signed with it.
+        x-citadel-role: admin
+        x-citadel-audit: citadel.RotateNotificationSigningSecret
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationChannelRef"
+        responses:
+          "200":
+            description: The channel and its new signing secret
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/NotificationChannelSaved"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/notifications/deliveries:
+      get:
+        operationId: listNotificationDeliveries
+        tags: [Notifications]
+        summary: List notification deliveries
+        description: |
+          The delivery log, newest first: for one channel (`channelId`) or the
+          whole account. Delivered and dead-lettered entries are kept for 30 days.
+        x-citadel-role: admin
+        parameters:
+          - name: channelId
+            in: query
+            required: false
+            schema:
+              type: string
+          - name: limit
+            in: query
+            required: false
+            schema:
+              type: integer
+              minimum: 1
+              maximum: 200
+              default: 50
+        responses:
+          "200":
+            description: The deliveries
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/NotificationDeliveryList"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/notifications/deliveries/retry:
+      post:
+        operationId: retryNotificationDelivery
+        tags: [Notifications]
+        summary: Retry a dead-lettered delivery
+        description: Requeues a `dead` delivery with its attempts reset.
+        x-citadel-role: admin
+        x-citadel-audit: citadel.RetryNotificationDelivery
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: integer
+                    format: int64
+        responses:
+          "200":
+            description: Requeued
+            content:
+              application/json:
+                schema:
+                  type: object
+                  required: [requeued]
+                  properties:
+                    requeued:
+                      type: boolean
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
           "500":
             $ref: "#/components/responses/InternalError"
 components:
@@ -10404,3 +10674,186 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AgentUsableCredential"
+    NotificationEventType:
+      type: object
+      required: [type, title, description, severity]
+      properties:
+        type:
+          type: string
+          description: e.g. `agent.approval_requested`, `agent.suspended`, `agent.anomaly`, `security.kill_switch`, `test`
+        title:
+          type: string
+        description:
+          type: string
+        severity:
+          type: string
+          enum: [info, warning, critical]
+    NotificationChannel:
+      type: object
+      required: [id, name, type, enabled, events, hasSigningSecret, createdAt, createdBy, updatedAt, updatedBy]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum: [webhook, slack, email]
+        enabled:
+          type: boolean
+        events:
+          type: array
+          items:
+            type: string
+        url:
+          type: string
+          description: The webhook URL (webhook channels)
+        urlHint:
+          type: string
+          description: The Slack URL without its secret part (slack channels)
+        recipients:
+          type: array
+          description: Email addresses (email channels)
+          items:
+            type: string
+        hasSigningSecret:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
+        updatedBy:
+          type: string
+    NotificationChannelList:
+      type: object
+      required: [channels, events, emailAvailable]
+      properties:
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationChannel"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationEventType"
+        emailAvailable:
+          type: boolean
+          description: Whether the server has SMTP settings, so email channels work
+    NotificationChannelCreateRequest:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          description: Unique in the account; letters, digits, spaces, `.`, `_` and `-`, at most 64 characters
+        type:
+          type: string
+          enum: [webhook, slack, email]
+        enabled:
+          type: boolean
+          default: true
+        events:
+          type: array
+          items:
+            type: string
+        url:
+          type: string
+          description: Webhook (absolute https URL) or Slack (https://hooks.slack.com/...) URL
+        recipients:
+          type: array
+          description: Email channels only; at most 20 addresses
+          items:
+            type: string
+    NotificationChannelUpdateRequest:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        enabled:
+          type: boolean
+        events:
+          type: array
+          items:
+            type: string
+        url:
+          type: string
+        recipients:
+          type: array
+          items:
+            type: string
+    NotificationChannelRef:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+    NotificationChannelSaved:
+      type: object
+      required: [channel]
+      properties:
+        channel:
+          $ref: "#/components/schemas/NotificationChannel"
+        signingSecret:
+          type: string
+          description: A webhook's new signing secret, returned only by create and rotate
+    NotificationTestQueued:
+      type: object
+      required: [queued, eventId]
+      properties:
+        queued:
+          type: boolean
+        eventId:
+          type: string
+    NotificationDelivery:
+      type: object
+      required: [id, channelId, eventId, eventType, status, attempts, createdAt, data]
+      properties:
+        id:
+          type: integer
+          format: int64
+        channelId:
+          type: string
+        eventId:
+          type: string
+        eventType:
+          type: string
+        status:
+          type: string
+          enum: [pending, delivered, dead]
+        attempts:
+          type: integer
+        lastError:
+          type: string
+        statusCode:
+          type: integer
+          description: The destination's HTTP status, when one was received
+        createdAt:
+          type: string
+          format: date-time
+        nextAttemptAt:
+          type: string
+          format: date-time
+        lastAttemptAt:
+          type: string
+          format: date-time
+        deliveredAt:
+          type: string
+          format: date-time
+        data:
+          type: object
+          description: The event's payload
+    NotificationDeliveryList:
+      type: object
+      required: [deliveries]
+      properties:
+        deliveries:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationDelivery"

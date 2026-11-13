@@ -245,6 +245,16 @@ resolved address at dial time; webhooks don't follow redirects. Webhook
 signing secrets are sealed at rest with a key derived from the deployment
 root secret. See [rotation.md](rotation.md).
 
+Notification webhooks and Slack messages (https only, no redirects) go
+through the same dial-time check (shared as `newGuardedHTTPClient` in
+`internal/server/outbound.go`); Slack messages go only to `hooks.slack.com`.
+Webhooks are HMAC-SHA256 signed with a timestamp. Signing secrets and Slack
+webhook URLs are sealed at rest (AES-256-GCM, a key derived from the
+deployment root secret, bound to the account and channel). Email goes only to
+the operator-configured SMTP server, always over TLS (STARTTLS that must be
+offered, or implicit TLS) with a verified certificate. See
+[notifications.md](notifications.md).
+
 ## What you are responsible for
 
 - TLS in front of, or in, Citadel.
