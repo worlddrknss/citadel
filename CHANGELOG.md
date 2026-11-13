@@ -6,6 +6,8 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.1.0]
+
 ### Added
 
 - **Built-in secret rotation.** Rotation schedules now rotate: Citadel runs
