@@ -1,0 +1,114 @@
+{
+  "name": "@worlddrknss/citadel",
+  "version": "2.1.0",
+  "description": "TypeScript client for the Citadel native /v1 API: secrets, parameters, KMS, certificates and workload identity. Zero dependencies; Node 18+ and edge runtimes.",
+  "license": "AGPL-3.0-or-later",
+  "author": "worlddrknss",
+  "homepage": "https://github.com/worlddrknss/citadel/tree/main/sdk/typescript#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/worlddrknss/citadel.git",
+    "directory": "sdk/typescript"
+  },
+  "bugs": {
+    "url": "https://github.com/worlddrknss/citadel/issues"
+  },
+  "keywords": [
+    "citadel",
+    "secrets",
+    "kms",
+    "nextjs",
+    "edge",
+    "parameter-store"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "edge-light": {
+        "import": {
+          "types": "./dist/esm/index.d.ts",
+          "default": "./dist/esm/index.js"
+        },
+        "require": {
+          "types": "./dist/cjs/index.d.ts",
+          "default": "./dist/cjs/index.js"
+        }
+      },
+      "workerd": {
+        "import": {
+          "types": "./dist/esm/index.d.ts",
+          "default": "./dist/esm/index.js"
+        },
+        "require": {
+          "types": "./dist/cjs/index.d.ts",
+          "default": "./dist/cjs/index.js"
+        }
+      },
+      "worker": {
+        "import": {
+          "types": "./dist/esm/index.d.ts",
+          "default": "./dist/esm/index.js"
+        },
+        "require": {
+          "types": "./dist/cjs/index.d.ts",
+          "default": "./dist/cjs/index.js"
+        }
+      },
+      "node": {
+        "import": {
+          "types": "./dist/esm/index.d.ts",
+          "default": "./dist/esm/index.js"
+        },
+        "require": {
+          "types": "./dist/cjs/index.d.ts",
+          "default": "./dist/cjs/index.js"
+        }
+      },
+      "browser": {
+        "import": {
+          "types": "./dist/esm/index.d.ts",
+          "default": "./dist/esm/browser.js"
+        },
+        "require": {
+          "types": "./dist/cjs/index.d.ts",
+          "default": "./dist/cjs/browser.js"
+        }
+      },
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "generate": "node scripts/generate.mjs",
+    "lint": "tsc -p tsconfig.lint.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "node scripts/build.mjs",
+    "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.12"
+  }
+}
