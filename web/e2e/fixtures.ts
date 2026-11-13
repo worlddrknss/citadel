@@ -63,10 +63,12 @@ export const PAGES = [
   { path: '/approvals?type=agent_access&id=aar_bbbbbbbbbbbbbbbb', heading: 'Approvals' },
   { path: '/admin', heading: 'Administration' },
   { path: '/admin?tab=notifications', heading: 'Administration' },
+  { path: '/admin?tab=audit', heading: 'Administration' },
   { path: '/api-reference', heading: 'API reference' },
   { path: '/docs', heading: 'Documentation' },
   { path: '/docs/getting-started-agents', heading: 'Getting started with AI agents' },
-  { path: '/docs/agents', heading: 'Credentials for AI agents' }
+  { path: '/docs/agents', heading: 'Credentials for AI agents' },
+  { path: '/docs/audit', heading: 'Audit log and retention' }
 ] as const;
 
 /** Opens a console page and waits for its first heading. */

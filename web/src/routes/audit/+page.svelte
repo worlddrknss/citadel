@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { errorMessage } from '#lib/api.ts';
+  import { base } from '#lib/paths.ts';
   import { session } from '#lib/stores/session.svelte.ts';
   import { toast } from '#lib/stores/toast.svelte.ts';
   import { param, setParams } from '#lib/url.ts';
@@ -11,7 +12,7 @@
   import { isNotImplemented, saveBlob } from '../http';
   import { fullTime, initials, relTime, utcStamp } from '../time';
   import StreamModal from './StreamModal.svelte';
-  import { auditApi, legacyBreakNote, resultKind, type AuditFilters, type AuditPage, type AuditRow, type ChainStatus, type ResultFilter } from './api';
+  import { anchorNote, auditApi, legacyBreakNote, resultKind, type AuditFilters, type AuditPage, type AuditRow, type ChainStatus, type ResultFilter } from './api';
 
   const PAGE_SIZE = 50;
 
@@ -272,6 +273,12 @@
       {/if}
     </div>
   </div>
+  {#if chain.anchor}
+    <div class="callout callout-info legacy-note" role="note" data-testid="chain-anchor-note">
+      <Icon name="clock" size={16} />
+      <span>{anchorNote(chain.anchor, fullTime)}{#if session.can('admin')} <a href="{base}/admin?tab=audit">Retention settings</a>{/if}</span>
+    </div>
+  {/if}
   {#if chain.status !== 'never' && legacyBreakNote(chain)}
     <div class="callout callout-warning legacy-note" role="note" data-testid="legacy-break-note">
       <Icon name="alert-triangle" size={16} />

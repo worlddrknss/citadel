@@ -82,6 +82,79 @@ export interface ChainStatus {
   /** Chain position and event ID of the first such link. */
   firstLegacyBreakSeq?: number;
   firstLegacyBreakId?: number;
+  /** Where the chain starts after retention pruning. */
+  anchor?: ChainAnchor;
+}
+
+/**
+ * The authenticated start of the chain after retention pruning: every event
+ * up to and including `chainSeq` was deleted on purpose.
+ */
+export interface ChainAnchor {
+  chainSeq: number;
+  eventId: number;
+  hash: string;
+  /** Timestamp of the last pruned event; everything older is gone. */
+  prunedBefore: string;
+  prunedEvents: number;
+  updatedAt: string;
+}
+
+/** GET /v1/audit/retention. */
+export interface Retention {
+  /** In force; 0 keeps events forever. */
+  retentionDays: number;
+  source: 'account' | 'deployment';
+  /** The account's override; null uses the deployment default. */
+  accountDays: number | null;
+  deploymentDays: number;
+  minDays: number;
+  maxDays: number;
+  updatedBy?: string;
+  updatedAt?: string;
+  /** SIEM streaming is on: events are pruned only once delivered. */
+  streamHeld: boolean;
+  events: number;
+  oldestEvent?: string;
+  anchor?: ChainAnchor;
+  /** Platform admins only; deployment-wide. */
+  storage?: { tableBytes: number; tableRowsEstimate: number };
+  /** Platform admins only; deployment-wide. */
+  lastRun?: { startedAt?: string; finishedAt?: string; prunedEvents: number; error?: string };
+}
+
+export interface RetentionPreview {
+  retentionDays: number;
+  cutoff?: string;
+  prunableEvents: number;
+  events: number;
+  oldestEvent?: string;
+}
+
+/** "Keep forever" or "90 days". */
+export function retentionLabel(days: number): string {
+  if (days <= 0) return 'Keep forever';
+  return days === 1 ? '1 day' : `${days.toLocaleString()} days`;
+}
+
+/** "1.9 GB" (binary units, one decimal from MB up); "—" when unknown. */
+export function formatBytes(n: number | undefined): string {
+  if (n == null || n < 0) return '—';
+  const units = ['bytes', 'KB', 'MB', 'GB', 'TB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return i === 0 ? `${v} bytes` : `${v.toFixed(i >= 2 ? 1 : 0)} ${units[i]}`;
+}
+
+/** The note shown when the chain starts at a pruning anchor. */
+export function anchorNote(a: ChainAnchor | null | undefined, fmt: (iso: string) => string = (s) => new Date(s).toLocaleString()): string {
+  if (!a) return '';
+  const n = a.prunedEvents;
+  return `History before ${fmt(a.prunedBefore)} was pruned by the retention policy (${n.toLocaleString()} ${n === 1 ? 'event' : 'events'}). Verification starts at the signed anchor, chain position ${a.chainSeq.toLocaleString()}.`;
 }
 
 /** The amber note shown when pre-2.0 history has links that don't connect. */
@@ -171,7 +244,17 @@ export const auditApi = {
   saveStream: (body: { enabled: boolean; url: string; format: 'json' | 'cef'; token?: string }) =>
     req<StreamConfig>('/v1/audit/stream', { method: 'POST', body: JSON.stringify(body) }),
   /** POST /v1/audit/stream/test — admin. Sends one synthetic event. */
-  testStream: () => req<{ delivered: boolean; status?: number }>('/v1/audit/stream/test', { method: 'POST' })
+  testStream: () => req<{ delivered: boolean; status?: number }>('/v1/audit/stream/test', { method: 'POST' }),
+  /** GET /v1/audit/retention — viewer. */
+  retention: () => req<Retention>('/v1/audit/retention'),
+  /**
+   * POST /v1/audit/retention — admin. Days (0 keeps events forever), or null
+   * for the deployment default. Audited.
+   */
+  saveRetention: (retentionDays: number | null) =>
+    req<Retention>('/v1/audit/retention', { method: 'POST', body: JSON.stringify({ retentionDays }) }),
+  /** GET /v1/audit/retention/preview?days=N — admin. */
+  previewRetention: (days: number) => req<RetentionPreview>(`/v1/audit/retention/preview${qs({ days })}`)
 };
 
 const CSV_COLS: (keyof AuditRow)[] = ['id', 'createdAt', 'actor', 'action', 'resource', 'result', 'errorType', 'sourceIp', 'prevHash', 'hash', 'correlationId'];

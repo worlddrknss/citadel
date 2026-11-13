@@ -19,6 +19,7 @@
   import SsoPanel from './SsoPanel.svelte';
   import AgentsKillSwitch from './AgentsKillSwitch.svelte';
   import NotificationsPanel from './NotificationsPanel.svelte';
+  import AuditRetentionPanel from './AuditRetentionPanel.svelte';
   import { roleTone, fmtDate, type RoleName, type UserRow } from './api';
 
   const isAdmin = $derived(session.can('admin'));
@@ -245,7 +246,8 @@
         { id: 'accounts', label: 'Accounts', count: loading ? undefined : accounts.length },
         { id: 'memberships', label: 'Memberships', count: loading ? undefined : memberships.length },
         { id: 'settings', label: 'Settings' },
-        { id: 'notifications', label: 'Notifications' }
+        { id: 'notifications', label: 'Notifications' },
+        { id: 'audit', label: 'Audit' }
       ]}
       bind:active={tabValue}
       onchange={(t) => {
@@ -255,7 +257,7 @@
     />
   </div>
 
-  {#if loadError && tab !== 'settings' && tab !== 'notifications'}
+  {#if loadError && tab !== 'settings' && tab !== 'notifications' && tab !== 'audit'}
     <div class="callout callout-danger err" role="alert">
       <Icon name="alert-circle" size={16} /><span>{loadError}</span>
       <button type="button" class="btn btn-ghost btn-sm push" onclick={load}>Retry</button>
@@ -325,6 +327,8 @@
     </DataTable>
   {:else if tab === 'notifications'}
     <NotificationsPanel />
+  {:else if tab === 'audit'}
+    <AuditRetentionPanel />
   {:else if tab === 'settings'}
     <div class="stack">
       <SettingsPanel />
