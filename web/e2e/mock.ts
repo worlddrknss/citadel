@@ -10,6 +10,33 @@ const ahead = (ms: number) => new Date(Date.now() + ms).toISOString();
 
 export const ACCOUNT = '123456789012';
 
+const notificationEvents = [
+  { type: 'agent.approval_requested', title: 'Agent approval requested', description: "An agent asked for access that needs a human's approval.", severity: 'warning' },
+  { type: 'agent.suspended', title: 'Agent suspended', description: 'An agent was suspended, by a person or automatically.', severity: 'warning' },
+  { type: 'agent.anomaly', title: 'Agent anomaly', description: 'An agent behaved unusually.', severity: 'warning' },
+  { type: 'security.kill_switch', title: 'Kill switch used', description: 'Every agent in the account was suspended with the kill switch.', severity: 'critical' },
+  { type: 'test', title: 'Test notification', description: 'Sent when you use Send test.', severity: 'info' }
+];
+
+const notificationChannel = {
+  id: 'nch_0a1b2c3d4e5f6a7b8c9d',
+  name: 'security-oncall',
+  type: 'webhook',
+  enabled: true,
+  events: ['agent.suspended', 'security.kill_switch'],
+  url: 'https://hooks.acme.test/citadel',
+  hasSigningSecret: true,
+  createdAt: ago(10 * DAY),
+  createdBy: 'alice',
+  updatedAt: ago(2 * DAY),
+  updatedBy: 'alice'
+};
+
+const notificationDeliveries = [
+  { id: 2, channelId: notificationChannel.id, eventId: 'evt_2', eventType: 'security.kill_switch', status: 'dead', attempts: 10, lastError: 'the destination returned HTTP 503', statusCode: 503, createdAt: ago(DAY), lastAttemptAt: ago(3_600_000), data: { actor: 'alice' } },
+  { id: 1, channelId: notificationChannel.id, eventId: 'evt_1', eventType: 'agent.suspended', status: 'delivered', attempts: 1, statusCode: 204, createdAt: ago(2 * DAY), deliveredAt: ago(2 * DAY), data: { agent: 'builder' } }
+];
+
 export const me = {
   username: 'alice',
   displayName: 'Alice Admin',
@@ -421,6 +448,8 @@ const GET: Record<string, Handler> = {
   },
   '/v1/audit/verify': () => ({ status: 'verified', verifiedThrough: 100, headHash: 'h100', checkedAt: ago(600_000), totalEvents: 100 }),
   '/v1/audit/stream': () => ({ enabled: false, url: '', format: 'json', hasToken: false }),
+  '/v1/notifications/channels': () => ({ channels: [notificationChannel], events: notificationEvents, emailAvailable: false }),
+  '/v1/notifications/deliveries': () => ({ deliveries: notificationDeliveries }),
   '/v1/account/keys': () => ({
     accessKeys: [{ accessKeyId: 'AKIACITADELTEST0001', status: 'Active', createdAt: ago(60 * DAY), lastUsedAt: ago(DAY) }]
   }),
@@ -571,6 +600,15 @@ const WRITE: Record<string, Handler> = {
   'POST /v1/audit/verify': () => GET['/v1/audit/verify'](new URLSearchParams(), {}),
   'POST /v1/audit/stream': (_, b) => ({ enabled: !!b.enabled, url: b.url ?? '', format: b.format ?? 'json', hasToken: typeof b.token === 'string' && b.token !== '' }),
   'POST /v1/audit/stream/test': () => ({ delivered: true, status: 204 }),
+  'POST /v1/notifications/channels': (_, b) => ({
+    channel: { ...notificationChannel, id: 'nch_new0000000000000000', ...b, hasSigningSecret: b.type === 'webhook', urlHint: b.type === 'slack' ? 'hooks.slack.com/services/T1/B1/…' : undefined },
+    ...(b.type === 'webhook' ? { signingSecret: 'whsec_mock0123456789abcdef0123456789abcdef0123456789abcdef01234567' } : {})
+  }),
+  'POST /v1/notifications/channels/update': (_, b) => ({ channel: { ...notificationChannel, ...b } }),
+  'DELETE /v1/notifications/channels': () => ({ deleted: true }),
+  'POST /v1/notifications/channels/test': () => ({ queued: true, eventId: 'evt_test' }),
+  'POST /v1/notifications/channels/signing-secret': () => ({ channel: notificationChannel, signingSecret: 'whsec_rotated0123456789abcdef0123456789abcdef0123456789abcdef0123' }),
+  'POST /v1/notifications/deliveries/retry': () => ({ requeued: true }),
   'POST /v1/account/keys': () => ({ accessKeyId: 'AKIACITADELTEST0002', secretKey: 'mockSecretAccessKey0123456789abcdefghijklmn' }),
   'POST /v1/account/profile': (_, b) => ({ username: me.username, displayName: b.displayName }),
   'POST /v1/account/sessions/revoke-others': () => ({ revoked: 1 }),
