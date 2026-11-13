@@ -1,6 +1,6 @@
 module github.com/worlddrknss/citadel
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.48.0
@@ -11,7 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.52.0
 	github.com/aws/smithy-go v1.28.9
 	github.com/lib/pq v1.12.3
-	golang.org/x/crypto v0.53.0
+	golang.org/x/crypto v0.58.0
 )
 
 require (
