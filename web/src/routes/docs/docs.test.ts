@@ -107,7 +107,9 @@ describe('renderDoc', () => {
     expect(doc.html).toContain('echo "&lt;hi&gt;"');
   });
   it('wraps tables so they scroll', () => {
-    expect(doc.html).toContain('<div class="tablewrap"><table>');
+    // Focusable, so a table that scrolls sideways can be scrolled from the keyboard.
+    expect(doc.html).toContain('<div class="tablewrap" tabindex="0"><table>');
+    expect(doc.html).toContain('<pre tabindex="0">');
   });
   it('sanitizes the output', () => {
     expect(doc.html).not.toContain('<script');

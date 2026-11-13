@@ -170,7 +170,7 @@ export function renderDoc(md: string, ctx: RenderContext): RenderedDoc {
         // instead of widening the page.
         const head = token.header.map((c) => cell(this.parser.parseInline(c.tokens), 'th', c.align)).join('');
         const body = token.rows.map((r) => `<tr>${r.map((c) => cell(this.parser.parseInline(c.tokens), 'td', c.align)).join('')}</tr>`).join('\n');
-        return `<div class="tablewrap"><table><thead><tr>${head}</tr></thead>${body ? `<tbody>${body}</tbody>` : ''}</table></div>\n`;
+        return `<div class="tablewrap" tabindex="0"><table><thead><tr>${head}</tr></thead>${body ? `<tbody>${body}</tbody>` : ''}</table></div>\n`;
       }
     }
   });
