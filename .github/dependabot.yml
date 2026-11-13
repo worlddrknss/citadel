@@ -24,6 +24,12 @@ updates:
       svelte-major:
         patterns: ["svelte", "svelte-check", "@sveltejs/*"]
         update-types: [major]
+    ignore:
+      # TypeScript 7 (the native port) is not supported yet: @sveltejs/kit 3
+      # and svelte-check both declare a typescript ^6 peer. Drop this once
+      # they accept 7.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
