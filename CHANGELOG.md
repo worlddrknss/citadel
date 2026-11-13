@@ -31,7 +31,31 @@ All notable changes to Citadel are documented here. The format follows
   export, CEF `flexString1`/`flexString2`), filterable with `?agent=`.
   Migrations 1300 (new tables) and 1301 (three catalog-only columns and a
   partial index on the audit table).
-
+- Agent HTTP broker: `POST /v1/agent/http` performs an HTTP request with a
+  credential injected (`http_header`, `http_basic`, `http_query`), so the
+  agent never holds the secret. The credential is sent only to its allowed
+  hosts, ports, methods and paths, over https unless it allows http;
+  destinations resolving to loopback, link-local, private or metadata
+  addresses are refused unless the credential's `allowedCIDRs` include them.
+  Colliding agent headers are dropped, same-host redirects followed (at most
+  3), requests capped at 1 MiB and responses at 5 MiB, `Set-Cookie` and
+  credential headers removed, and the secret (also base64, URL and JSON
+  encoded) replaced with `[REDACTED]` in responses. See docs/agents.md.
+- `POST /v1/agent/credentials/reveal` returns a credential's value, only with
+  an explicit `reveal` grant; the disclosure is audited before the value is
+  returned.
+- MCP server at `/mcp` (Streamable HTTP, protocol 2025-06-18): `initialize`,
+  `ping`, `tools/list`, `tools/call`, signed `Mcp-Session-Id` sessions,
+  `DELETE` to end one. Tools `list_credentials`, `http_request` and
+  `reveal_credential` (listed only with a reveal grant); tool failures are
+  `isError` results. Works with the stdio bridge.
+- Agent endpoints accept only an agent Bearer credential (never a session
+  cookie, access key or SigV4). Audited as `citadel.AgentHTTP`,
+  `citadel.AgentReveal`, `citadel.AgentListCredentials`,
+  `citadel.MCPInitialize` and `citadel.MCPEndSession` with agent, owner,
+  task ID, credential, method, host, path (no query), status and bytes;
+  never values. New metrics `citadel_agent_http_*`, `citadel_agent_reveals_total`
+  and `citadel_mcp_*` with bounded labels.
 - `internal/providertoken` (groundwork for 2.4, no routes or UI yet): minters
   for provider-scoped agent credentials behind one `Minter` interface:
   AWS STS AssumeRole (real AWS or Citadel's own STS; session policy,
@@ -73,6 +97,12 @@ All notable changes to Citadel are documented here. The format follows
 - docs/agents-mcp.md: copy-paste MCP configuration for Claude Code, Claude
   Desktop, Cursor and VS Code, connecting directly over HTTP where the client
   supports it, or through the bridge.
+
+### Changed
+
+- ACME http-01 validation, rotation, SIEM streaming, notifications and the agent broker
+  share one dial-time outbound address check. SIEM delivery now also refuses
+  cloud metadata addresses.
 
 ## [2.1.2]
 

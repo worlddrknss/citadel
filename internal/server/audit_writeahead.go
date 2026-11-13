@@ -255,6 +255,10 @@ var nativeNonMutating = map[string]bool{
 	// Verification walks the chain; an attempt event would extend the chain
 	// it is verifying. Its result is audited (fail-closed) as before.
 	"/v1/audit/verify": true,
+	// Reveal discloses like GetSecretValue (fail-closed, no attempt). An
+	// MCP message is mostly a read (initialize, ping, tools/list); the
+	// brokered http_request tool starts its own attempt.
+	"/v1/agent/credentials/reveal": true, "/mcp": true,
 }
 
 // nativeWriteAhead reports whether a /v1 request needs a write-ahead attempt.

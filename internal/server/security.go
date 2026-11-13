@@ -97,7 +97,9 @@ func isSafeMethod(m string) bool {
 //     SigV4) carry no ambient credential and are exempt.
 func (s *Server) withCSRFProtection(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isSafeMethod(r.Method) || !strings.HasPrefix(r.URL.Path, "/v1/") {
+		// Agent endpoints accept only an agent Bearer credential, never a
+		// cookie, so a cross-site request carries no ambient authority.
+		if isSafeMethod(r.Method) || !strings.HasPrefix(r.URL.Path, "/v1/") || agentOnlyPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

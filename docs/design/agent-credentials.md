@@ -98,8 +98,10 @@ a credential injected. Body:
 
 Citadel checks: agent active; grant exists with `use`; time window; rate
 limit; URL scheme https (http only with an explicit per-credential flag);
-host matches `allowedHosts` (after IDNA normalisation, no userinfo, default
-ports only unless listed); method/path allowed; SSRF protections (no loopback,
+host matches `allowedHosts` (lowercased, no trailing dot; internationalized
+names only in their punycode `xn--` form, so the standard library suffices and
+look-alike Unicode never matches; no userinfo, default ports only unless
+listed); method/path allowed; SSRF protections (no loopback,
 link-local, private or metadata addresses unless the credential allows a
 CIDR); no redirects followed across hosts (same-host redirects up to 3).
 Then it injects the credential, strips any agent-supplied header that would
@@ -115,7 +117,8 @@ response 5 MiB, truncated with a flag), and returns:
 Response headers that can carry credentials (`Set-Cookie`, `Authorization`,
 `WWW-Authenticate` challenge params are kept) are filtered, and any exact
 occurrence of the secret value (and its base64/URL-encoded forms) in the
-response is replaced with `[REDACTED]` (`redacted: true`).
+response is replaced with `[REDACTED]` (`redacted: true`). `headers` is a
+map of strings; repeated headers are joined with `, `.
 
 Every call is audited (`citadel.AgentHTTP`): agent, owner, credential,
 method, host, path (no query string), status, bytes, taskId, and denials

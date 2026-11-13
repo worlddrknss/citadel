@@ -13,7 +13,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -224,23 +223,9 @@ func (d rotationDialer) DialContext(ctx context.Context, network, address string
 var errRotationAddressBlocked = errors.New("the destination address is not allowed (loopback, link-local or metadata)")
 
 func rotationDialControl(allowLoopback bool) func(network, address string, c syscall.RawConn) error {
-	return func(_, address string, _ syscall.RawConn) error {
-		host, _, err := net.SplitHostPort(address)
-		if err != nil {
-			return err
-		}
-		a, err := netip.ParseAddr(host)
-		if err != nil {
-			return errRotationAddressBlocked
-		}
-		a = a.Unmap()
-		if allowLoopback && a.IsLoopback() {
-			return nil
-		}
-		if ssrfBlocked(a) {
-			return errRotationAddressBlocked
-		}
-		return nil
+	control := outboundPolicy{allowLoopback: allowLoopback}.control(errRotationAddressBlocked)
+	return func(network, address string, c syscall.RawConn) error {
+		return control(context.Background(), network, address, c)
 	}
 }
 

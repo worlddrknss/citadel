@@ -192,6 +192,8 @@ func routeClass(r *http.Request, status int) string {
 		return "/crl"
 	case strings.HasPrefix(p, "/.well-known/"):
 		return "/.well-known"
+	case p == "/mcp":
+		return p
 	case p == "/healthz" || p == "/readyz":
 		return p
 	}

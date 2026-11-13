@@ -237,8 +237,8 @@ validation, Let's Encrypt, SIEM streaming, Kubernetes TokenReview and secret
 rotation (PostgreSQL servers and rotation webhooks). ACME
 HTTP-01 validation refuses loopback, link-local, multicast and cloud metadata
 addresses, checked after DNS resolution and on redirects, unless an account
-explicitly allows a range. SIEM delivery refuses loopback, link-local and
-multicast addresses and doesn't follow redirects. Rotation webhooks (https
+explicitly allows a range. SIEM delivery refuses loopback, link-local,
+multicast and cloud metadata addresses and doesn't follow redirects. Rotation webhooks (https
 only, HMAC-signed with a timestamp) and the PostgreSQL rotator refuse
 loopback, link-local, multicast and cloud metadata addresses, checked on the
 resolved address at dial time; webhooks don't follow redirects. Webhook
@@ -254,6 +254,18 @@ deployment root secret, bound to the account and channel). Email goes only to
 the operator-configured SMTP server, always over TLS (STARTTLS that must be
 offered, or implicit TLS) with a verified certificate. See
 [notifications.md](notifications.md).
+
+All of these share one dial-time check (`internal/server/outbound.go`), so
+neither a DNS answer nor a redirect can steer a connection to the host
+itself or a metadata service; the features differ only in which ranges they
+let through. The agent HTTP broker (`POST /v1/agent/http`, the MCP
+`http_request` tool) is stricter: it also refuses private ranges (RFC 1918,
+unique local, CGNAT, and NAT64/6to4 addresses embedding them) unless the
+credential lists them in `allowedCIDRs`, never uses an environment proxy,
+sends a credential only to the hosts, ports, methods and paths its usage
+profile allows, follows at most three same-host redirects (re-checking each),
+and replaces the secret and its encoded forms in responses with
+`[REDACTED]`. See [agents.md](agents.md).
 
 ## What you are responsible for
 

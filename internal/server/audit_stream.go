@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
@@ -237,18 +236,8 @@ func (s *Server) auditStreamHTTPClient() *http.Client {
 	}
 	dialer := &net.Dialer{
 		Timeout: auditStreamTimeout,
-		Control: func(_, address string, _ syscall.RawConn) error {
-			host, _, err := net.SplitHostPort(address)
-			if err != nil {
-				return err
-			}
-			ip := net.ParseIP(host)
-			if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-				ip.IsMulticast() || ip.IsUnspecified() || ip.IsInterfaceLocalMulticast() {
-				return errors.New("audit stream destination address is not allowed")
-			}
-			return nil
-		},
+		// Private ranges stay reachable: SIEM collectors usually live there.
+		ControlContext: outboundPolicy{}.control(errors.New("audit stream destination address is not allowed")),
 	}
 	transport := &http.Transport{
 		DialContext:           dialer.DialContext,

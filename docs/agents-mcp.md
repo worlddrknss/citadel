@@ -215,6 +215,50 @@ The bridge doesn't open the optional GET stream for server-initiated
 messages, and it doesn't resume broken event streams; Citadel's tools reply
 on the POST that called them.
 
+## The server
+
+Citadel implements the Streamable HTTP transport of MCP protocol version
+`2025-06-18` (`2025-03-26` is also accepted; a client asking for another
+version is answered with `2025-06-18`).
+
+- `POST /mcp` carries one JSON-RPC 2.0 message. Requests are answered with
+  an `application/json` body; notifications and responses get
+  `202 Accepted`. Batches are refused (`-32600`), as the 2025-06-18 version
+  removed them.
+- `initialize` returns an `Mcp-Session-Id`. Every later request must carry
+  it (`400` without one) and may carry `MCP-Protocol-Version`, which must be
+  the negotiated version (`400` otherwise). An unknown, expired (after 24
+  hours) or ended session, or one that belongs to another agent, gets
+  `404`: start a new session with `initialize`.
+- `DELETE /mcp` with the session header ends the session (`204`). `GET /mcp`
+  returns `405`: Citadel sends no server-initiated messages.
+- Every request needs the agent's `Authorization: Bearer` credential, also
+  within a session; the session ID alone grants nothing. Requests from a
+  browser page on another origin are refused (`403`).
+- Methods: `initialize`, `ping`, `tools/list`, `tools/call` and the
+  `notifications/initialized` notification. Anything else is `-32601`.
+
+Tools follow the agent's grants:
+
+| Tool | Arguments | Result |
+| --- | --- | --- |
+| `list_credentials` | none | `{"credentials": [{name, kind, description, allowedHosts, allowedMethods, allowedPathPrefixes, actions, status}]}`; never values. |
+| `http_request` | `credential`, `url`, optional `method`, `headers`, `body`, `bodyEncoding`, `taskId` | Brokered use, exactly like `POST /v1/agent/http` (see [agents.md](agents.md)): `{status, headers, body, bodyEncoding, truncated, redacted}`. |
+| `reveal_credential` | `credential`, optional `taskId` | `{credential, kind, value}`. Listed only when the agent holds a grant with `reveal`. |
+
+Results come as a JSON text block and as `structuredContent`. A refused or
+failed call (no grant, a host the credential may not be sent to, an
+unreachable upstream...) is a tool result with `isError: true` whose text
+starts with the reason, for example `host_not_allowed: this credential may
+not be sent to that host`, so the model can see it and adjust. Calls are
+audited like their REST counterparts, with `via=mcp`.
+
+Session IDs are signed with a key derived from the deployment secret, so any
+replica accepts a session another one issued. Ending a session is remembered
+by the replica that handled the `DELETE`; since a session carries no
+authority of its own, another replica accepting it until it expires is
+harmless.
+
 ## Troubleshooting
 
 - **`Citadel rejected the agent token (HTTP 401)`**: the token is wrong,
