@@ -165,6 +165,9 @@
   .intro {
     margin: 0;
   }
+  .intro a {
+    text-decoration: underline;
+  }
   .cred {
     padding: var(--space-3);
     border: 1px solid var(--border);

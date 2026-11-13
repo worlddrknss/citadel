@@ -4,7 +4,6 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { base } from '#lib/paths.ts';
   import Badge from '#lib/components/Badge.svelte';
   import Icon from '#lib/components/Icon.svelte';
   import { errorMessage } from '#lib/api.ts';
@@ -65,7 +64,7 @@
   <div class="card-head">
     <div>
       <h2 id="ks-title">AI agents</h2>
-      <p class="subtle small sub">Kill switch for every <a href="{base}/agents">agent</a> in this account.</p>
+      <p class="subtle small sub">Kill switch for every agent in this account.</p>
     </div>
     {#if settings}
       {#if settings.agentsSuspended}<Badge tone="danger">All suspended</Badge>{:else}<Badge tone="success">Running</Badge>{/if}
