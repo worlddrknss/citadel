@@ -90,9 +90,11 @@ func New(t testing.TB) *Env {
 		PublicURL:         base,
 		ExpectedAccessKey: "AKIASERVERTEST000001",
 		SecretAccessKey:   "servertest-secret-access-key-0123456789ab",
-		UIUsers:           users,
-		SessionIdleTTL:    30 * time.Minute,
-		SessionAbsTTL:     12 * time.Hour,
+		// Seals server-side secrets (webhook signing secrets and the like).
+		WrappingKey:    bytes.Repeat([]byte{5}, 32),
+		UIUsers:        users,
+		SessionIdleTTL: 30 * time.Minute,
+		SessionAbsTTL:  12 * time.Hour,
 	}
 	s, err := server.New(ctx, cfg, st, nil)
 	if err != nil {
