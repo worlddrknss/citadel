@@ -298,7 +298,7 @@ operators:
   approved cipher suites; legacy suites fail the handshake.
 - Do not override `GODEBUG` in the pod: removing `fips140=only` takes the
   process out of its validated configuration.
-- The image is published for `linux/amd64`.
+- The image is published for `linux/amd64` and `linux/arm64`, both FIPS builds.
 
 ## Verifying the image
 
