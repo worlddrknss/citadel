@@ -60,13 +60,14 @@ var (
 		OutputSchema: obj(map[string]any{
 			"credentials": map[string]any{"type": "array", "items": obj(map[string]any{
 				"name":                str("Credential name, used as the credential argument of the other tools."),
-				"kind":                str("http_header, http_basic, http_query, login or raw."),
+				"kind":                str("http_header, http_basic, http_query, login, raw, aws_sts, github_app or oauth2_client_credentials."),
 				"description":         str("What the credential is for."),
 				"allowedHosts":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 				"allowedMethods":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 				"allowedPathPrefixes": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 				"actions":             map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 				"status":              str("available, or why the grant can't be used right now."),
+				"urlPatterns":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Login credentials: the pages the login may be used on (get_login)."},
 			}, "name", "kind", "allowedHosts", "actions", "status")},
 		}, "credentials"),
 		Annotations: map[string]any{"readOnlyHint": true, "openWorldHint": false},
@@ -108,6 +109,7 @@ var (
 			"credential": map[string]any{"type": "string"},
 			"kind":       map[string]any{"type": "string"},
 			"value":      map[string]any{"type": "string"},
+			"expiresAt":  map[string]any{"type": "string", "description": "When a minted token stops working (RFC 3339)."},
 		}, "credential", "kind", "value"),
 		Annotations: map[string]any{"readOnlyHint": true, "openWorldHint": false},
 	}
@@ -139,6 +141,7 @@ func (s *Server) mcpToolsList(ctx context.Context, c *agentCaller) (any, *rpcErr
 		tools = append(tools, mcpRevealTool)
 	}
 	tools = append(tools, mcpRequestAccessTool, mcpGetLeaseTool)
+	tools = append(tools, mcpLoginTools(creds)...)
 	return mcpToolsListResult{Tools: tools}, nil
 }
 
@@ -217,6 +220,9 @@ func (s *Server) mcpToolsCall(ctx context.Context, r *http.Request, c *agentCall
 		return toolSuccess(resp), nil
 	}
 	if res, ok := s.mcpAccessTool(ctx, r, &call, p.Name, p.Arguments); ok {
+		return res, nil
+	}
+	if res, ok := s.mcpLoginTool(ctx, r, &call, p.Name, p.Arguments); ok {
 		return res, nil
 	}
 	return nil, &rpcError{Code: rpcInvalidParams, Message: "unknown tool"}

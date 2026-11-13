@@ -4,7 +4,8 @@
 // It is pure request/response logic: validating the agent's request against
 // the credential's usage profile (scheme, host, port, method, path),
 // stripping agent headers that could collide with the credential, injecting
-// it (http_header, http_basic, http_query), following same-host redirects,
+// it (http_header, http_basic, http_query, or an AWS SigV4 signature made
+// with short-lived credentials), following same-host redirects,
 // enforcing size limits, filtering response headers and redacting the
 // secret from the response. Authentication, grants, the SSRF-guarded HTTP
 // client, audit and metrics belong to the caller (internal/server).
@@ -24,6 +25,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/worlddrknss/citadel/internal/providertoken"
 )
 
 // Credential kinds the broker can inject. Other kinds (login, raw) are only
@@ -32,6 +35,11 @@ const (
 	KindHTTPHeader = "http_header"
 	KindHTTPBasic  = "http_basic"
 	KindHTTPQuery  = "http_query"
+	// KindAWSSigV4 signs the request with AWS Signature Version 4. The
+	// secret is an AWS credential_process JSON document (the value an
+	// aws_sts credential mints); Profile.SigV4Service and SigV4Region name
+	// the signing scope.
+	KindAWSSigV4 = "aws_sigv4"
 )
 
 // Body encodings.
@@ -86,6 +94,9 @@ type Profile struct {
 	// AllowedCIDRs are private ranges the guarded client may reach for this
 	// credential; the caller builds the client from them.
 	AllowedCIDRs []netip.Prefix
+	// SigV4Service and SigV4Region are the signing scope for KindAWSSigV4.
+	SigV4Service string
+	SigV4Region  string
 }
 
 // Request is an agent's brokered HTTP request (POST /v1/agent/http).
@@ -197,7 +208,7 @@ func (l Limits) withDefaults() Limits {
 // Brokerable reports whether a credential kind can be injected.
 func Brokerable(kind string) bool {
 	switch kind {
-	case KindHTTPHeader, KindHTTPBasic, KindHTTPQuery:
+	case KindHTTPHeader, KindHTTPBasic, KindHTTPQuery, KindAWSSigV4:
 		return true
 	}
 	return false
@@ -477,8 +488,14 @@ func strippedHeader(name string, p Profile) bool {
 	if p.Kind == KindHTTPHeader && name == http.CanonicalHeaderKey(headerName(p)) {
 		return true
 	}
+	// The SigV4 signature's own headers are set by the broker.
+	if p.Kind == KindAWSSigV4 && sigV4Headers[name] {
+		return true
+	}
 	return false
 }
+
+var sigV4Headers = map[string]bool{"X-Amz-Date": true, "X-Amz-Security-Token": true, "X-Amz-Content-Sha256": true}
 
 func headerName(p Profile) string {
 	if n := strings.TrimSpace(p.HeaderName); n != "" {
@@ -575,6 +592,9 @@ type injection struct {
 	pass   string
 	param  string // http_query: name
 	query  string // http_query: value
+	aws    *providertoken.AWSCredentials
+	region string // aws_sigv4
+	svc    string
 }
 
 func resolveInjection(p Profile, secret string) (injection, *Redactor, error) {
@@ -601,6 +621,12 @@ func resolveInjection(p Profile, secret string) (injection, *Redactor, error) {
 			return injection{}, nil, bad
 		}
 		return injection{param: name, query: secret}, NewRedactor(secret), nil
+	case KindAWSSigV4:
+		creds, err := providertoken.ParseAWSProcessJSON(secret)
+		if err != nil || p.SigV4Service == "" || p.SigV4Region == "" {
+			return injection{}, nil, bad
+		}
+		return injection{aws: &creds, region: p.SigV4Region, svc: p.SigV4Service}, NewRedactor(creds.SecretAccessKey, creds.SessionToken, secret), nil
 	}
 	return injection{}, nil, refuse(http.StatusBadRequest, ReasonKindNotBrokerable, "this credential cannot be used for HTTP requests")
 }
@@ -650,6 +676,9 @@ func Do(ctx context.Context, pr *Prepared, secret string, opts Options) (*Respon
 	var resp *http.Response
 	for {
 		req, err := buildRequest(ctx, method, target, header, body, inj, opts.UserAgent)
+		if errors.Is(err, errSigning) {
+			return nil, res, refuse(http.StatusBadGateway, ReasonCredentialInvalid, "the request could not be signed with the credential")
+		}
 		if err != nil {
 			return nil, res, refuse(http.StatusBadRequest, ReasonInvalidURL, "the request could not be built")
 		}
@@ -705,6 +734,9 @@ func Do(ctx context.Context, pr *Prepared, secret string, opts Options) (*Respon
 	return r, res, nil
 }
 
+// errSigning is a SigV4 signing failure (expired or malformed credentials).
+var errSigning = errors.New("signing failed")
+
 func buildRequest(ctx context.Context, method string, t Target, header http.Header, body []byte, inj injection, ua string) (*http.Request, error) {
 	u := cloneURL(t.URL)
 	if inj.param != "" {
@@ -733,6 +765,11 @@ func buildRequest(ctx context.Context, method string, t Target, header http.Head
 		req.Header.Set(inj.header, inj.value)
 	case inj.user != "":
 		req.SetBasicAuth(inj.user, inj.pass)
+	case inj.aws != nil:
+		// Signed per hop: a followed redirect gets its own signature.
+		if err := providertoken.SignAWSRequest(req, *inj.aws, inj.region, inj.svc, time.Now()); err != nil {
+			return nil, errSigning
+		}
 	}
 	return req, nil
 }

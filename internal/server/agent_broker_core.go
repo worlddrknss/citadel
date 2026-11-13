@@ -19,9 +19,12 @@ import (
 // backing secret.
 type serverAgentAccess struct{ s *Server }
 
-// agentCoreUse is what evaluate hands to minter.
+// agentCoreUse is what evaluate hands to minter: the backing secret, and
+// the grant and profile a minted credential (2.4) is minted for.
 type agentCoreUse struct {
-	ref agentSecretRef
+	ref   agentSecretRef
+	grant store.AgentGrant
+	cred  store.AgentCredential
 }
 
 func (a serverAgentAccess) authenticate(w http.ResponseWriter, r *http.Request, action string) (*agentCaller, context.Context, bool) {
@@ -57,7 +60,7 @@ func (a serverAgentAccess) evaluate(ctx context.Context, c *agentCaller, credent
 		LeaseExpiresAt: d.LeaseExpiresAt,
 		Credential:     credentialInfo(cred, grant, ""),
 		Profile:        brokerProfile(cred),
-		ref:            agentCoreUse{ref: ref},
+		ref:            agentCoreUse{ref: ref, grant: grant, cred: cred},
 	}
 }
 
@@ -68,7 +71,7 @@ func credentialInfo(cred store.AgentCredential, g store.AgentGrant, status strin
 	return agentCredentialInfo{
 		Name: cred.Name, Kind: cred.Kind, Description: cred.Description,
 		AllowedHosts: nonNil(cred.AllowedHosts), AllowedMethods: cred.AllowedMethods, AllowedPathPrefixes: cred.AllowedPathPrefixes,
-		Actions: nonNil(g.Actions), Status: status,
+		Actions: nonNil(g.Actions), Status: status, URLPatterns: loginURLPatterns(cred),
 	}
 }
 
@@ -83,6 +86,7 @@ func brokerProfile(c store.AgentCredential) agentbroker.Profile {
 			p.AllowedCIDRs = append(p.AllowedCIDRs, pfx.Masked())
 		}
 	}
+	mintedBrokerProfile(c, &p)
 	return p
 }
 
@@ -91,9 +95,19 @@ func (a serverAgentAccess) minter(ctx context.Context, c *agentCaller, u agentUs
 	if !ok {
 		return nil, errors.New("no credential reference")
 	}
+	if store.IsMintedAgentKind(cu.cred.Kind) {
+		return agentGrantMinter{s: a.s, account: c.AccountID, use: cu}, nil
+	}
 	v, err := a.s.agentSecretValue(ctx, c.AccountID, cu.ref)
 	if err != nil {
 		return nil, err
+	}
+	if cu.cred.Kind == store.AgentCredentialLogin {
+		// A login is revealed as username and password; the TOTP seed
+		// never leaves Citadel (get_totp_code hands out codes).
+		if v, err = loginRevealValue(v); err != nil {
+			return nil, err
+		}
 	}
 	return providertoken.Static{Value: v}, nil
 }

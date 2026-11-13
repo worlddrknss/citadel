@@ -319,12 +319,12 @@ func (s *Server) brokerHTTP(ctx context.Context, r *http.Request, c *agentCaller
 		rt.reqs.Inc(via, store.AuditResultError, "audit_unavailable")
 		return nil, &agentFailure{Status: http.StatusInternalServerError, Code: "audit_unavailable", Reason: "audit_unavailable", Message: "the audit log could not be written; nothing was sent"}
 	}
-	secret, err := s.mintAgentCredential(ctx, c, use)
+	tok, err := s.mintAgentCredential(ctx, c, use)
 	if err != nil {
 		log.Printf("agent broker: credential value unavailable: %v", err)
-		return fail(&agentFailure{Status: http.StatusForbidden, Code: "forbidden", Reason: "credential_unavailable", Message: "the credential's secret is not available"}, store.AuditResultError)
+		return fail(agentMintFailure(err), store.AuditResultError)
 	}
-	resp, res, err := agentbroker.Do(ctx, pr, secret, agentbroker.Options{
+	resp, res, err := agentbroker.Do(ctx, pr, tok.Value, agentbroker.Options{
 		Client:    rt.httpClient(use.Profile.AllowedCIDRs),
 		IsBlocked: isOutboundBlocked,
 		Limits:    rt.limits,
@@ -352,17 +352,14 @@ func (s *Server) brokerHTTP(ctx context.Context, r *http.Request, c *agentCaller
 }
 
 // mintAgentCredential produces the credential's value for an allowed use
-// through its minter. The value must never be logged or audited.
-func (s *Server) mintAgentCredential(ctx context.Context, c *agentCaller, u agentUse) (string, error) {
+// through its minter: the stored secret, or a token minted on use (2.4).
+// The value must never be logged or audited.
+func (s *Server) mintAgentCredential(ctx context.Context, c *agentCaller, u agentUse) (providertoken.Token, error) {
 	m, err := s.agentAccess().minter(ctx, c, u)
 	if err != nil {
-		return "", err
+		return providertoken.Token{}, err
 	}
-	tok, err := m.Mint(ctx, providertoken.Params{})
-	if err != nil {
-		return "", err
-	}
-	return tok.Value, nil
+	return m.Mint(ctx, providertoken.Params{})
 }
 
 // auditURLParts extracts host and path (no query) from a URL the broker
@@ -426,6 +423,8 @@ type agentRevealResponse struct {
 	// (2.3); treat the value as valid only until then.
 	LeaseID        string `json:"leaseId,omitempty"`
 	LeaseExpiresAt string `json:"leaseExpiresAt,omitempty"`
+	// ExpiresAt is when a minted token (2.4) stops working.
+	ExpiresAt string `json:"expiresAt,omitempty"`
 }
 
 // revealCredential returns the value of a credential the agent holds a
@@ -465,10 +464,10 @@ func (s *Server) revealCredential(ctx context.Context, r *http.Request, c *agent
 		}
 		return fail(f, result)
 	}
-	value, err := s.mintAgentCredential(ctx, c, use)
+	tok, err := s.mintAgentCredential(ctx, c, use)
 	if err != nil {
 		log.Printf("agent reveal: credential value unavailable: %v", err)
-		return fail(&agentFailure{Status: http.StatusForbidden, Code: "forbidden", Reason: "credential_unavailable", Message: "the credential's secret is not available"}, store.AuditResultError)
+		return fail(agentMintFailure(err), store.AuditResultError)
 	}
 	record(store.AuditResultSuccess, "")
 	if info := auditInfoFrom(ctx); info != nil && info.hasFailed() {
@@ -478,9 +477,12 @@ func (s *Server) revealCredential(ctx context.Context, r *http.Request, c *agent
 	if kind == "" {
 		kind = use.Profile.Kind
 	}
-	out := &agentRevealResponse{Credential: req.Credential, Kind: kind, Value: value, LeaseID: use.LeaseID}
+	out := &agentRevealResponse{Credential: req.Credential, Kind: kind, Value: tok.Value, LeaseID: use.LeaseID}
 	if use.LeaseID != "" {
 		out.LeaseExpiresAt = fmtTime(use.LeaseExpiresAt)
+	}
+	if !tok.ExpiresAt.IsZero() && tok.Kind != providertoken.KindStatic {
+		out.ExpiresAt = fmtTime(tok.ExpiresAt)
 	}
 	return out, nil
 }
