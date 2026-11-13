@@ -6,6 +6,11 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The MCP server reported its version as `dev` in release images. The release
+  build now sets the version from the tag.
+
 ## [2.5.0] - 2026-11-13
 
 Audit log retention: a deployment default and per-account windows, batched

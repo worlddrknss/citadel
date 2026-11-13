@@ -25,7 +25,11 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /web/build/ ./cmd/server/webdist/
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} GOFIPS140=certified go build -trimpath -o /out/citadel ./cmd/server
+# The release workflow passes the tag's version; local builds report "dev".
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} GOFIPS140=certified go build -trimpath \
+    -ldflags "-X github.com/worlddrknss/citadel/internal/server.buildVersion=${VERSION}" \
+    -o /out/citadel ./cmd/server
 
 FROM ${BASE_IMAGE}
 COPY --from=build /out/citadel /citadel
