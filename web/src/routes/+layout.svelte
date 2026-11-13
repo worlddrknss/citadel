@@ -52,6 +52,7 @@
       items: [
         { href: '/iam', label: 'IAM', icon: 'users' },
         { href: '/workload-identity', label: 'Workload identity', icon: 'shield' },
+        { href: '/agents', label: 'Agents', icon: 'bot' },
         { href: '/account', label: 'Access keys', icon: 'command', tab: 'keys' }
       ]
     },

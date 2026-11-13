@@ -8,6 +8,30 @@ All notable changes to Citadel are documented here. The format follows
 
 ### Added
 
+- AI agents (2.2, foundation): agents as principals in an account, with an
+  owner and a status (active, suspended, revoked). Agent tokens
+  (`cagt_<agentId>_<secret>`, shown once, stored as PBKDF2 hashes, optional
+  expiry, revocable, last use recorded) and workload identity federation
+  bindings (Citadel's `/oidc` issuer or an IAM OIDC provider; issuer, subject
+  and audience matched exactly). Credential usage profiles on secrets (kind,
+  allowed hosts, methods and paths, header or query injection, http opt-in,
+  allowed private CIDRs) and grants (use, reveal, totp; validity dates;
+  time-of-day window with time zone and weekdays; uses per hour across
+  replicas; `requiresApproval` and `leaseTtl` reserved for 2.3). Agent
+  authentication and a policy evaluator with stable denial reasons, the first
+  Agent API endpoints (`GET /v1/agent/whoami`, `GET /v1/agent/credentials`,
+  never values) and `X-Citadel-Task-Id`. Console: **Identity → Agents** (list
+  with row actions, detail with tokens, federation, grants editor with reveal
+  flagged as risky, and activity), an **Agent access** tab on the secret
+  drawer, and an account-wide **Suspend all agents** kill switch under
+  Administration → Settings. Management API under `/v1/agents`, OpenAPI,
+  regenerated TypeScript types and Go SDK methods (including agent-token
+  clients). See docs/agents.md.
+- Audit events carry `agentId`, `agentOwner` and `taskId` (API, CSV and JSON
+  export, CEF `flexString1`/`flexString2`), filterable with `?agent=`.
+  Migrations 1300 (new tables) and 1301 (three catalog-only columns and a
+  partial index on the audit table).
+
 - `internal/providertoken` (groundwork for 2.4, no routes or UI yet): minters
   for provider-scoped agent credentials behind one `Minter` interface:
   AWS STS AssumeRole (real AWS or Citadel's own STS; session policy,

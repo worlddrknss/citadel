@@ -8,7 +8,7 @@
   keeps the table usable next to it.
 -->
 <script lang="ts" module>
-  export type DrawerTab = 'details' | 'versions' | 'rotation' | 'access';
+  export type DrawerTab = 'details' | 'versions' | 'rotation' | 'access' | 'agents';
 </script>
 
 <script lang="ts">
@@ -26,6 +26,7 @@
   import { rotationApi, statusBadge } from '../../rotation';
   import Badge from '#lib/components/Badge.svelte';
   import AccessList from './AccessList.svelte';
+  import AgentAccessTab from './AgentAccessTab.svelte';
   import { findKms, kmsDisplay } from './kms';
   import MetadataForm from './MetadataForm.svelte';
   import PolicyEditor from './PolicyEditor.svelte';
@@ -195,7 +196,8 @@
     { id: 'details', label: 'Details' },
     { id: 'versions', label: 'Versions', count: versions.length || undefined },
     { id: 'rotation', label: 'Rotation' },
-    { id: 'access', label: 'Access' }
+    { id: 'access', label: 'Access' },
+    { id: 'agents', label: 'Agent access' }
   ]);
   const coord = $derived({ project, env, path, key: secretKey });
   const rotBadge = $derived(
@@ -380,6 +382,8 @@
       {/if}
     {:else if tab === 'rotation'}
       <RotationTab {coord} {canEdit} {deleted} {requireApproval} started={rotationStarted} onchanged={refresh} />
+    {:else if tab === 'agents'}
+      <AgentAccessTab {coord} {canEdit} {deleted} />
     {:else}
       <section class="sec">
         <span class="label">Who can read this</span>

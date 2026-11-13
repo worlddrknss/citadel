@@ -17,6 +17,7 @@
   import MembershipModal from './MembershipModal.svelte';
   import SettingsPanel from './SettingsPanel.svelte';
   import SsoPanel from './SsoPanel.svelte';
+  import AgentsKillSwitch from './AgentsKillSwitch.svelte';
   import NotificationsPanel from './NotificationsPanel.svelte';
   import { roleTone, fmtDate, type RoleName, type UserRow } from './api';
 
@@ -328,6 +329,7 @@
     <div class="stack">
       <SettingsPanel />
       <SsoPanel {accounts} />
+      <AgentsKillSwitch />
     </div>
   {:else}
     <DataTable caption="Users" rows={users} columns={userCols} key={(u) => u.username} {loading} searchable={(u) => `${u.username} ${u.displayName} ${u.role}`} searchPlaceholder="Search users" bind:query>

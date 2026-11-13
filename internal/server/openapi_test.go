@@ -200,7 +200,8 @@ func TestOpenAPIOperationsWellFormed(t *testing.T) {
 			declaredTags[m["name"].(string)] = true
 		}
 	}
-	roles := map[string]bool{"public": true, "session": true, "viewer": true, "editor": true, "admin": true, "platform-admin": true}
+	// "agent": the Agent API, which accepts only agent credentials.
+	roles := map[string]bool{"public": true, "session": true, "viewer": true, "editor": true, "admin": true, "platform-admin": true, "agent": true}
 	ids := map[string]string{}
 	for _, o := range ops {
 		id, _ := o.op["operationId"].(string)
@@ -224,7 +225,7 @@ func TestOpenAPIOperationsWellFormed(t *testing.T) {
 		}
 		role, _ := o.op["x-citadel-role"].(string)
 		if !roles[role] {
-			t.Errorf("%s: x-citadel-role %q is not one of public, session, viewer, editor, admin, platform-admin", o.key, role)
+			t.Errorf("%s: x-citadel-role %q is not one of public, session, viewer, editor, admin, platform-admin, agent", o.key, role)
 		}
 		// Public operations, and only they, allow anonymous callers: security
 		// is [] or includes the empty requirement {}.

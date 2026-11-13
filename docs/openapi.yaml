@@ -27,8 +27,9 @@ info:
 
     Every request is scoped to the caller's current account. Each operation
     states the minimum role it needs in `x-citadel-role` (`public`, `session`,
-    `viewer`, `editor`, `admin` or `platform-admin`) and, for state changes,
-    the audit action it records in `x-citadel-audit`.
+    `viewer`, `editor`, `admin` or `platform-admin`; `agent` for the Agent
+    API, which takes only agent credentials) and, for state changes, the
+    audit action it records in `x-citadel-audit`.
 
     Errors are JSON `{"error": "<code>", "message": "<text>"}` with a stable,
     machine-readable `error` code. Request bodies are decoded strictly: unknown
@@ -73,6 +74,10 @@ tags:
     description: Console single sign-on providers
   - name: Workload identity
     description: Citadel as an OIDC issuer for workloads
+  - name: Agents
+    description: AI agents, their tokens, federation bindings, grants and credential usage profiles
+  - name: Agent API
+    description: Endpoints AI agents call with an agent token or federated token
   - name: Notifications
     description: Notification channels (signed webhooks, Slack, email) and their delivery log
   - name: Server
@@ -5828,6 +5833,13 @@ paths:
             schema:
               type: string
               maxLength: 64
+          - name: agent
+            in: query
+            required: false
+            description: Exact agent ID; events made by the agent or about it
+            schema:
+              type: string
+              pattern: "^agt_[a-z2-7]{20}$"
           - name: limit
             in: query
             required: false
@@ -5981,6 +5993,13 @@ paths:
             schema:
               type: string
               maxLength: 64
+          - name: agent
+            in: query
+            required: false
+            description: Exact agent ID; events made by the agent or about it
+            schema:
+              type: string
+              pattern: "^agt_[a-z2-7]{20}$"
         responses:
           "200":
             description: The export file
@@ -5991,8 +6010,8 @@ paths:
                   description: |
                     Header row id, createdAt, actor, actorType, actorDisplayName,
                     accessKeyId, action, resource, keyId, result, errorType,
-                    sourceIp, userAgent, chainSeq, prevHash, hash, correlationId; CRLF
-                    line ends.
+                    sourceIp, userAgent, chainSeq, prevHash, hash, correlationId,
+                    agentId, agentOwner, taskId; CRLF line ends.
               application/json:
                 schema:
                   type: array
@@ -6086,6 +6105,759 @@ paths:
             $ref: "#/components/responses/Forbidden"
           "500":
             $ref: "#/components/responses/InternalError"
+    /v1/agents:
+      get:
+        operationId: listAgents
+        tags: [Agents]
+        summary: List the account's agents and the kill switch state
+        x-citadel-role: viewer
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentList"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "500":
+            $ref: "#/components/responses/InternalError"
+      post:
+        operationId: createAgent
+        tags: [Agents]
+        summary: Create an agent
+        description: |
+          The owner defaults to the caller; only account admins may name another
+          owner, who must be a user in the account. Names are unique per account
+          (case-insensitive).
+        x-citadel-role: editor
+        x-citadel-audit: citadel.CreateAgent
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentInput"
+        responses:
+          "201":
+            description: Created
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/Agent"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+      delete:
+        operationId: deleteAgent
+        tags: [Agents]
+        summary: Delete an agent with its tokens, bindings and grants
+        description: |
+          Account admins or the agent's owner.
+        x-citadel-role: editor
+        x-citadel-audit: citadel.DeleteAgent
+        parameters:
+          - name: agentId
+            in: query
+            required: true
+            schema:
+              type: string
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/DeletedFlag"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/detail:
+      get:
+        operationId: getAgent
+        tags: [Agents]
+        summary: Describe an agent with its tokens (never their values), bindings and grants
+        x-citadel-role: viewer
+        parameters:
+          - name: agentId
+            in: query
+            required: true
+            schema:
+              type: string
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentDetail"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/update:
+      post:
+        operationId: updateAgent
+        tags: [Agents]
+        summary: Change an agent's name, description, owner or labels
+        x-citadel-role: editor
+        x-citadel-audit: citadel.UpdateAgent
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentInput"
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/Agent"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/suspend:
+      post:
+        operationId: suspendAgent
+        tags: [Agents]
+        summary: Suspend an agent
+        description: |
+          Every request the agent makes is refused (403 agent_suspended) until it is resumed.
+        x-citadel-role: editor
+        x-citadel-audit: citadel.SuspendAgent
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentStatusRequest"
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/Agent"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/resume:
+      post:
+        operationId: resumeAgent
+        tags: [Agents]
+        summary: Resume a suspended agent
+        x-citadel-role: editor
+        x-citadel-audit: citadel.ResumeAgent
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentStatusRequest"
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/Agent"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/revoke:
+      post:
+        operationId: revokeAgent
+        tags: [Agents]
+        summary: Revoke an agent permanently
+        description: |
+          Revokes all of its tokens. A revoked agent can't be resumed.
+        x-citadel-role: editor
+        x-citadel-audit: citadel.RevokeAgent
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentStatusRequest"
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/Agent"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/tokens:
+      post:
+        operationId: createAgentToken
+        tags: [Agents]
+        summary: Issue an agent token (shown once)
+        description: |
+          Returns `cagt_<agentId>_<secret>` once; Citadel stores only a PBKDF2 hash.
+          expiresInDays 1-365, or 0 for no expiry. At most 10 active tokens per
+          agent.
+        x-citadel-role: editor
+        x-citadel-audit: citadel.CreateAgentToken
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentTokenRequest"
+        responses:
+          "201":
+            description: Created
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentTokenCreated"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/tokens/revoke:
+      post:
+        operationId: revokeAgentToken
+        tags: [Agents]
+        summary: Revoke an agent token
+        x-citadel-role: editor
+        x-citadel-audit: citadel.RevokeAgentToken
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentTokenRevokeRequest"
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/OkFlag"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/bindings:
+      post:
+        operationId: createAgentBinding
+        tags: [Agents]
+        summary: Bind a workload identity to an agent
+        description: |
+          issuer must be Citadel's workload identity issuer or an OIDC provider
+          registered under IAM in the account; subject and audience are matched
+          exactly against the token's sub and aud claims.
+        x-citadel-role: editor
+        x-citadel-audit: citadel.CreateAgentBinding
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentBindingRequest"
+        responses:
+          "201":
+            description: Created
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentBinding"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+      delete:
+        operationId: deleteAgentBinding
+        tags: [Agents]
+        summary: Remove a federation binding
+        x-citadel-role: editor
+        x-citadel-audit: citadel.DeleteAgentBinding
+        parameters:
+          - name: agentId
+            in: query
+            required: true
+            schema:
+              type: string
+          - name: bindingId
+            in: query
+            required: true
+            schema:
+              type: string
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/DeletedFlag"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/grants:
+      post:
+        operationId: putAgentGrant
+        tags: [Agents]
+        summary: Grant an agent access to a credential (create or replace)
+        description: |
+          actions default to [use]; reveal hands the agent the value and should be
+          granted sparingly; totp needs a login credential; raw credentials only
+          support reveal. The window is HH:MM to HH:MM (end before start wraps past
+          midnight) in an IANA timezone (UTC by default), optionally on given days.
+          maxUsesPerHour 0 means unlimited.
+        x-citadel-role: editor
+        x-citadel-audit: citadel.PutAgentGrant
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentGrantRequest"
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentGrant"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+      delete:
+        operationId: deleteAgentGrant
+        tags: [Agents]
+        summary: Remove a grant
+        x-citadel-role: editor
+        x-citadel-audit: citadel.DeleteAgentGrant
+        parameters:
+          - name: agentId
+            in: query
+            required: true
+            schema:
+              type: string
+          - name: grantId
+            in: query
+            required: true
+            schema:
+              type: string
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/DeletedFlag"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/credentials:
+      get:
+        operationId: listAgentCredentials
+        tags: [Agents]
+        summary: List credential usage profiles
+        description: |
+          Filter to one secret with `secret` (backing name) or project, env, path and key.
+        x-citadel-role: viewer
+        parameters:
+          - name: secret
+            in: query
+            required: false
+            schema:
+              type: string
+          - name: project
+            in: query
+            required: false
+            schema:
+              type: string
+          - name: env
+            in: query
+            required: false
+            schema:
+              type: string
+          - name: path
+            in: query
+            required: false
+            schema:
+              type: string
+          - name: key
+            in: query
+            required: false
+            schema:
+              type: string
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentCredentialList"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+      post:
+        operationId: createAgentCredential
+        tags: [Agents]
+        summary: Make a secret usable by agents (usage profile)
+        description: |
+          Names the secret with `secret` (name or ARN) or project, env, path and
+          key. HTTP kinds need allowedHosts (exact hosts or *.example.com, optional
+          :port); allowedMethods default to [GET]; http_header injects
+          `headerName: headerPrefix + value` (Authorization by default).
+        x-citadel-role: editor
+        x-citadel-audit: citadel.CreateAgentCredential
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentCredentialInput"
+        responses:
+          "201":
+            description: Created
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentCredential"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+      delete:
+        operationId: deleteAgentCredential
+        tags: [Agents]
+        summary: Delete a usage profile
+        description: |
+          409 `in_use` while grants reference it.
+        x-citadel-role: editor
+        x-citadel-audit: citadel.DeleteAgentCredential
+        parameters:
+          - name: name
+            in: query
+            required: true
+            schema:
+              type: string
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/DeletedFlag"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/credentials/update:
+      post:
+        operationId: updateAgentCredential
+        tags: [Agents]
+        summary: Change a usage profile
+        x-citadel-role: editor
+        x-citadel-audit: citadel.UpdateAgentCredential
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentCredentialInput"
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentCredential"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agents/settings:
+      get:
+        operationId: getAgentSettings
+        tags: [Agents]
+        summary: Read the account's agent kill switch
+        x-citadel-role: viewer
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentSettings"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "500":
+            $ref: "#/components/responses/InternalError"
+      post:
+        operationId: putAgentSettings
+        tags: [Agents]
+        summary: Suspend or resume every agent in the account
+        description: |
+          While on, every agent request in the account is refused (403,
+          reason agents_suspended). Each agent's own status is kept.
+        x-citadel-role: admin
+        x-citadel-audit: [citadel.SuspendAllAgents, citadel.ResumeAllAgents]
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSettingsRequest"
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentSettings"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agent/whoami:
+      get:
+        operationId: agentWhoAmI
+        tags: [Agent API]
+        summary: Describe the calling agent
+        description: |
+          Agent credentials only. Suspended agents and agents in an account whose
+          kill switch is on get 403 with `reason` agent_suspended or
+          agents_suspended.
+        x-citadel-role: agent
+        x-citadel-audit: citadel.AgentWhoAmI
+        security:
+          - agentToken: []
+        parameters:
+          - name: X-Citadel-Task-Id
+            in: header
+            required: false
+            description: The agent's task or session ID, recorded on audit events
+            schema:
+              type: string
+              maxLength: 128
+          - name: X-Citadel-Agent-Id
+            in: header
+            required: false
+            description: Names the agent when a federated identity is bound to more than one
+            schema:
+              type: string
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentWhoAmI"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "429":
+            $ref: "#/components/responses/TooManyRequests"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/agent/credentials:
+      get:
+        operationId: agentListCredentials
+        tags: [Agent API]
+        summary: List the credentials the calling agent may use (never values)
+        x-citadel-role: agent
+        x-citadel-audit: citadel.AgentListCredentials
+        security:
+          - agentToken: []
+        parameters:
+          - name: X-Citadel-Task-Id
+            in: header
+            required: false
+            description: The agent's task or session ID, recorded on audit events
+            schema:
+              type: string
+              maxLength: 128
+          - name: X-Citadel-Agent-Id
+            in: header
+            required: false
+            description: Names the agent when a federated identity is bound to more than one
+            schema:
+              type: string
+        responses:
+          "200":
+            description: OK
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AgentUsableCredentialList"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "429":
+            $ref: "#/components/responses/TooManyRequests"
     /v1/notifications/channels:
       get:
         operationId: listNotificationChannels
@@ -6371,6 +7143,15 @@ components:
       scheme: bearer
       bearerFormat: "<accessKeyId>:<secret>"
       description: An access key created with createAccessKey, sent as `Bearer <accessKeyId>:<secret>`.
+    agentToken:
+      type: http
+      scheme: bearer
+      bearerFormat: "cagt_<agentId>_<secret>"
+      description: |
+        An agent token created with createAgentToken, or a workload identity
+        JWT matching one of the agent's federation bindings (send
+        `X-Citadel-Agent-Id` when the identity is bound to more than one
+        agent). Only the Agent API accepts it.
   responses:
     BadRequest:
       description: The request was invalid (`invalid_request` or an operation-specific code)
@@ -9281,6 +10062,15 @@ components:
         correlationId:
           type: string
           description: Links a write-ahead attempt to its outcome events
+        agentId:
+          type: string
+          description: The AI agent the event concerns (requests it made, and console changes to it)
+        agentOwner:
+          type: string
+          description: The agent's owner when the event was recorded
+        taskId:
+          type: string
+          description: The agent's task or session ID (X-Citadel-Task-Id)
     AuditEventPage:
       type: object
       required: [events, total, limit, offset]
@@ -9370,6 +10160,520 @@ components:
         status:
           type: integer
           description: The webhook's HTTP status, when one was received
+    Agent:
+      type: object
+      required: [agentId, name, description, owner, status, labels, createdAt, updatedAt, grantCount, activeTokenCount, bindingCount, canManage]
+      properties:
+        agentId:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        owner:
+          type: string
+        status:
+          type: string
+          enum: [active, suspended, revoked]
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
+        lastUsedAt:
+          type: string
+          format: date-time
+        statusChangedAt:
+          type: string
+          format: date-time
+        statusChangedBy:
+          type: string
+        statusReason:
+          type: string
+        grantCount:
+          type: integer
+        activeTokenCount:
+          type: integer
+        bindingCount:
+          type: integer
+        canManage:
+          type: boolean
+          description: Whether the caller may change the agent (account admin or owner)
+    AgentList:
+      type: object
+      required: [agents, settings, canCreate]
+      properties:
+        agents:
+          type: array
+          items:
+            $ref: "#/components/schemas/Agent"
+        settings:
+          $ref: "#/components/schemas/AgentSettings"
+        canCreate:
+          type: boolean
+    AgentInput:
+      type: object
+      required: [name]
+      properties:
+        agentId:
+          type: string
+          description: Required for updateAgent
+        name:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        description:
+          type: string
+          maxLength: 512
+        owner:
+          type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+    AgentStatusRequest:
+      type: object
+      required: [agentId]
+      properties:
+        agentId:
+          type: string
+        reason:
+          type: string
+          maxLength: 256
+    AgentToken:
+      type: object
+      required: [tokenId, name, prefix, status, createdAt]
+      properties:
+        tokenId:
+          type: string
+        name:
+          type: string
+        prefix:
+          type: string
+          description: The token's first characters (cagt_<agentId>_ plus 8), to recognise it
+        status:
+          type: string
+          enum: [active, expired, revoked]
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        revokedAt:
+          type: string
+          format: date-time
+        revokedBy:
+          type: string
+        lastUsedAt:
+          type: string
+          format: date-time
+    AgentTokenRequest:
+      type: object
+      required: [agentId]
+      properties:
+        agentId:
+          type: string
+        name:
+          type: string
+          maxLength: 64
+        expiresInDays:
+          type: integer
+          minimum: 0
+          maximum: 365
+    AgentTokenCreated:
+      type: object
+      required: [token, tokenInfo]
+      properties:
+        token:
+          type: string
+          description: The agent token; shown only in this response
+        tokenInfo:
+          $ref: "#/components/schemas/AgentToken"
+    AgentTokenRevokeRequest:
+      type: object
+      required: [agentId, tokenId]
+      properties:
+        agentId:
+          type: string
+        tokenId:
+          type: string
+    AgentBinding:
+      type: object
+      required: [bindingId, issuer, subject, audience, description, createdAt]
+      properties:
+        bindingId:
+          type: string
+        issuer:
+          type: string
+        subject:
+          type: string
+        audience:
+          type: string
+        description:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+    AgentBindingRequest:
+      type: object
+      required: [agentId, issuer, subject, audience]
+      properties:
+        agentId:
+          type: string
+        issuer:
+          type: string
+        subject:
+          type: string
+        audience:
+          type: string
+        description:
+          type: string
+    AgentGrantWindow:
+      type: object
+      properties:
+        start:
+          type: string
+          description: HH:MM
+        end:
+          type: string
+          description: HH:MM
+        days:
+          type: array
+          items:
+            type: string
+            enum: [sun, mon, tue, wed, thu, fri, sat]
+        timezone:
+          type: string
+          description: IANA time zone; UTC when empty
+    AgentGrant:
+      type: object
+      required: [grantId, agentId, credential, actions, maxUsesPerHour, createdAt, updatedAt, usableNow]
+      properties:
+        grantId:
+          type: string
+        agentId:
+          type: string
+        agentName:
+          type: string
+        credential:
+          type: string
+        actions:
+          type: array
+          items:
+            type: string
+            enum: [use, reveal, totp]
+        notBefore:
+          type: string
+          format: date-time
+        notAfter:
+          type: string
+          format: date-time
+        window:
+          oneOf:
+            - $ref: "#/components/schemas/AgentGrantWindow"
+            - type: "null"
+        maxUsesPerHour:
+          type: integer
+        requiresApproval:
+          description: Reserved for 2.3
+          oneOf:
+            - type: boolean
+            - type: "null"
+        leaseTtlSeconds:
+          description: Reserved for 2.3
+          oneOf:
+            - type: integer
+            - type: "null"
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
+        updatedBy:
+          type: string
+        usableNow:
+          type: boolean
+        reason:
+          type: string
+          description: Why the grant is not usable now (not_yet_valid, grant_expired, outside_window)
+    AgentGrantRequest:
+      type: object
+      required: [agentId, credential]
+      properties:
+        agentId:
+          type: string
+        credential:
+          type: string
+        actions:
+          type: array
+          items:
+            type: string
+            enum: [use, reveal, totp]
+        notBefore:
+          type: string
+          format: date-time
+        notAfter:
+          type: string
+          format: date-time
+        window:
+          $ref: "#/components/schemas/AgentGrantWindow"
+        maxUsesPerHour:
+          type: integer
+          minimum: 0
+          maximum: 100000
+    AgentDetail:
+      type: object
+      required: [agent, tokens, bindings, grants]
+      properties:
+        agent:
+          $ref: "#/components/schemas/Agent"
+        tokens:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentToken"
+        bindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentBinding"
+        grants:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentGrant"
+    AgentCredentialGrantRef:
+      type: object
+      required: [grantId, agentId, agentName, actions]
+      properties:
+        grantId:
+          type: string
+        agentId:
+          type: string
+        agentName:
+          type: string
+        actions:
+          type: array
+          items:
+            type: string
+    AgentCredential:
+      type: object
+      required: [name, secretName, kind, description, allowedHosts, allowedMethods, allowedPathPrefixes, allowHttp, allowedCidrs, createdAt, updatedAt, grants]
+      properties:
+        name:
+          type: string
+        secretName:
+          type: string
+        project:
+          type: string
+        env:
+          type: string
+        path:
+          type: string
+        key:
+          type: string
+        kind:
+          type: string
+          enum: [http_header, http_basic, http_query, login, raw]
+        description:
+          type: string
+        allowedHosts:
+          type: array
+          items:
+            type: string
+        allowedMethods:
+          type: array
+          items:
+            type: string
+        allowedPathPrefixes:
+          type: array
+          items:
+            type: string
+        headerName:
+          type: string
+        headerPrefix:
+          type: string
+        queryParam:
+          type: string
+        allowHttp:
+          type: boolean
+        allowedCidrs:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
+        updatedBy:
+          type: string
+        grants:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentCredentialGrantRef"
+    AgentCredentialList:
+      type: object
+      required: [credentials, canEdit]
+      properties:
+        credentials:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentCredential"
+        canEdit:
+          type: boolean
+    AgentCredentialInput:
+      type: object
+      required: [name, kind]
+      properties:
+        name:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9._-]{0,62}$"
+        secret:
+          type: string
+          description: Backing secret name or ARN
+        project:
+          type: string
+        env:
+          type: string
+        path:
+          type: string
+        key:
+          type: string
+        kind:
+          type: string
+          enum: [http_header, http_basic, http_query, login, raw]
+        description:
+          type: string
+        allowedHosts:
+          type: array
+          items:
+            type: string
+        allowedMethods:
+          type: array
+          items:
+            type: string
+        allowedPathPrefixes:
+          type: array
+          items:
+            type: string
+        headerName:
+          type: string
+        headerPrefix:
+          type: string
+        queryParam:
+          type: string
+        allowHttp:
+          type: boolean
+        allowedCidrs:
+          type: array
+          items:
+            type: string
+    AgentSettings:
+      type: object
+      required: [agentsSuspended]
+      properties:
+        agentsSuspended:
+          type: boolean
+        suspendedAt:
+          type: string
+          format: date-time
+        suspendedBy:
+          type: string
+        reason:
+          type: string
+    AgentSettingsRequest:
+      type: object
+      required: [agentsSuspended]
+      properties:
+        agentsSuspended:
+          type: boolean
+        reason:
+          type: string
+          maxLength: 256
+    AgentWhoAmI:
+      type: object
+      required: [agentId, name, owner, accountId, status, authMethod]
+      properties:
+        agentId:
+          type: string
+        name:
+          type: string
+        owner:
+          type: string
+        accountId:
+          type: string
+        status:
+          type: string
+        authMethod:
+          type: string
+          enum: [token, federation]
+        tokenId:
+          type: string
+        tokenExpiresAt:
+          type: string
+          format: date-time
+        bindingId:
+          type: string
+        taskId:
+          type: string
+    AgentUsableCredential:
+      type: object
+      required: [name, kind, description, allowedHosts, allowedMethods, allowedPathPrefixes, actions, maxUsesPerHour, usable]
+      properties:
+        name:
+          type: string
+        kind:
+          type: string
+        description:
+          type: string
+        allowedHosts:
+          type: array
+          items:
+            type: string
+        allowedMethods:
+          type: array
+          items:
+            type: string
+        allowedPathPrefixes:
+          type: array
+          items:
+            type: string
+        actions:
+          type: array
+          items:
+            type: string
+        maxUsesPerHour:
+          type: integer
+        notAfter:
+          type: string
+          format: date-time
+        usable:
+          type: boolean
+        reason:
+          type: string
+    AgentUsableCredentialList:
+      type: object
+      required: [credentials]
+      properties:
+        credentials:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentUsableCredential"
     NotificationEventType:
       type: object
       required: [type, title, description, severity]

@@ -247,6 +247,7 @@ func (s *Server) Handler() http.Handler {
 	s.registerSecretsRoutes(mux)
 	s.registerMFARoutes(mux)
 	s.registerRotationRoutes(mux)
+	s.registerAgentRoutes(mux)
 	s.registerNotificationRoutes(mux)
 
 	// Native session + self-service + master-admin actions (replace the legacy

@@ -85,6 +85,18 @@ of running. CI runs the full test suite in that mode.
 - **Native API tokens:** console access keys sent as bearer tokens act with
   their owner's role in the key's account, never more, and never with
   platform-admin rights.
+- **AI agents:** agents authenticate only to the Agent API (`/v1/agent/...`),
+  with an agent token (`cagt_...`, 256 random bits, stored as a PBKDF2 hash,
+  optional expiry, revocable) or a workload identity token that exactly
+  matches one of the agent's federation bindings (Citadel's own issuer, which
+  must name the agent's account, or an IAM OIDC provider registered in that
+  account). Agent tokens are not accepted anywhere else, and console sessions
+  and access keys are not accepted by the Agent API. Every request re-reads
+  the token and agent, so revocation, suspension and the account kill switch
+  take effect immediately. Failed attempts are throttled per client address;
+  requests per agent are limited locally and across replicas. Secret values
+  are never returned by the endpoints in 2.2's first part, and tokens never
+  appear in logs, audit events or errors. See [agents.md](agents.md).
 - **First run:** with no users, a PostgreSQL-backed instance only accepts the
   bootstrap call, which needs a one-time token: `KMS_BOOTSTRAP_TOKEN`, or one
   the first replica generates and prints in its log. Only the generated

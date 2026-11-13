@@ -21,8 +21,10 @@ type AuditQuery struct {
 	// Correlation, when set, matches events with exactly this CorrelationID
 	// (a write-ahead attempt and its outcomes).
 	Correlation string
-	Limit       int
-	Offset      int
+	// Agent, when set, matches events with exactly this AgentID.
+	Agent  string
+	Limit  int
+	Offset int
 	// BeforeID, when > 0, returns only events with a smaller ID (keyset
 	// paging for exports). Offset is applied after it.
 	BeforeID int64

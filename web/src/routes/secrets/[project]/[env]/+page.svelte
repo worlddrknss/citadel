@@ -35,7 +35,7 @@
   const path = $derived(normPath(param('path', '/')));
   const openKey = $derived(param('secret'));
   const drawerTab = $derived<DrawerTab>(
-    (['details', 'versions', 'rotation', 'access'] as const).find((t) => t === param('tab')) ?? 'details'
+    (['details', 'versions', 'rotation', 'access', 'agents'] as const).find((t) => t === param('tab')) ?? 'details'
   );
 
   let query = $state(param('q'));

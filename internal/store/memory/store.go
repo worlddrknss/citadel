@@ -45,6 +45,7 @@ type Store struct {
 	mfa    *memMFA
 	rotSeq int64
 	parity memPKIParity
+	agents *memAgents
 	notif  *memNotifications
 }
 
