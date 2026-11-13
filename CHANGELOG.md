@@ -6,12 +6,6 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
-## [2.2.0] - 2026-11-13
-
-Credentials for AI agents: agents use secrets through Citadel without holding
-them (brokered HTTP, MCP). This release also ships the notification channels
-and the provider token library that 2.3 and 2.4 build on.
-
 ### Added
 
 - Agent approvals and leases (2.3): grants with `requiresApproval` refuse
@@ -35,6 +29,15 @@ and the provider token library that 2.3 and 2.4 build on.
   `WaitForAgentAccess`, `AgentLeases`, `ListAgentAccessRequests`,
   `ListAgentLeases`, `RevokeAgentLease`). Migration 1450 (one catalog-only
   column, two new tables). See docs/agents.md, "Approvals and leases".
+
+## [2.2.0] - 2026-11-13
+
+Credentials for AI agents: agents use secrets through Citadel without holding
+them (brokered HTTP, MCP). This release also ships the notification channels
+and the provider token library that 2.3 and 2.4 build on.
+
+### Added
+
 - AI agents (2.2, foundation): agents as principals in an account, with an
   owner and a status (active, suspended, revoked). Agent tokens
   (`cagt_<agentId>_<secret>`, shown once, stored as PBKDF2 hashes, optional
