@@ -8,6 +8,21 @@ All notable changes to Citadel are documented here. The format follows
 
 ### Added
 
+- In-console documentation at `/app/docs`: the repository's `docs/*.md`
+  built into the console (so it works offline and matches the running
+  version), with a grouped nav, search over titles, headings and text
+  (error reasons included), deep-linkable headings, an "On this page"
+  contents, copy buttons on code blocks, and links between docs kept in the
+  console. Readable without signing in. **Docs** in the sidebar, the help
+  menu and the command palette; "Learn more" links from the Agents page, the
+  secret drawer's Agent access tab and the agent's Grants tab.
+- Guides: [Getting started](docs/getting-started.md) (deploy, first
+  sign-in, first secret, External Secrets) and
+  [Getting started with AI agents](docs/getting-started-agents.md) (agent,
+  token, usage profile examples, grants, MCP, monitoring, and a
+  troubleshooting table for every refusal reason). README sections for AI
+  agents and the documentation.
+
 - Login credentials for browser agents (2.4): `login` usage profiles list
   the pages a login may be used on (`login.urlPatterns`). Agents get the
   current TOTP code with a `totp` grant (`POST /v1/agent/totp`, MCP

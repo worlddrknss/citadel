@@ -135,10 +135,52 @@ seal "awskms" {
 Supported actions and known differences from AWS are listed in
 [docs/aws-compatibility.md](docs/aws-compatibility.md).
 
+## AI agents
+
+Coding agents, MCP clients and browser agents can use your credentials
+**without holding them**. An agent asks Citadel to make a request with a
+named credential; Citadel checks the agent's grant, injects the secret (or a
+short-lived token it mints) and returns the response with the secret
+redacted. Every use is audited, and you can require approval, set time
+windows and rate limits, get anomaly alerts, and suspend any agent at once.
+
+![Agents in the Citadel console](docs/images/agents-light.png)
+
+1. **Create an agent:** **Identity → Agents → New agent**.
+2. **Issue a token** on its **Tokens** tab (`cagt_...`, shown once).
+3. **Make a secret usable by agents:** open the secret, go to its **Agent
+   access** tab and add a usage profile: a name (`github-pat`), how it is
+   sent (`Authorization: Bearer ...`) and to which hosts. That makes it a
+   *credential*.
+4. **Grant it** on the agent's **Grants** tab: *use* (Citadel injects it)
+   rather than *reveal*.
+5. **Connect the agent** over MCP:
+
+   ```bash
+   claude mcp add --transport http citadel https://citadel.example.com/mcp \
+     --header "Authorization: Bearer ${CITADEL_AGENT_TOKEN}"
+   ```
+
+The step-by-step guide, with examples for GitHub tokens, basic auth, website
+logins with TOTP, GitHub Apps and OAuth clients, and a troubleshooting table,
+is [docs/getting-started-agents.md](docs/getting-started-agents.md), also in
+the console at `/app/docs/getting-started-agents`.
+
 ## Documentation
+
+The docs below are built into the console: open **Docs** in the sidebar, or
+`https://<your-citadel>/app/docs`, which is readable without signing in.
+
+![The in-console documentation](docs/images/docs-dark.png)
 
 | Topic | Where |
 |---|---|
+| Getting started: deploy, first sign-in, first secret, External Secrets | [docs/getting-started.md](docs/getting-started.md) |
+| Getting started with AI agents | [docs/getting-started-agents.md](docs/getting-started-agents.md) |
+| Agent credentials: grants, brokering, logins, minted tokens, approvals, anomalies | [docs/agents.md](docs/agents.md) |
+| Connecting MCP clients (Claude Code, Claude Desktop, Cursor, VS Code) | [docs/agents-mcp.md](docs/agents-mcp.md) |
+| Secret rotation | [docs/rotation.md](docs/rotation.md) |
+| Notifications (email, Slack, webhooks) | [docs/notifications.md](docs/notifications.md) |
 | Every configuration setting | [docs/configuration.md](docs/configuration.md) |
 | Production deployment | [docs/deployment.md](docs/deployment.md) |
 | AWS API compatibility | [docs/aws-compatibility.md](docs/aws-compatibility.md) |

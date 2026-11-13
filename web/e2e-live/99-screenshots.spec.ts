@@ -54,4 +54,13 @@ test('README screenshots', async ({ page }) => {
 
   await open(page, '/kms');
   await shoot(page, 'kms', 'light');
+
+  // The agents filled in by the agent specs.
+  await open(page, '/agents');
+  await page.waitForLoadState('networkidle');
+  await shoot(page, 'agents', 'light');
+
+  await open(page, '/docs/getting-started-agents#step-3-make-a-secret-usable-by-agents');
+  await expect(page.getByRole('heading', { level: 2, name: /Step 3/ })).toBeInViewport();
+  await shoot(page, 'docs', 'dark');
 });
