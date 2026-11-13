@@ -199,27 +199,3 @@ func metricReason(reason string) string {
 	}
 	return reason
 }
-
-// serverAgentAccess is the agents core of this server.
-type serverAgentAccess struct{ s *Server }
-
-func (a serverAgentAccess) authenticate(w http.ResponseWriter, _ *http.Request, _ string) (*agentCaller, context.Context, bool) {
-	writeAgentBrokerError(w, http.StatusServiceUnavailable, "unavailable", "", "agents are not available on this server")
-	return nil, nil, false
-}
-
-func (a serverAgentAccess) evaluate(context.Context, *agentCaller, string, string) agentUse {
-	return agentUse{Reason: "internal_error"}
-}
-
-func (a serverAgentAccess) minter(context.Context, *agentCaller, agentUse) (providertoken.Minter, error) {
-	return nil, errAccessDenied
-}
-
-func (a serverAgentAccess) credentials(context.Context, *agentCaller) ([]agentCredentialInfo, error) {
-	return nil, errAccessDenied
-}
-
-func (a serverAgentAccess) auditOrigin(r *http.Request, _ *agentCaller) store.AuditOrigin {
-	return a.s.auditOrigin(r)
-}
