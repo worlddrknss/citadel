@@ -16,6 +16,7 @@ Durations use Go syntax (`30m`, `12h`, `5s`). Booleans are `true` or `false`.
 | `KMS_MASTER_KEY_B64` **secret** | — | Legacy (pre-1.0) single master key, base64 of 32 bytes. With PostgreSQL, the wrapping key is derived from it when `KMS_WRAPPING_KEY_B64` is unset. Without PostgreSQL it is the in-memory store's bootstrap key. |
 | `KMS_KEY_ID`, `KMS_KEY_ARN` | derived | ID and ARN of the legacy bootstrap key. |
 | `KMS_AUDIT_HMAC_KEY_B64` **secret** | derived | Key for the audit log's HMAC chain (at least 16 bytes). When unset it is derived from the deployment root secret, which stays stable across wrapping-key rotations. |
+| `KMS_AUDIT_RETENTION_DAYS` | `0` | Default audit retention in days: `0` keeps events forever (so an upgrade never deletes anything), otherwise 7 to 3650. Older events are pruned hourly, in small batches, with a chain anchor that keeps verification intact. Account admins can override it per account under **Administration → Audit**. See [audit.md](audit.md#retention), including how to reclaim disk space after the first prune. |
 | `KMS_JOB_INTERVAL` | `1h` | How often background KMS jobs run (automatic rotation, destroying keys past their deletion date, re-wrapping). Minimum `1m`. |
 
 ## Network and URLs

@@ -240,6 +240,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/certificates/letsencrypt/orders", s.handleV1GetLEOrder)
 	mux.HandleFunc("GET /v1/audit", s.handleV1ListAudit)
 	s.registerAuditRoutes(mux)
+	s.registerAuditRetentionRoutes(mux)
 	mux.HandleFunc("GET /v1/change-requests", s.handleV1ListChangeRequests)
 	mux.HandleFunc("POST /v1/change-requests", s.handleV1CreateChangeRequest)
 	mux.HandleFunc("POST /v1/change-requests/approve", s.handleV1ApproveChangeRequest)

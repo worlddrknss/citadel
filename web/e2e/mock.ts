@@ -997,6 +997,14 @@ export class MockApi {
   mfaEnabled = false;
   /** Approving agent access needs a current MFA code (organization policy). */
   approvalMfa = false;
+  /** The account's audit retention override (null: deployment default). */
+  retentionDays: number | null = null;
+  /** KMS_AUDIT_RETENTION_DAYS. */
+  deploymentRetentionDays = 0;
+  /** The account's log has been pruned: verification reports an anchor. */
+  auditPruned = false;
+  /** Audit retention changes POSTed, in order. */
+  retentionSaves: (number | null)[] = [];
 
   constructor(opts: MockOptions = {}) {
     this.signedIn = opts.signedIn ?? true;
@@ -1005,6 +1013,49 @@ export class MockApi {
   /** The server forgets the session: everything but public endpoints says 401. */
   expireSession() {
     this.signedIn = false;
+  }
+
+  /** Audit retention endpoints (and verify with an anchor once pruned). */
+  private auditRetention(method: string, path: string, q: URLSearchParams, body: Record<string, unknown>) {
+    const view = () => {
+      const days = this.retentionDays ?? this.deploymentRetentionDays;
+      return {
+        retentionDays: days,
+        source: this.retentionDays == null ? 'deployment' : 'account',
+        accountDays: this.retentionDays,
+        deploymentDays: this.deploymentRetentionDays,
+        minDays: 7,
+        maxDays: 3650,
+        ...(this.retentionDays == null ? {} : { updatedBy: me.username, updatedAt: ago(0) }),
+        streamHeld: false,
+        events: 1840,
+        oldestEvent: ago(120 * DAY),
+        ...(this.auditPruned ? { anchor: auditAnchor } : {}),
+        storage: { tableBytes: 2_147_483_648, tableRowsEstimate: 321_000 },
+        lastRun: { startedAt: ago(1_800_000), finishedAt: ago(1_790_000), prunedEvents: this.auditPruned ? 224999 : 0 }
+      };
+    };
+    if (path === '/v1/audit/verify') {
+      return { status: 200, json: { status: 'verified', verifiedThrough: 226000, headHash: 'h226000', checkedAt: ago(600_000), totalEvents: 1840, anchor: auditAnchor } };
+    }
+    if (method === 'GET' && path === '/v1/audit/retention') return { status: 200, json: view() };
+    if (method === 'GET' && path === '/v1/audit/retention/preview') {
+      const days = Number(q.get('days'));
+      if (!Number.isInteger(days) || (days !== 0 && (days < 7 || days > 3650))) {
+        return { status: 400, json: { error: 'invalid_request', message: 'retentionDays must be 0 (keep forever) or between 7 and 3650' } };
+      }
+      return { status: 200, json: { retentionDays: days, cutoff: days ? ago(days * DAY) : undefined, prunableEvents: prunableFor(days), events: 1840, oldestEvent: ago(120 * DAY) } };
+    }
+    if (method === 'POST' && path === '/v1/audit/retention') {
+      const d = body.retentionDays;
+      if (d !== null && (typeof d !== 'number' || !Number.isInteger(d) || (d !== 0 && (d < 7 || d > 3650)))) {
+        return { status: 400, json: { error: 'invalid_request', message: 'retentionDays must be 0 (keep forever) or between 7 and 3650' } };
+      }
+      this.retentionDays = d as number | null;
+      this.retentionSaves.push(this.retentionDays);
+      return { status: 200, json: view() };
+    }
+    return null;
   }
 
   async install(page: Page) {
@@ -1066,6 +1117,10 @@ export class MockApi {
     if (method === 'POST' && path === '/v1/agents/credentials/login' && body.totpSeed && !/algorithm=SHA(256|512)/i.test(String(body.totpSeed))) {
       return route.fulfill({ status: 400, json: { error: 'totp_sha1_unsupported', message: 'this TOTP seed uses HMAC-SHA-1, which Citadel cannot compute: it runs in FIPS 140-3 mode' } });
     }
+    if (path.startsWith('/v1/audit/retention') || (path === '/v1/audit/verify' && this.auditPruned)) {
+      const r = this.auditRetention(method, path, url.searchParams, body);
+      if (r) return route.fulfill(r);
+    }
     if (method === 'GET' && RAW[path]) {
       const r = RAW[path](url.searchParams);
       return route.fulfill({ status: 200, contentType: r.contentType, body: r.body });
@@ -1081,6 +1136,16 @@ export class MockApi {
     const h = WRITE[`${method} ${path}`];
     return route.fulfill({ status: 200, json: h ? h(url.searchParams, body) : ok });
   }
+}
+
+const auditAnchor = { chainSeq: 224999, eventId: 225010, hash: 'a1b2c3d4e5f6', prunedBefore: ago(30 * DAY), prunedEvents: 224999, updatedAt: ago(3_600_000) };
+
+/** Events older than a retention of `days`, in the mock log. */
+function prunableFor(days: number): number {
+  if (days <= 0) return 0;
+  if (days < 30) return 1200;
+  if (days <= 90) return 340;
+  return 0;
 }
 
 export const fixtures = { projects, keys, parameters, certificates, roles, agentCredentials };

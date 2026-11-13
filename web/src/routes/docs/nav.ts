@@ -46,7 +46,8 @@ export const NAV: NavGroup[] = [
     items: [
       { slug: 'deployment', label: 'Deployment' },
       { slug: 'configuration', label: 'Configuration' },
-      { slug: 'notifications', label: 'Notifications' }
+      { slug: 'notifications', label: 'Notifications' },
+      { slug: 'audit', label: 'Audit log and retention' }
     ]
   },
   {

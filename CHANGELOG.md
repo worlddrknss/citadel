@@ -6,6 +6,29 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Audit retention (2.5): `KMS_AUDIT_RETENTION_DAYS` sets a deployment
+  default (0, the default, keeps events forever, so upgrading deletes
+  nothing) and account admins override it per account under
+  **Administration → Audit** (7 to 3650 days, or keep forever; audited as
+  `citadel.PutAuditRetention`). The console previews how many events a
+  retention would prune and, for platform admins, shows the audit table's
+  size. An hourly job, run by one replica at a time, prunes the oldest events
+  in 5,000-event transactions with pauses, under a write-ahead
+  `citadel.PruneAuditEvents` attempt; it never prunes the newest event,
+  events still queued for SIEM delivery, attempts whose outcome is inside the
+  window, or events that don't verify. Before deleting, it records an
+  HMAC-authenticated chain anchor, so verification starts there and the Audit
+  page reports "history before ... was pruned" instead of a break. Metrics
+  `citadel_audit_pruned_events_total`, `citadel_audit_retention_runs_total`
+  and last-run gauges. New page [docs/audit.md](docs/audit.md) (retention,
+  anchors, archiving, reclaiming disk space). API
+  `GET`/`POST /v1/audit/retention`, `GET /v1/audit/retention/preview`; Go SDK
+  `GetAuditRetention`, `SetAuditRetention`, `PreviewAuditRetention`,
+  `VerifyAuditChain`. Migration 1600 (three new, empty tables; no change to
+  the audit table).
+
 ## [2.4.0] - 2026-11-13
 
 Browser agents and provider-scoped credentials: website logins with TOTP codes,
@@ -28,7 +51,6 @@ and documentation built into the console at /app/docs.
   token, usage profile examples, grants, MCP, monitoring, and a
   troubleshooting table for every refusal reason). README sections for AI
   agents and the documentation.
-
 - Login credentials for browser agents (2.4): `login` usage profiles list
   the pages a login may be used on (`login.urlPatterns`). Agents get the
   current TOTP code with a `totp` grant (`POST /v1/agent/totp`, MCP

@@ -143,7 +143,10 @@ of running. CI runs the full test suite in that mode.
 Every action records the authenticated actor, account, resource, source IP,
 user agent and result. Events form one HMAC chain per account; appends lock
 the chain head, so concurrent requests and replicas can't fork it. Editing or
-deleting events is detected by verification.
+deleting events is detected by verification. The only deletion that doesn't
+read as a break is pruning by the account's retention policy (off by
+default), which records an HMAC-authenticated anchor that verification starts
+from; see [audit.md](audit.md#chain-anchors).
 
 ### No unaudited changes (write-ahead audit)
 

@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,14 +38,18 @@ type Config struct {
 	PreviousWrappingKeys [][]byte
 	// KMSJobInterval (KMS_JOB_INTERVAL) is how often the KMS background job
 	// rotates due keys and destroys keys past their deletion date.
-	KMSJobInterval  time.Duration
-	AuditHMACKey    []byte
-	UIUsers         map[string]store.UIUser
-	UISecureCookies bool
-	SessionIdleTTL  time.Duration
-	SessionAbsTTL   time.Duration
-	TLSCertFile     string
-	TLSKeyFile      string
+	KMSJobInterval time.Duration
+	AuditHMACKey   []byte
+	// AuditRetentionDays (KMS_AUDIT_RETENTION_DAYS) is the deployment's
+	// default audit retention; 0 keeps events forever. Accounts may
+	// override it (store.AuditRetentionSetting).
+	AuditRetentionDays int
+	UIUsers            map[string]store.UIUser
+	UISecureCookies    bool
+	SessionIdleTTL     time.Duration
+	SessionAbsTTL      time.Duration
+	TLSCertFile        string
+	TLSKeyFile         string
 
 	AWSRegion    string
 	AWSAccountID string
@@ -98,6 +103,22 @@ type Config struct {
 	// SMTP is the outgoing mail server for email notification channels
 	// (KMS_SMTP_*); see smtp.go.
 	SMTP SMTPConfig
+}
+
+// ParseAuditRetentionDays parses KMS_AUDIT_RETENTION_DAYS: empty or 0 keeps
+// audit events forever (the default, so an upgrade never deletes anything on
+// its own); otherwise a whole number of days within the bounds the console
+// enforces for per-account overrides.
+func ParseAuditRetentionDays(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil || !store.ValidAuditRetentionDays(days) {
+		return 0, fmt.Errorf("KMS_AUDIT_RETENTION_DAYS must be 0 (keep forever) or between %d and %d", store.AuditRetentionMinDays, store.AuditRetentionMaxDays)
+	}
+	return days, nil
 }
 
 // MinAuditHMACKeyLen is the shortest KMS_AUDIT_HMAC_KEY_B64 accepted (128
@@ -234,6 +255,11 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("KMS_AUDIT_HMAC_KEY_B64 must decode to at least %d bytes", MinAuditHMACKeyLen)
 		}
 		cfg.AuditHMACKey = hmacKey
+	}
+	if days, err := ParseAuditRetentionDays(os.Getenv("KMS_AUDIT_RETENTION_DAYS")); err != nil {
+		return Config{}, err
+	} else {
+		cfg.AuditRetentionDays = days
 	}
 	proxies, err := ParseTrustedProxies(os.Getenv("KMS_TRUSTED_PROXIES"))
 	if err != nil {
