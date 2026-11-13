@@ -14,6 +14,10 @@ var (
 	ErrExternalIdentityExists   = errors.New("external identity already exists")
 	ErrWorkloadClientNotFound   = errors.New("workload client not found")
 	ErrWorkloadClientExists     = errors.New("workload client already exists")
+	// ErrWorkloadClientNameTaken is returned by CreateWorkloadClient and
+	// UpdateWorkloadClient when another client in the same account already
+	// has the name (compared without case).
+	ErrWorkloadClientNameTaken = errors.New("workload client name already used in this account")
 	// ErrWorkloadRotationConflict is returned by RotateWorkloadSigningKey
 	// when the current key is no longer the one the caller expected
 	// (another replica rotated first).

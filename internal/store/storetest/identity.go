@@ -235,6 +235,43 @@ func testWorkloadClients(t *testing.T, st store.Store) {
 	if err := st.CreateWorkloadClient(ctx, k); err != nil {
 		t.Fatal(err)
 	}
+	// Names are unique per account, ignoring case; another account may
+	// reuse one.
+	dupName := c
+	dupName.ClientID, dupName.Name = "wic-dup", "CI"
+	if err := st.CreateWorkloadClient(ctx, dupName); !errors.Is(err, store.ErrWorkloadClientNameTaken) {
+		t.Fatalf("duplicate name err = %v", err)
+	}
+	otherAcct := dupName
+	otherAcct.AccountID = "333333333334"
+	if err := st.CreateWorkloadClient(ctx, otherAcct); err != nil {
+		t.Fatalf("same name in another account: %v", err)
+	}
+	if err := st.DeleteWorkloadClient(ctx, otherAcct.AccountID, otherAcct.ClientID); err != nil {
+		t.Fatal(err)
+	}
+	second := c
+	second.ClientID, second.Name = "wic-3", "deploy"
+	if err := st.CreateWorkloadClient(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	second.Name = "Ci"
+	if err := st.UpdateWorkloadClient(ctx, second); !errors.Is(err, store.ErrWorkloadClientNameTaken) {
+		t.Fatalf("rename onto a taken name err = %v", err)
+	}
+	if err := st.DeleteWorkloadClient(ctx, second.AccountID, second.ClientID); err != nil {
+		t.Fatal(err)
+	}
+	// Renaming a client to its own name in another case is fine.
+	self := c
+	self.Name = "CI"
+	if err := st.UpdateWorkloadClient(ctx, self); err != nil {
+		t.Fatalf("rename to own name: %v", err)
+	}
+	self.Name = "ci"
+	if err := st.UpdateWorkloadClient(ctx, self); err != nil {
+		t.Fatal(err)
+	}
 	got, err := st.GetWorkloadClient(ctx, "wic-2")
 	if err != nil || got.AccountID != "222222222222" || got.APIServer != "https://k8s" || got.CAPEM != "pem" || len(got.ServiceAccounts) != 1 ||
 		got.ReviewAudience != "citadel" || len(got.Audiences) != 2 || !got.LastIssuedAt.IsZero() {

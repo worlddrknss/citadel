@@ -125,8 +125,17 @@ returns `InvalidAction`)
 
 **Error codes:** `ParameterNotFound`, `ParameterAlreadyExists`,
 `ParameterVersionNotFound`, `ParameterPatternMismatchException`,
-`InvalidKeyId`, `InvalidResourceId`, `InvalidResourceType`, `InvalidNextToken`
-and `ValidationException`.
+`InvalidKeyId`, `InvalidResourceId`, `InvalidResourceType`, `InvalidNextToken`,
+`HierarchyLevelLimitExceededException` and `ValidationException`.
+
+**Parameter names** follow AWS's documented rules. Every operation refuses a
+`Name` longer than 2048 characters or deeper than 15 levels. `PutParameter`
+also refuses names beginning with `aws` or `ssm` in any case (for a
+hierarchy, its first level: `/aws/x` and `SSM-config` are refused,
+`/app/aws` is not), and names whose full ARN
+(`arn:aws:ssm:<region>:<account>:parameter/<name>`) is longer than 1011
+characters. Parameters created before 2.0.3 with such names can still be read,
+overwritten through the console's edit, and deleted.
 
 ## STS (Query protocol)
 

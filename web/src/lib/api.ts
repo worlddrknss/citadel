@@ -219,6 +219,24 @@ export interface Certificate {
   issuerCaId?: string;
 }
 
+export type LEOrderStatus = 'pending' | 'processing' | 'issued' | 'failed';
+
+/** A Let's Encrypt order (GET /v1/certificates/letsencrypt/orders). */
+export interface LEOrder {
+  orderId: string;
+  kind: 'http-01' | 'dns-01';
+  status: LEOrderStatus;
+  /** The current step while processing. */
+  progress?: string;
+  /** Why it failed. */
+  error?: string;
+  /** The issued certificate. */
+  certId?: string;
+  domains: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface CertificateDetail {
   source: string;
   id: string;
@@ -232,6 +250,8 @@ export interface CertificateDetail {
   signatureAlgorithm?: string;
   sans?: string[];
   isCA: boolean;
+  /** A CA's pathLenConstraint; absent when unlimited or not a CA. */
+  pathLen?: number;
   caType?: string;
   template?: string;
   kmsKeyId?: string;
@@ -552,7 +572,8 @@ export const api = {
     }),
 
   // Parameter Store
-  parameters: () => req<{ parameters: Parameter[] }>('/v1/parameters'),
+  parameters: () =>
+    req<{ parameters: Parameter[]; limits?: { nameMaxLength: number; maxHierarchyLevels: number } }>('/v1/parameters'),
   putParameter: (body: {
     name: string;
     type: ParameterType;
@@ -647,8 +668,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body)
     }),
+  /**
+   * Starts HTTP-01 issuance (202). Issuance runs on the server and can take a
+   * few minutes; poll letsEncryptOrder(orderId) for progress and the result.
+   */
   requestLetsEncryptCert: (domains: string) =>
-    req<{ requested: boolean; certId?: string; domains?: string }>('/v1/certificates/letsencrypt/request', {
+    req<{ requested: boolean; orderId: string; status: LEOrderStatus; domains: string }>('/v1/certificates/letsencrypt/request', {
       method: 'POST',
       body: JSON.stringify({ domains })
     }),
@@ -660,14 +685,13 @@ export const api = {
         body: JSON.stringify({ domains })
       }
     ),
+  /** Starts validating a DNS-01 order (202); poll letsEncryptOrder for the result. */
   completeLetsEncryptDns: (orderId: string) =>
-    req<{ certId: string; domains: string; issued: boolean }>(
-      '/v1/certificates/letsencrypt/dns/complete',
-      {
-        method: 'POST',
-        body: JSON.stringify({ orderId })
-      }
-    ),
+    req<LEOrder>('/v1/certificates/letsencrypt/dns/complete', {
+      method: 'POST',
+      body: JSON.stringify({ orderId })
+    }),
+  letsEncryptOrder: (orderId: string) => req<LEOrder>(`/v1/certificates/letsencrypt/orders?${qs({ id: orderId })}`),
   // Public CRL distribution point (served at the server root, outside /app).
   crlUrl: (caId: string) => `/crl/${encodeURIComponent(caId)}`,
 

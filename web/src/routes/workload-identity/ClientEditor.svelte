@@ -4,7 +4,7 @@
   import { untrack } from 'svelte';
   import Modal from '#lib/components/Modal.svelte';
   import Icon from '#lib/components/Icon.svelte';
-  import { errorMessage } from '#lib/api.ts';
+  import { ApiError, errorMessage } from '#lib/api.ts';
   import { toast } from '#lib/stores/toast.svelte.ts';
   import Seg from './Seg.svelte';
   import {
@@ -12,6 +12,8 @@
     SUBJECT_PRESETS,
     PLACEHOLDERS,
     NAME_RE,
+    nameTaken,
+    nameTakenMessage,
     K8S_NAME_RE,
     MAX_AUDIENCES,
     MAX_ALLOWED_USERS,
@@ -50,6 +52,8 @@
   let touched = $state(false);
   let busy = $state(false);
   let error = $state('');
+  /** Lowercased name the server refused as taken (409 name_taken). */
+  let takenOnServer = $state('');
 
   $effect(() => {
     if (open) untrack(reset);
@@ -69,6 +73,7 @@
     subjectFormat = client?.subjectFormat ?? (method === 'k8s-token-review' ? 'system:serviceaccount:{namespace}:{serviceAccount}' : 'user:{username}');
     touched = false;
     error = '';
+    takenOnServer = '';
   }
 
   const list = (s: string) => s.split(/[\n,]+/).map((v) => v.trim()).filter(Boolean);
@@ -95,9 +100,11 @@
   const errs = $derived({
     name: !NAME_RE.test(name.trim())
       ? 'Use 1–64 letters, numbers, spaces, dots, dashes or underscores, starting with a letter or number.'
-      : existing.some((c) => c.name === name.trim() && c.clientId !== client?.clientId)
-        ? 'Another client already uses this name.'
-        : '',
+      : nameTaken(existing, name, client?.clientId)
+        ? nameTakenMessage(name.trim())
+        : takenOnServer && takenOnServer === name.trim().toLowerCase()
+          ? nameTakenMessage(name.trim())
+          : '',
     audiences:
       list(audiences).length === 0
         ? 'Add at least one audience.'
@@ -176,7 +183,10 @@
       open = false;
       onsaved(id);
     } catch (err) {
-      error = errorMessage(err, 'Could not save the client.');
+      // A client created elsewhere since the list loaded: show the conflict
+      // on the name field rather than as a generic failure.
+      if (err instanceof ApiError && err.status === 409 && err.code === 'name_taken') takenOnServer = body.name.toLowerCase();
+      else error = errorMessage(err, 'Could not save the client.');
     } finally {
       busy = false;
     }

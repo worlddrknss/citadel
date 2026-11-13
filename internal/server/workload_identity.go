@@ -264,7 +264,8 @@ type workloadTokenRequest struct {
 // issuer error (always *workloadid.Error).
 func (s *Server) issueWorkloadToken(r *http.Request, body []byte, parse func([]byte) (workloadTokenRequest, *workloadid.Error)) (*workloadid.Token, *workloadid.Error) {
 	st := s.identity()
-	if ok, _ := st.tokenIP.Reserve(s.clientIP(r)); !ok {
+	ip := s.clientIP(r)
+	if ok, _ := st.tokenIP.Reserve(ip); !ok {
 		return nil, &workloadid.Error{Status: http.StatusTooManyRequests, Code: "rate_limited", Description: "too many token requests; slow down"}
 	}
 	iss, err := s.workloadIssuer()
@@ -277,6 +278,10 @@ func (s *Server) issueWorkloadToken(r *http.Request, body []byte, parse func([]b
 	}
 	if ok, _ := st.tokenCli.Reserve(req.clientID); !ok {
 		return nil, &workloadid.Error{Status: http.StatusTooManyRequests, Code: "rate_limited", Description: "too many token requests for this client; slow down"}
+	}
+	// Deployment-wide limits (PostgreSQL): both counters in one round trip.
+	if ok, _ := s.sharedAllow(r.Context(), sharedLimitCheck{sharedLimitTokenIP, ip}, sharedLimitCheck{sharedLimitTokenClient, req.clientID}); !ok {
+		return nil, &workloadid.Error{Status: http.StatusTooManyRequests, Code: "rate_limited", Description: "too many token requests; slow down"}
 	}
 	info := &workloadReqInfo{actor: "anonymous", actorType: store.AuditActorAnonymous}
 	ctx := context.WithValue(r.Context(), workloadReqKey{}, info)
@@ -848,6 +853,12 @@ func (s *Server) handleV1ListWorkloadClients(w http.ResponseWriter, r *http.Requ
 	writeNativeJSON(w, http.StatusOK, map[string]any{"clients": out})
 }
 
+// workloadNameTakenMsg is the 409 message for a duplicate client name; the
+// console shows it next to the name field.
+func workloadNameTakenMsg(name string) string {
+	return "A client named " + strconv.Quote(name) + " already exists in this account. Choose another name."
+}
+
 func (s *Server) handleV1CreateWorkloadClient(w http.ResponseWriter, r *http.Request) {
 	const action = "citadel.CreateWorkloadClient"
 	sess, ctx, ok := s.nativeSession(w, r, "admin")
@@ -872,6 +883,10 @@ func (s *Server) handleV1CreateWorkloadClient(w http.ResponseWriter, r *http.Req
 	now := time.Now().UTC().Truncate(time.Second)
 	c.CreatedAt, c.UpdatedAt = now, now
 	if err := s.store.CreateWorkloadClient(ctx, c); err != nil {
+		if errors.Is(err, store.ErrWorkloadClientNameTaken) {
+			writeNativeError(w, http.StatusConflict, "name_taken", workloadNameTakenMsg(c.Name))
+			return
+		}
 		slog.Error("workload identity: create client", "error", err)
 		writeNativeError(w, http.StatusInternalServerError, "create_failed", "could not create the client")
 		return
@@ -908,6 +923,10 @@ func (s *Server) handleV1UpdateWorkloadClient(w http.ResponseWriter, r *http.Req
 	if err := s.store.UpdateWorkloadClient(ctx, next); err != nil {
 		if errors.Is(err, store.ErrWorkloadClientNotFound) {
 			writeNativeError(w, http.StatusNotFound, "not_found", "client not found")
+			return
+		}
+		if errors.Is(err, store.ErrWorkloadClientNameTaken) {
+			writeNativeError(w, http.StatusConflict, "name_taken", workloadNameTakenMsg(next.Name))
 			return
 		}
 		slog.Error("workload identity: update client", "error", err)

@@ -21,30 +21,6 @@ const (
 	parameterTierAdvanced     = "Advanced"
 )
 
-// normalizeParameterName canonicalizes an SSM-style parameter name to a single
-// leading slash with validated path segments and no trailing slash.
-func normalizeParameterName(name string) (string, error) {
-	trimmed := strings.TrimSpace(name)
-	if trimmed == "" {
-		return "", errors.New("parameter name is required")
-	}
-	// SSM allows a bare relative name (no leading slash) for a top-level
-	// parameter; canonicalize everything to a leading slash.
-	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
-	if len(parts) == 0 {
-		return "", errors.New("parameter name is required")
-	}
-	for _, p := range parts {
-		if !nativeSegmentRe.MatchString(p) {
-			return "", errors.New("parameter name segments must match [A-Za-z0-9_.-]+")
-		}
-	}
-	if len(parts) > 15 {
-		return "", errors.New("parameter name hierarchy is too deep")
-	}
-	return "/" + strings.Join(parts, "/"), nil
-}
-
 func normalizeParameterType(t string) (string, error) {
 	switch strings.TrimSpace(t) {
 	case "", parameterTypeString:

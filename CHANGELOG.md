@@ -6,10 +6,79 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.3]
+
 ### Added
 
 - Images are published for `linux/arm64` as well as `linux/amd64`, built by
   cross-compiling (both are FIPS builds).
+- Console dependencies on SvelteKit 3, Vite 8 and vitest 4 (TypeScript stays
+  on 6 until SvelteKit supports 7).
+- Certificate authorities in `GET /v1/certificates` and
+  `GET /v1/certificates/detail` carry `isCA` and `pathLen` (the
+  basic-constraints path length; absent when unlimited). The CA tree shows it
+  for each CA and the CA drawer explains it.
+- A **Full re-check** button on the audit log for platform admins, which
+  re-walks the whole chain (`POST /v1/audit/verify?full=true`) and shows the
+  result. Other users don't see it.
+
+### Changed
+
+- `POST /v1/audit/verify?full=true` needs a platform admin (it was any
+  account admin): a full walk reads every event of the account.
+
+### Fixed
+
+- Let's Encrypt orders can take up to about 3 minutes, but the request (and
+  the console) gave up after 30 seconds. Issuance is now asynchronous:
+  `POST /v1/certificates/letsencrypt/request` and
+  `POST /v1/certificates/letsencrypt/dns/complete` start the work and answer
+  `202` with an `orderId`; a background task bounded by a 3-minute timeout
+  (and cancelled on shutdown) completes it, and the new
+  `GET /v1/certificates/letsencrypt/orders?id=` reports its status, current
+  step, error and certificate. The console shows progress while it polls,
+  shows failures, and keeps the DNS-01 records up for a retry. Starting a
+  DNS-01 order is bounded at 20 seconds. Order rows gain progress columns
+  (migration 0904); existing DNS-01 orders keep working.
+- Rate limits on sign-in, first-run setup, SSO and the workload token
+  endpoint were per replica, so each added replica multiplied them. With
+  PostgreSQL they are now also enforced deployment-wide through shared
+  fixed-window counters (one UPSERT per request, per-key rows, an `UNLOGGED`
+  table purged by a job, failing open if the database is unavailable). The
+  memory store keeps the in-memory limits. See "Rate limits" in
+  docs/configuration.md.
+- A generated bootstrap token (no `KMS_BOOTSTRAP_TOKEN`) worked only on the
+  replica that printed it. The first replica to start now stores its SHA-256
+  in the database and logs the token; the others log that one was already
+  issued and where to find it. Any replica accepts it, the bootstrap
+  transaction consumes it (once, atomically), and an unused token expires
+  after 24 hours, after which the next replica to start issues a new one.
+- Audit chains upgraded from 1.x showed as "broken" at the first pre-2.0
+  event whose `prev_hash` didn't connect, which 1.x's unlocked appends
+  produced under concurrent requests. Such links between pre-2.0 (hash
+  version 1) events are now counted (`legacyLinkBreaks`,
+  `firstLegacyBreakSeq`, `legacyEvents` in `GET`/`POST /v1/audit/verify`) and
+  verification continues; the chain is "verified" when everything else
+  holds, and the audit page and overview show an amber note with the count.
+  2.0 events, the link from the last pre-2.0 event to the first 2.0 one, and
+  sequence gaps stay strict. The next verification after upgrading walks the
+  chain from the start (migration 0901).
+- Parameter names follow AWS's rules when a parameter is created or
+  overwritten (SSM `PutParameter` and `POST /v1/parameters`): names beginning
+  with `aws` or `ssm` in any case (the first level of a hierarchy) are refused,
+  a name's full ARN can be at most 1011 characters, and a hierarchy at most 15
+  levels (SSM answers `HierarchyLevelLimitExceededException`). Names longer
+  than 2048 characters are refused by every operation. The console checks the
+  same rules with the same messages before submitting.
+- Workload identity client names are unique per account, ignoring case
+  (enforced by a database index). Creating or renaming a client onto a taken
+  name answers 409 `name_taken`, and the console shows it on the name field.
+  Upgrading renames existing duplicates other than the oldest by appending
+  `-` and the end of their client ID; client IDs don't change.
+- The Helm chart's `appVersion` (the default image tag) was still 2.0.0; it
+  is now 2.0.2. The release workflow fails before building an image when
+  `Chart.yaml` `appVersion` doesn't match the tag being released
+  (`scripts/check-chart-version.sh`).
 
 ## [2.0.2]
 

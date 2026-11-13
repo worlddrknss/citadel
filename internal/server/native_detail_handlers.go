@@ -287,14 +287,16 @@ type nativeCertificateDetail struct {
 	SignatureAlgorithm string   `json:"signatureAlgorithm,omitempty"`
 	SANs               []string `json:"sans,omitempty"`
 	IsCA               bool     `json:"isCA"`
-	CAType             string   `json:"caType,omitempty"`
-	Template           string   `json:"template,omitempty"`
-	KMSKeyID           string   `json:"kmsKeyId,omitempty"`
-	Domains            string   `json:"domains,omitempty"`
-	RevokedAt          string   `json:"revokedAt,omitempty"`
-	RevocationReason   string   `json:"revocationReason,omitempty"`
-	PEM                string   `json:"pem,omitempty"`
-	ChainPEM           string   `json:"chainPem,omitempty"`
+	// PathLen is a CA's pathLenConstraint; absent when unlimited or not a CA.
+	PathLen          *int   `json:"pathLen,omitempty"`
+	CAType           string `json:"caType,omitempty"`
+	Template         string `json:"template,omitempty"`
+	KMSKeyID         string `json:"kmsKeyId,omitempty"`
+	Domains          string `json:"domains,omitempty"`
+	RevokedAt        string `json:"revokedAt,omitempty"`
+	RevocationReason string `json:"revocationReason,omitempty"`
+	PEM              string `json:"pem,omitempty"`
+	ChainPEM         string `json:"chainPem,omitempty"`
 }
 
 // handleV1CertificateDetail returns the full metadata and PEM material for a
@@ -464,6 +466,9 @@ func applyParsedCert(d *nativeCertificateDetail, cert *x509.Certificate) {
 	d.KeyAlgorithm = cert.PublicKeyAlgorithm.String()
 	d.SignatureAlgorithm = cert.SignatureAlgorithm.String()
 	d.IsCA = d.IsCA || cert.IsCA
+	if cert.IsCA {
+		d.PathLen = caPathLength(cert)
+	}
 	if len(cert.DNSNames) > 0 {
 		d.SANs = cert.DNSNames
 	}

@@ -62,8 +62,10 @@ of running. CI runs the full test suite in that mode.
   their owner's role in the key's account, never more, and never with
   platform-admin rights.
 - **First run:** with no users, a PostgreSQL-backed instance only accepts the
-  bootstrap call, which needs a one-time token printed in the server log (or
-  set with `KMS_BOOTSTRAP_TOKEN`).
+  bootstrap call, which needs a one-time token: `KMS_BOOTSTRAP_TOKEN`, or one
+  the first replica generates and prints in its log. Only the generated
+  token's SHA-256 is stored, it expires after 24 hours unused, and the
+  bootstrap transaction consumes it, so it works once across all replicas.
 
 ## Authorization and tenancy
 
@@ -100,6 +102,30 @@ the chain head, so concurrent requests and replicas can't fork it. Editing or
 deleting events is detected by verification. If an audit write fails, Citadel
 refuses to return the result of a state-changing action or a secret reveal.
 
+Verification (`POST /v1/audit/verify`) continues from the last verified
+event; a platform admin can re-walk the whole chain with `?full=true` (the
+console's **Full re-check**).
+
+**Pre-2.0 history.** Citadel 1.x appended events by reading the last row and
+then inserting, without a lock, so two concurrent requests could both link to
+the same predecessor. Those events (hash version 1) carry no MAC, and a chain
+upgraded from 1.x can contain `prev_hash` links that don't connect, typically
+between events written within milliseconds of each other. Verification counts
+these as `legacyLinkBreaks` (with `firstLegacyBreakSeq`/`firstLegacyBreakId`
+and `legacyEvents`), continues from the event's own hash, and still reports the
+chain as `verified`; the console shows an amber note with the count. Every
+other check stays strict and makes the chain `broken`:
+
+- any 2.0 event with a wrong MAC, a link that doesn't connect, or the wrong
+  account;
+- the first 2.0 event not linking to the last pre-2.0 event (the boundary);
+- a gap in the sequence anywhere, legacy part included;
+- a missing tail (the chain head pointing past the last stored event).
+
+A legacy link break is therefore not proof of tampering, but it is not proof
+of its absence either: pre-2.0 events were never keyed, so their integrity
+rests on the 1.x deployment. Events from 2.0 on are fully verified.
+
 ## Outbound requests
 
 Citadel makes outbound requests for OIDC discovery and keys, ACME HTTP-01
@@ -121,7 +147,15 @@ multicast addresses and doesn't follow redirects.
 
 ## Known limitations
 
-- Rate limits are per replica, not shared across replicas.
+- With PostgreSQL, rate limits on sign-in, first-run setup, SSO and the
+  workload token endpoint are shared across replicas (see "Rate limits" in
+  [configuration.md](configuration.md)); the failed sign-in lockout and
+  other limits (ACME, audit export) remain per replica. Shared counters fail
+  open if the database is unavailable.
+- Let's Encrypt HTTP-01 challenge responses are held in memory by the
+  replica running the order. Behind several replicas, the CA's validation
+  request can reach a replica that doesn't have the response; use manual
+  DNS-01, or route `/.well-known/acme-challenge/` to one replica while
+  issuing.
 - Rotation for Secrets Manager secrets records the schedule but runs no
   rotation function; Citadel shows when rotation is due.
-- A generated bootstrap token is valid only on the replica that printed it.

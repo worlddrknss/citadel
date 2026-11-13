@@ -328,9 +328,11 @@ func (s *Store) AuditEventCount(ctx context.Context, accountID string) (int64, e
 func (s *Store) LoadAuditVerification(ctx context.Context, accountID string) (store.AuditVerification, bool, error) {
 	v := store.AuditVerification{AccountID: accountID}
 	err := s.db.QueryRowContext(ctx, `
-SELECT status, verified_seq, verified_event_id, verified_hash, head_hash, broken_event_id, broken_seq, total_events, checked_at
+SELECT status, verified_seq, verified_event_id, verified_hash, head_hash, broken_event_id, broken_seq, total_events, checked_at,
+	legacy_events, legacy_link_breaks, first_legacy_break_seq, first_legacy_break_event_id
 FROM audit_chain_verifications WHERE account_id = $1`, accountID).
-		Scan(&v.Status, &v.VerifiedSeq, &v.VerifiedID, &v.VerifiedHash, &v.HeadHash, &v.BrokenID, &v.BrokenSeq, &v.TotalEvents, &v.CheckedAt)
+		Scan(&v.Status, &v.VerifiedSeq, &v.VerifiedID, &v.VerifiedHash, &v.HeadHash, &v.BrokenID, &v.BrokenSeq, &v.TotalEvents, &v.CheckedAt,
+			&v.LegacyEvents, &v.LegacyLinkBreaks, &v.FirstLegacyBreakSeq, &v.FirstLegacyBreakID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, false, nil
 	}
@@ -343,13 +345,17 @@ FROM audit_chain_verifications WHERE account_id = $1`, accountID).
 
 func (s *Store) SaveAuditVerification(ctx context.Context, v store.AuditVerification) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO audit_chain_verifications (account_id, status, verified_seq, verified_event_id, verified_hash, head_hash, broken_event_id, broken_seq, total_events, checked_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+INSERT INTO audit_chain_verifications (account_id, status, verified_seq, verified_event_id, verified_hash, head_hash, broken_event_id, broken_seq, total_events, checked_at,
+	legacy_events, legacy_link_breaks, first_legacy_break_seq, first_legacy_break_event_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 ON CONFLICT (account_id) DO UPDATE SET status = EXCLUDED.status, verified_seq = EXCLUDED.verified_seq,
 	verified_event_id = EXCLUDED.verified_event_id, verified_hash = EXCLUDED.verified_hash,
 	head_hash = EXCLUDED.head_hash, broken_event_id = EXCLUDED.broken_event_id, broken_seq = EXCLUDED.broken_seq,
-	total_events = EXCLUDED.total_events, checked_at = EXCLUDED.checked_at`,
-		v.AccountID, v.Status, v.VerifiedSeq, v.VerifiedID, v.VerifiedHash, v.HeadHash, v.BrokenID, v.BrokenSeq, v.TotalEvents, v.CheckedAt)
+	total_events = EXCLUDED.total_events, checked_at = EXCLUDED.checked_at,
+	legacy_events = EXCLUDED.legacy_events, legacy_link_breaks = EXCLUDED.legacy_link_breaks,
+	first_legacy_break_seq = EXCLUDED.first_legacy_break_seq, first_legacy_break_event_id = EXCLUDED.first_legacy_break_event_id`,
+		v.AccountID, v.Status, v.VerifiedSeq, v.VerifiedID, v.VerifiedHash, v.HeadHash, v.BrokenID, v.BrokenSeq, v.TotalEvents, v.CheckedAt,
+		v.LegacyEvents, v.LegacyLinkBreaks, v.FirstLegacyBreakSeq, v.FirstLegacyBreakID)
 	return err
 }
 

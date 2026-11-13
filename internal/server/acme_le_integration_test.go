@@ -128,7 +128,7 @@ func TestLetsEncryptIssue93rdAvenue(t *testing.T) {
 	defer chSrv.Close()
 
 	// Act: issue a publicly-(test-)trusted certificate for 93rdavenue.com.
-	cert, err := s.issueLetsEncryptCertificate(ctx, []string{itestDomain})
+	cert, err := s.issueLetsEncryptCertificate(ctx, []string{itestDomain}, func(step string) { t.Log(step) })
 	if err != nil {
 		dumpContainerLogs(t)
 		t.Fatalf("issueLetsEncryptCertificate(%s): %v", itestDomain, err)

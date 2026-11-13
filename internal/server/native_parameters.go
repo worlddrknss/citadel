@@ -106,7 +106,11 @@ func (s *Server) handleV1ListParameters(w http.ResponseWriter, r *http.Request) 
 		}
 		out = append(out, np)
 	}
-	writeNativeJSON(w, http.StatusOK, map[string]any{"parameters": out})
+	// limits lets the console check names against the same rules before
+	// submitting (the name length depends on the account's ARN prefix).
+	writeNativeJSON(w, http.StatusOK, map[string]any{"parameters": out, "limits": map[string]any{
+		"nameMaxLength": s.parameterNameLimit(ctx), "maxHierarchyLevels": maxParameterHierarchyLevels,
+	}})
 }
 
 type nativePutParameterRequest struct {
@@ -135,7 +139,15 @@ func (s *Server) handleV1PutParameter(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	rec, err := s.buildParameterRecord(ctx, req.Name, req.Type, req.Value, req.KMSKeyID, req.Tier, req.Description)
+	canonical, err := normalizeParameterName(req.Name)
+	if err == nil {
+		err = s.validateNewParameterName(ctx, canonical)
+	}
+	if err != nil {
+		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	rec, err := s.buildParameterRecord(ctx, canonical, req.Type, req.Value, req.KMSKeyID, req.Tier, req.Description)
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return

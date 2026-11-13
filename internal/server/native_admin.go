@@ -63,7 +63,13 @@ func (s *Server) handleV1Login(w http.ResponseWriter, r *http.Request) {
 	a := s.auth()
 	ip := s.clientIP(r)
 	userKey := strings.ToLower(username)
-	if wait, limited := loginThrottled(a, ip, userKey); limited {
+	wait, limited := loginThrottled(a, ip, userKey)
+	if !limited {
+		// Deployment-wide limits (PostgreSQL), after the local ones.
+		ok, d := s.sharedAllow(r.Context(), sharedLimitCheck{sharedLimitLoginIP, ip}, sharedLimitCheck{sharedLimitLoginUser, userKey})
+		wait, limited = d, !ok
+	}
+	if limited {
 		log.Printf("login throttled ip=%s", ip)
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 		writeNativeError(w, http.StatusTooManyRequests, "rate_limited", "too many sign-in attempts; try again later")

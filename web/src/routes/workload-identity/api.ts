@@ -93,6 +93,18 @@ export const issued = (e: AuditEvent) => e.result === 'success' || e.result === 
 export const TTL_MIN = 60;
 export const TTL_MAX = 3600;
 export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/;
+
+/** Same wording as the server's 409 name_taken (workloadNameTakenMsg). */
+export const nameTakenMessage = (name: string) => `A client named "${name}" already exists in this account. Choose another name.`;
+
+/**
+ * Whether another client in the list already has name. Names are unique per
+ * account ignoring case, as the server enforces.
+ */
+export function nameTaken(existing: { clientId: string; name: string }[], name: string, selfId?: string): boolean {
+  const n = name.trim().toLowerCase();
+  return existing.some((c) => c.clientId !== selfId && c.name.toLowerCase() === n);
+}
 export const K8S_NAME_RE = /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/;
 export const MAX_AUDIENCES = 10;
 export const MAX_ALLOWED_USERS = 100;

@@ -29,6 +29,14 @@ test('root CA, subordinate CA, issue with a generated key, revoke', async ({ pag
   drawer = page.getByRole('dialog').filter({ hasText: 'Live Issuing CA' });
   await expect(drawer.getByRole('button', { name: 'Issue from this CA' })).toBeVisible();
   await expect(drawer.getByRole('button', { name: 'New subordinate' })).toHaveCount(0);
+  // The path length constraint shows in the drawer and the CA tree.
+  await expect(drawer.getByTestId('ca-pathlen')).toHaveText(/^0 — issues end-entity certificates only/);
+  const tree = page.getByRole('region', { name: 'CA hierarchy' });
+  await expect(tree.getByRole('button', { name: /Live Issuing CA/ })).toContainText('pathLen: 0');
+  await expect(tree.getByRole('button', { name: /Live Root CA/ })).toContainText('pathLen: unlimited');
+  const { certificates } = await (await page.request.get('/v1/certificates')).json();
+  const issuing = certificates.find((c: { subject: string }) => c.subject.includes('Live Issuing CA'));
+  expect(issuing).toMatchObject({ isCA: true, pathLen: 0 });
   await checkA11y(page);
   await drawer.getByRole('button', { name: 'Issue from this CA' }).click();
 
@@ -103,6 +111,27 @@ test('ACME server: issuance policy and an EAB key shown once', async ({ page, ex
   await expect(page.getByRole('row', { name: /live cert-manager.*Unused/ })).toBeVisible();
   const keys = await (await page.request.get('/v1/certificates/acme/eab')).json();
   expect(keys.keys[0]).not.toHaveProperty('hmacKey');
+});
+
+// Let's Encrypt issuance is asynchronous: the request returns an order to
+// poll. (Nothing here reaches a real ACME server.)
+test("Let's Encrypt order endpoints answer without holding the request", async ({ page }) => {
+  await signIn(page, ORG.editor);
+  const post = (data: unknown) => page.request.post('/v1/certificates/letsencrypt/request', { data, headers: { 'X-Citadel-Request': '1' } });
+  const wildcard = await post({ domains: '*.live.example.com' });
+  expect(wildcard.status()).toBe(400);
+  expect((await wildcard.json()).message).toMatch(/DNS-01/);
+  expect((await post({ domains: ' ' })).status()).toBe(400);
+  const missing = await page.request.get('/v1/certificates/letsencrypt/orders?id=does-not-exist');
+  expect(missing.status()).toBe(404);
+  const noId = await page.request.post('/v1/certificates/letsencrypt/dns/complete', { data: { orderId: 'nope' }, headers: { 'X-Citadel-Request': '1' } });
+  expect(noId.status()).toBe(404);
+
+  // The console checks the form before starting an order.
+  await open(page, '/certificates?tab=letsencrypt');
+  await page.getByLabel('Domains').fill('*.live.example.com');
+  await page.getByRole('button', { name: 'Request certificate' }).click();
+  await expect(page.getByText(/Wildcards need DNS-01/)).toBeVisible();
 });
 
 test('viewer sees the ACME policy read-only', async ({ page }) => {

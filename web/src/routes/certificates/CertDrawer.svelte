@@ -9,7 +9,7 @@
   import Icon from '#lib/components/Icon.svelte';
   import { api, errorMessage } from '#lib/api.ts';
   import { certApi, type CertRow, type CertificateDetail } from './api';
-  import { certStatus, cnOf, fmtDateTime, keyAlgLabel, titleCase, downloadText, safeFileName, isRevoked, firstDomain } from './certs';
+  import { certStatus, cnOf, fmtDateTime, keyAlgLabel, titleCase, downloadText, safeFileName, isRevoked, firstDomain, pathLenDescription } from './certs';
 
   let {
     open = $bindable(false),
@@ -194,6 +194,10 @@
             {#if detail.signatureAlgorithm}
               <dt>Signature</dt>
               <dd class="mono">{detail.signatureAlgorithm}</dd>
+            {/if}
+            {#if isCA}
+              <dt>Path length</dt>
+              <dd data-testid="ca-pathlen">{pathLenDescription(detail.pathLen)}</dd>
             {/if}
             {#if detail.template}
               <dt>Template</dt>

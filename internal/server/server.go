@@ -54,6 +54,14 @@ type Server struct {
 
 	audit auditRuntime
 	obs   observabilityRuntime
+
+	// testLEIssue / testLEComplete replace the Let's Encrypt issuance steps
+	// (tests).
+	testLEIssue    leIssueFunc
+	testLEComplete leCompleteFunc
+
+	// sharedLimitOverrides replaces shared rate limits by name (tests).
+	sharedLimitOverrides map[string]sharedLimit
 }
 
 // secretsSvc returns the shared protocol-free secrets service, lazily binding
@@ -115,6 +123,7 @@ func New(ctx context.Context, cfg config.Config, st store.Store, webFS fs.FS) (*
 	s.jobs.Every("console-session-purge", 10*time.Minute, s.purgeExpiredSessions)
 	s.jobs.Every("sts-session-purge", 15*time.Minute, s.purgeExpiredSTSSessions)
 	s.jobs.Every("secrets-purge", secretsPurgeInterval, s.purgeExpiredSecretsJob)
+	s.jobs.Every("rate-limit-purge", 5*time.Minute, s.purgeSharedLimitsJob)
 	s.startAuditStreamJob()
 	return s, nil
 }
@@ -215,6 +224,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/certificates/letsencrypt/request", s.handleV1RequestLECert)
 	mux.HandleFunc("POST /v1/certificates/letsencrypt/dns/begin", s.handleV1BeginLEDNSOrder)
 	mux.HandleFunc("POST /v1/certificates/letsencrypt/dns/complete", s.handleV1CompleteLEDNSOrder)
+	mux.HandleFunc("GET /v1/certificates/letsencrypt/orders", s.handleV1GetLEOrder)
 	mux.HandleFunc("GET /v1/audit", s.handleV1ListAudit)
 	s.registerAuditRoutes(mux)
 	mux.HandleFunc("GET /v1/change-requests", s.handleV1ListChangeRequests)

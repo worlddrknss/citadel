@@ -16,11 +16,12 @@
   import InlineValue from './InlineValue.svelte';
   import ParamPanel from './ParamPanel.svelte';
   import ParamForm from './ParamForm.svelte';
-  import { params, TYPES, TYPE_TONE, segments, prefixOf, leaf, fmtRelative, fmtDateTime, type Param } from './api';
+  import { params, TYPES, TYPE_TONE, segments, prefixOf, leaf, fmtRelative, fmtDateTime, DEFAULT_LIMITS, type Param, type ParamLimits } from './api';
 
   const canEdit = $derived(session.can('editor'));
 
   let all = $state<Param[]>([]);
+  let limits = $state<ParamLimits>(DEFAULT_LIMITS);
   let loading = $state(true);
   let loadError = $state('');
   let kmsKeys = $state<KMSKey[]>([]);
@@ -60,7 +61,9 @@
   async function load() {
     loadError = '';
     try {
-      all = (await api.parameters()).parameters as Param[];
+      const res = await api.parameters();
+      all = res.parameters as Param[];
+      if (res.limits) limits = res.limits;
     } catch (e) {
       loadError = errorMessage(e);
     } finally {
@@ -364,7 +367,7 @@
   {/if}
 </div>
 
-<ParamForm bind:open={formOpen} {editing} {prefix} {kmsKeys} onsaved={saved} />
+<ParamForm bind:open={formOpen} {editing} {prefix} {kmsKeys} {limits} onsaved={saved} />
 
 <style>
   .layout {

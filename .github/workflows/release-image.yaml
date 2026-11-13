@@ -13,8 +13,23 @@ permissions:
   attestations: write
 
 jobs:
+  # The Helm chart's appVersion is the default image tag, so a release whose
+  # chart still names the previous version would install the old image.
+  # Fails the release (nothing is built or pushed) until Chart.yaml is bumped
+  # in the release pull request; this workflow never commits to main.
+  chart-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Chart appVersion matches the tag
+        run: scripts/check-chart-version.sh "$GITHUB_REF_NAME"
+
   build-and-push:
     runs-on: ubuntu-latest
+    needs: chart-version
 
     steps:
       - name: Checkout

@@ -50,7 +50,7 @@ their session token), or the static pair below.
 |---|---|---|
 | `KMS_UI_USERS_JSON` **secret** | — | Console users defined by configuration: a JSON array of `{"username","passwordHash" or "password","role","displayName","accounts"}`. Prefer creating users in the console. |
 | `KMS_UI_USERNAME`, `KMS_UI_PASSWORD` **secret**, `KMS_UI_ROLE`, `KMS_UI_DISPLAY_NAME`, `KMS_UI_ACCOUNTS` | `admin`, —, `admin`, `Admin`, — | A single configured user (used when `KMS_UI_USERS_JSON` is unset). |
-| `KMS_BOOTSTRAP_TOKEN` **secret** | generated | One-time token for first-run setup (at least 16 characters). With PostgreSQL and no console users, Citadel starts in bootstrap mode and asks for this token to create the first organization and admin. When unset, each replica generates its own and logs it, so set it for multi-replica first runs. |
+| `KMS_BOOTSTRAP_TOKEN` **secret** | generated | One-time token for first-run setup (at least 16 characters). With PostgreSQL and no console users, Citadel starts in bootstrap mode and asks for this token to create the first organization and admin. When unset, the first replica to start generates one and logs it; only its SHA-256 is stored in the database, so every replica accepts it and setup consumes it once. The other replicas log that a token was already issued (look in the first replica's log, or set this variable). An unused generated token expires after 24 hours and the next replica to start issues a new one. |
 | `KMS_UI_SECURE_COOKIES` | `true` | Mark the session cookie `Secure`. Only set `false` if browsers reach the console over plain HTTP outside development. |
 | `KMS_UI_SESSION_IDLE_TTL` | `30m` | Sign out after this much inactivity. Organization settings can override it. |
 | `KMS_UI_SESSION_MAX_TTL` | `12h` | Maximum session length. Organization settings can override it. |
@@ -61,6 +61,53 @@ their session token), or the static pair below.
 |---|---|---|
 | `KMS_WORKLOAD_K8S_REVIEWER_TOKEN_FILE` | in-cluster token | File with the bearer token Citadel uses for the Kubernetes TokenReview API, re-read on every use. Defaults to the pod's service-account token when running in Kubernetes. The service account needs the `system:auth-delegator` ClusterRole. |
 | `KMS_WORKLOAD_K8S_REVIEWER_TOKEN` **secret** | — | Static alternative to the token file. Don't set both. |
+
+## Rate limits
+
+Rate limits have no settings. Each replica keeps token buckets in memory
+(per client IP for sign-in, first-run setup, SSO and the workload token
+endpoint; also per username for sign-in and per client ID for workload
+tokens), with a lockout after repeated failed sign-ins.
+
+With PostgreSQL the same endpoints are also limited **deployment-wide**, so
+adding replicas doesn't multiply the limits:
+
+| Limiter | Key | Limit per window |
+|---|---|---|
+| Sign-in | client IP | 40 per minute |
+| Sign-in | username (any case) | 20 per minute |
+| First-run setup | client IP | 10 per 5 minutes |
+| SSO sign-in start | client IP | 90 per minute |
+| Workload token | client IP | 90 per minute |
+| Workload token | client ID | 360 per minute |
+
+Each limit is at least what one replica's bucket allows over the same window,
+so a single replica behaves as it did before. Design:
+
+- **Fixed windows in one UPSERT.** Each counted request increments a row
+  keyed by limiter, key and window (`rate_limit_counters`) with
+  `INSERT … ON CONFLICT DO UPDATE … RETURNING`; every counter a request needs
+  (for example IP and username) goes in the same statement, so a request
+  costs one round trip. Windows are aligned to the database clock, so
+  replicas with skewed clocks share them.
+- **Local first.** The in-memory bucket runs first and refuses floods without
+  touching the database; only requests it lets through are counted.
+- **No hot row.** Rows are per key and window: requests contend only with
+  requests for the same IP, username or client in the same window, never on a
+  global counter. Rows are locked in a fixed order, so concurrent requests
+  can't deadlock.
+- **Bounded cost.** The table is `UNLOGGED` (no WAL; counters reset after a
+  crash or failover, which only relaxes limits briefly), keys are stored as a
+  SHA-256 prefix (no IPs or usernames in clear), and a job deletes windows
+  older than an hour every 5 minutes.
+- **Fail open.** The counter query has a 250 ms timeout. If the database is
+  slow or failing the request is allowed (and a warning logged at most once a
+  minute); the local buckets still apply.
+- Fixed windows can let up to twice a limit through around a window
+  boundary. The sign-in lockout after repeated failures stays per replica;
+  the shared per-username limit bounds guesses across replicas.
+
+The memory store (a single process) uses the in-memory buckets only.
 
 ## Logging
 

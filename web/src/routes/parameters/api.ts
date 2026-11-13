@@ -63,15 +63,38 @@ export const parentPath = (name: string) => {
   return i > 0 ? name.slice(0, i) : '/';
 };
 
-export function validateName(full: string): string {
+/**
+ * Name limits from GET /v1/parameters. AWS limits the full ARN
+ * (arn:aws:ssm:<region>:<account>:parameter/<name>) to 1011 characters, so the
+ * name's own limit depends on the account; the fallback assumes a typical
+ * 44-character prefix.
+ */
+export type ParamLimits = { nameMaxLength: number; maxHierarchyLevels: number };
+export const DEFAULT_LIMITS: ParamLimits = { nameMaxLength: 1011 - 44, maxHierarchyLevels: 15 };
+
+/** Same messages as the server (internal/server/parameter_names.go). */
+export const NAME_MESSAGES = {
+  reserved: 'Parameter names can\'t begin with "aws" or "ssm" (in any case).',
+  hierarchy: 'A parameter hierarchy can have a maximum of 15 levels.',
+  tooLong: (n: number) =>
+    `Parameter names can be at most ${n} characters (AWS limits the full ARN, arn:aws:ssm:<region>:<account>:parameter/<name>, to 1011).`
+};
+
+/**
+ * Checks a full name (with leading slash) against the AWS rules the server
+ * enforces when creating a parameter. "aws"/"ssm" are reserved at the start of
+ * the name, which for a hierarchy is its first level.
+ */
+export function validateName(full: string, limits: ParamLimits = DEFAULT_LIMITS): string {
   if (!full || full === '/') return 'Enter a name.';
-  if (full.length > 1011) return 'Names can be at most 1011 characters.';
   if (!/^[A-Za-z0-9_.\-/]+$/.test(full)) return 'Use letters, numbers, and _ . - / only.';
   if (full.includes('//')) return "Names can't contain empty path segments (//).";
   if (full.endsWith('/')) return "Names can't end with /.";
-  const lower = full.replace(/^\//, '').toLowerCase();
-  if (lower.startsWith('aws') || lower.startsWith('ssm')) return 'Names can\'t start with "aws" or "ssm".';
-  if (segments(full).length > 15) return 'A hierarchy can be at most 15 levels deep.';
+  const canonical = full.startsWith('/') ? full : `/${full}`;
+  const lower = canonical.slice(1).toLowerCase();
+  if (lower.startsWith('aws') || lower.startsWith('ssm')) return NAME_MESSAGES.reserved;
+  if (segments(canonical).length > limits.maxHierarchyLevels) return NAME_MESSAGES.hierarchy;
+  if (canonical.length > limits.nameMaxLength) return NAME_MESSAGES.tooLong(limits.nameMaxLength);
   return '';
 }
 

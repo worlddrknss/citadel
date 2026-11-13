@@ -33,6 +33,15 @@ test('audit log shows real actors, verifies the chain and exports CSV', async ({
   await page.getByRole('button', { name: 'Verify now' }).click();
   await expect(page.getByRole('status').filter({ hasText: /Chain verified through event #\d+/ }).first()).toBeVisible();
 
+  // The platform admin can re-walk the whole chain; a 2.0-only chain has no
+  // pre-2.0 note.
+  const fullCheck = page.waitForResponse((r) => r.url().includes('/v1/audit/verify?full=true') && r.request().method() === 'POST');
+  await page.getByRole('button', { name: 'Full re-check' }).click();
+  const fullBody = await (await fullCheck).json();
+  expect(fullBody).toMatchObject({ status: 'verified', legacyLinkBreaks: 0, legacyEvents: 0 });
+  await expect(page.getByText(/Full re-check: chain verified through event #\d+/)).toBeVisible();
+  await expect(page.getByTestId('legacy-break-note')).toHaveCount(0);
+
   // Export CSV.
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export matching events' }).click();
@@ -49,4 +58,13 @@ test('audit log shows real actors, verifies the chain and exports CSV', async ({
       return (await r.json()).events?.length ?? 0;
     })
     .toBeGreaterThan(0);
+});
+
+test('users who are not platform admins get no full re-check', async ({ page }) => {
+  await signIn(page, ORG.editor);
+  await open(page, '/audit');
+  await expect(page.getByRole('button', { name: 'Verify now' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Full re-check' })).toHaveCount(0);
+  const res = await page.request.post('/v1/audit/verify?full=true', { headers: { 'X-Citadel-Request': '1' } });
+  expect(res.status()).toBe(403);
 });

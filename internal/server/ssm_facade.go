@@ -244,8 +244,13 @@ func (s *Server) handleSSMPutParameter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name, err := normalizeParameterName(ssmNameFromInput(req.Name))
+	if err == nil {
+		err = s.validateNewParameterName(r.Context(), name)
+	}
 	if err != nil {
-		s.ssmValidation(w, r, action, err.Error())
+		typ, msg := ssmNameErrorParts(err)
+		writeAWSJSONError(w, http.StatusBadRequest, typ, msg)
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: typ, AuditOrigin: s.auditOrigin(r)})
 		return
 	}
 	typ := req.Type

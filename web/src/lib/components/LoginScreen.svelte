@@ -251,7 +251,7 @@
               <label class="field">
                 <span class="field-label">Setup token</span>
                 <input class="input mono" bind:value={bootstrapToken} required autocomplete="off" spellcheck="false" aria-describedby="token-hint" />
-                <span class="field-hint" id="token-hint">One-time token printed in the server log at startup (or the value of KMS_BOOTSTRAP_TOKEN). It proves you run this server.</span>
+                <span class="field-hint" id="token-hint">One-time token printed in the log of the first replica to start (or the value of KMS_BOOTSTRAP_TOKEN). Any replica accepts it. It proves you run this server.</span>
               </label>
               <label class="field">
                 <span class="field-label">Organization name</span>

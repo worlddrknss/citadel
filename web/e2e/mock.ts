@@ -147,7 +147,8 @@ const parameters = [
 
 const certificates = [
   // Real list rows: source is pca-ca, pca-cert or lets-encrypt; template is server|client.
-  { source: 'pca-ca', id: 'ca-root-1', subject: 'CN=Acme Root CA', commonName: 'Acme Root CA', status: 'ACTIVE', notBefore: ago(100 * DAY), notAfter: ahead(3000 * DAY), caType: 'ROOT', serial: '01', keyAlgorithm: 'EC_secp384r1', expiringSoon: false },
+  { source: 'pca-ca', id: 'ca-root-1', subject: 'CN=Acme Root CA', commonName: 'Acme Root CA', status: 'ACTIVE', notBefore: ago(100 * DAY), notAfter: ahead(3000 * DAY), caType: 'ROOT', serial: '01', keyAlgorithm: 'EC_secp384r1', expiringSoon: false, isCA: true },
+  { source: 'pca-ca', id: 'ca-sub-1', subject: 'CN=Acme Issuing CA', commonName: 'Acme Issuing CA', status: 'ACTIVE', notBefore: ago(90 * DAY), notAfter: ahead(1500 * DAY), caType: 'SUBORDINATE', parentCaId: 'ca-root-1', serial: '04', keyAlgorithm: 'EC_prime256v1', expiringSoon: false, isCA: true, pathLen: 0 },
   { source: 'pca-cert', id: 'cert-api-1', subject: 'api.acme.test', commonName: 'api.acme.test', status: 'ISSUED', notBefore: ago(80 * DAY), notAfter: ahead(10 * DAY), issuerCaId: 'ca-root-1', serial: '02', keyAlgorithm: 'EC_prime256v1', template: 'server', expiringSoon: true },
   { source: 'lets-encrypt', id: 'cert-www-1', subject: 'www.acme.test', commonName: 'www.acme.test', status: 'ISSUED', notBefore: ago(20 * DAY), notAfter: ahead(70 * DAY), serial: '03', keyAlgorithm: 'EC_prime256v1', expiringSoon: false }
 ];

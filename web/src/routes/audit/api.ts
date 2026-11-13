@@ -58,6 +58,24 @@ export interface ChainStatus {
   checkedAt?: string;
   brokenAt?: number;
   totalEvents?: number;
+  /** Pre-2.0 (hash version 1) events in the chain. */
+  legacyEvents?: number;
+  /**
+   * Links among pre-2.0 events that don't connect. Citadel 1.x appended
+   * without locking the chain, so concurrent requests could link to the same
+   * event; these don't make the chain broken.
+   */
+  legacyLinkBreaks?: number;
+  /** Chain position and event ID of the first such link. */
+  firstLegacyBreakSeq?: number;
+  firstLegacyBreakId?: number;
+}
+
+/** The amber note shown when pre-2.0 history has links that don't connect. */
+export function legacyBreakNote(c: Pick<ChainStatus, 'legacyLinkBreaks'> | null | undefined): string {
+  const n = c?.legacyLinkBreaks ?? 0;
+  if (n <= 0) return '';
+  return `${n.toLocaleString()} ${n === 1 ? "link in pre-2.0 history doesn't" : "links in pre-2.0 history don't"} connect. This is consistent with concurrent writes in Citadel 1.x, which didn't lock the chain; events from 2.0 on are fully verified.`;
 }
 
 export interface StreamConfig {
@@ -110,6 +128,11 @@ export const auditApi = {
   chainStatus: () => req<ChainStatus>('/v1/audit/verify'),
   /** POST /v1/audit/verify — viewer. Re-walks the chain now and returns the result. */
   verify: () => req<ChainStatus>('/v1/audit/verify', { method: 'POST' }),
+  /**
+   * POST /v1/audit/verify?full=true — platform admins. Re-walks the whole
+   * chain from the first event instead of continuing from the last checkpoint.
+   */
+  verifyFull: () => req<ChainStatus>('/v1/audit/verify?full=true', { method: 'POST' }),
   /**
    * GET /v1/audit/export?format=csv|json&<filters> — viewer; audited as
    * citadel.ExportAudit. Falls back to exporting the legacy listing here.

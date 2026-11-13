@@ -77,6 +77,11 @@ func (s *Store) Bootstrap(ctx context.Context, req store.BootstrapRequest) (acco
 		err = store.ErrAlreadyBootstrapped
 		return "", err
 	}
+	if req.BootstrapTokenHash != "" {
+		if err = consumeBootstrapToken(ctx, tx, req.BootstrapTokenHash); err != nil {
+			return "", err
+		}
+	}
 	var exists bool
 	if err = tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM ui_accounts WHERE account = $1)`, accountName).Scan(&exists); err != nil {
 		return "", err
