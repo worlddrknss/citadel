@@ -5815,10 +5815,17 @@ paths:
           - name: result
             in: query
             required: false
-            description: Outcome filter
+            description: Outcome filter (`pending` selects write-ahead attempts)
             schema:
               type: string
-              enum: [success, denied, error]
+              enum: [success, denied, error, pending]
+          - name: correlation
+            in: query
+            required: false
+            description: Exact correlation ID, matching a write-ahead attempt and its outcomes
+            schema:
+              type: string
+              maxLength: 64
           - name: limit
             in: query
             required: false
@@ -5961,10 +5968,17 @@ paths:
           - name: result
             in: query
             required: false
-            description: Outcome filter
+            description: Outcome filter (`pending` selects write-ahead attempts)
             schema:
               type: string
-              enum: [success, denied, error]
+              enum: [success, denied, error, pending]
+          - name: correlation
+            in: query
+            required: false
+            description: Exact correlation ID, matching a write-ahead attempt and its outcomes
+            schema:
+              type: string
+              maxLength: 64
         responses:
           "200":
             description: The export file
@@ -5975,7 +5989,8 @@ paths:
                   description: |
                     Header row id, createdAt, actor, actorType, actorDisplayName,
                     accessKeyId, action, resource, keyId, result, errorType,
-                    sourceIp, userAgent, chainSeq, prevHash, hash; CRLF line ends.
+                    sourceIp, userAgent, chainSeq, prevHash, hash, correlationId; CRLF
+                    line ends.
               application/json:
                 schema:
                   type: array
@@ -8971,7 +8986,11 @@ components:
           type: string
         result:
           type: string
-          enum: [success, denied, error]
+          enum: [success, denied, error, pending]
+          description: |
+            `pending` marks a write-ahead attempt, appended before a state
+            change runs; its outcome is a later event with the same
+            `correlationId`.
         errorType:
           type: string
         sourceIp:
@@ -8987,6 +9006,9 @@ components:
           type: string
         hashValid:
           type: boolean
+        correlationId:
+          type: string
+          description: Links a write-ahead attempt to its outcome events
     AuditEventPage:
       type: object
       required: [events, total, limit, offset]
