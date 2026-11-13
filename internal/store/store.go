@@ -48,6 +48,7 @@ type Store interface {
 	PKILifecycleStore
 	AgentStore
 	AgentAccessStore
+	AgentAnomalyStore
 	NotificationStore
 }
 
