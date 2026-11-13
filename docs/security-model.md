@@ -62,8 +62,10 @@ of running. CI runs the full test suite in that mode.
   their owner's role in the key's account, never more, and never with
   platform-admin rights.
 - **First run:** with no users, a PostgreSQL-backed instance only accepts the
-  bootstrap call, which needs a one-time token printed in the server log (or
-  set with `KMS_BOOTSTRAP_TOKEN`).
+  bootstrap call, which needs a one-time token: `KMS_BOOTSTRAP_TOKEN`, or one
+  the first replica generates and prints in its log. Only the generated
+  token's SHA-256 is stored, it expires after 24 hours unused, and the
+  bootstrap transaction consumes it, so it works once across all replicas.
 
 ## Authorization and tenancy
 
@@ -148,4 +150,3 @@ multicast addresses and doesn't follow redirects.
 - Rate limits are per replica, not shared across replicas.
 - Rotation for Secrets Manager secrets records the schedule but runs no
   rotation function; Citadel shows when rotation is due.
-- A generated bootstrap token is valid only on the replica that printed it.

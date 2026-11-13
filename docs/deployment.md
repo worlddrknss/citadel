@@ -122,7 +122,7 @@ only believes `X-Forwarded-For` / `X-Real-IP` from addresses listed in
 | `KMS_LISTEN_ADDR` | no | no | Default `:8080`. |
 | `KMS_TLS_CERT_FILE`, `KMS_TLS_KEY_FILE` | no | key file | TLS in the pod. |
 | `KMS_UI_USERS_JSON` | no | yes | Console users defined by configuration. Otherwise create them in the console after bootstrap. |
-| `KMS_BOOTSTRAP_TOKEN` | no | yes | One-time first-run setup token (at least 16 characters). Generated and logged when unset. |
+| `KMS_BOOTSTRAP_TOKEN` | no | yes | One-time first-run setup token (at least 16 characters). When unset, the first replica generates one, logs it and stores its hash so every replica accepts it. |
 | `KMS_ACCESS_KEY_ID`, `KMS_SECRET_ACCESS_KEY` | no | secret key | Static AWS-style credentials (secret at least 20 characters). Prefer per-user access keys from the console. |
 | `KMS_AWS_REGION`, `KMS_AWS_ACCOUNT_ID` | no | no | Identity used in ARNs. |
 | `KMS_POLICY_DEFAULT_DENY` | no | no | Deny requests no policy allows. |
@@ -137,10 +137,12 @@ With PostgreSQL and no console users, Citadel starts in **bootstrap mode**:
 its API is closed except for first-run setup, server info and login. Open
 `<KMS_PUBLIC_URL>/app/`, enter the bootstrap token, and create the
 organization, first account and platform admin. The token is the value of
-`KMS_BOOTSTRAP_TOKEN` if you set one; otherwise the server generates one and
-prints it in its log. A generated token is valid only on the replica that
-printed it, so for a multi-replica first run set `KMS_BOOTSTRAP_TOKEN` (or run
-setup with one replica):
+`KMS_BOOTSTRAP_TOKEN` if you set one. Otherwise the first replica to start
+generates one, stores its SHA-256 in the database and prints the token in its
+log; the other replicas log that a token was already issued. Every replica
+accepts it, and it works once (setup consumes it). An unused generated token
+expires after 24 hours, and the next replica to start then issues and logs a
+new one. To find it:
 
 ```bash
 kubectl -n citadel logs -l app.kubernetes.io/name=citadel --tail=-1 | grep -i bootstrap

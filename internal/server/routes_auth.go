@@ -152,9 +152,10 @@ func (s *Server) handleV1Bootstrap(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
-	if !s.checkBootstrapToken(req.BootstrapToken) {
+	tokenOK, tokenHash := s.checkBootstrapToken(r.Context(), req.BootstrapToken)
+	if !tokenOK {
 		s.recordAudit(r.Context(), store.AuditEvent{Action: "citadel.Bootstrap", Result: "denied", ErrorType: "InvalidBootstrapToken", AuditOrigin: s.userAuditOrigin(r, "anonymous", "")})
-		writeNativeError(w, http.StatusUnauthorized, "invalid_bootstrap_token", "the bootstrap token is missing or wrong; it is printed in the server log at startup")
+		writeNativeError(w, http.StatusUnauthorized, "invalid_bootstrap_token", bootstrapTokenHelp)
 		return
 	}
 	org := strings.TrimSpace(req.OrganizationName)
@@ -182,9 +183,16 @@ func (s *Server) handleV1Bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	accountID, err := s.store.Bootstrap(r.Context(), store.BootstrapRequest{
 		OrganizationName: org, AccountName: accountName, Username: username, DisplayName: username, PasswordHash: hash,
+		BootstrapTokenHash: tokenHash,
 	})
 	if errors.Is(err, store.ErrAlreadyBootstrapped) {
 		writeNativeError(w, http.StatusConflict, "already_bootstrapped", "Citadel is already set up")
+		return
+	}
+	if errors.Is(err, store.ErrBootstrapTokenInvalid) {
+		// Another replica consumed it between the check and the transaction.
+		s.recordAudit(r.Context(), store.AuditEvent{Action: "citadel.Bootstrap", Result: "denied", ErrorType: "InvalidBootstrapToken", AuditOrigin: s.userAuditOrigin(r, "anonymous", "")})
+		writeNativeError(w, http.StatusUnauthorized, "invalid_bootstrap_token", bootstrapTokenHelp)
 		return
 	}
 	if err != nil {

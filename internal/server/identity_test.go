@@ -49,7 +49,7 @@ func TestBootstrapTokenRequiredAndConsumed(t *testing.T) {
 	}
 	body["bootstrapToken"] = testBootstrapToken
 	wantStatus(t, doReq(t, h, "POST", "/v1/bootstrap", body, nil), http.StatusCreated)
-	if s.checkBootstrapToken(testBootstrapToken) {
+	if ok, _ := s.checkBootstrapToken(context.Background(), testBootstrapToken); ok {
 		t.Fatal("bootstrap token still valid after setup")
 	}
 }
@@ -61,11 +61,18 @@ func TestBootstrapTokenGeneratedWhenUnset(t *testing.T) {
 	if len(tok) != 32 || s.initBootstrapToken() != tok {
 		t.Fatalf("generated token %q unstable or wrong length", tok)
 	}
-	if s.checkBootstrapToken("") || s.checkBootstrapToken(tok+"x") || !s.checkBootstrapToken(tok) {
+	check := func(p string) bool {
+		ok, hash := s.checkBootstrapToken(context.Background(), p)
+		if hash != "" {
+			t.Fatal("memory store token reported as shared")
+		}
+		return ok
+	}
+	if check("") || check(tok+"x") || !check(tok) {
 		t.Fatal("token comparison wrong")
 	}
 	s.consumeBootstrapToken()
-	if s.initBootstrapToken() != "" || s.checkBootstrapToken(tok) {
+	if s.initBootstrapToken() != "" || check(tok) {
 		t.Fatal("consumed token must not come back")
 	}
 }

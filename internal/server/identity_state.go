@@ -3,15 +3,12 @@ package server
 import (
 	"crypto/hkdf"
 	"crypto/sha256"
-	"crypto/subtle"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/worlddrknss/citadel/internal/cryptoutil"
 	"github.com/worlddrknss/citadel/internal/oidclogin"
 	"github.com/worlddrknss/citadel/internal/ratelimit"
 	"github.com/worlddrknss/citadel/internal/workloadid"
@@ -22,10 +19,12 @@ import (
 // beside the Server (keyed by its pointer) rather than in it so the domain
 // stays in its own files.
 type identityState struct {
-	// bootstrap token (see bootstrapTokenFor)
+	// bootstrap token (see bootstrap_token.go). bootShared: the token lives
+	// in the database (any replica's generated token is accepted).
 	bootMu       sync.Mutex
 	bootToken    string
 	bootConsumed bool
+	bootShared   bool
 
 	// SSO relying parties, one per provider version.
 	rpMu  sync.Mutex
@@ -108,43 +107,3 @@ func isLoopbackHTTP(raw string) bool {
 	return h == "localhost" || h == "127.0.0.1" || h == "::1"
 }
 
-// ---- first-run bootstrap token ---------------------------------------------
-
-// initBootstrapToken readies the one-time bootstrap token when setup is
-// required: KMS_BOOTSTRAP_TOKEN, or a random token logged once. Each replica
-// generates its own token unless KMS_BOOTSTRAP_TOKEN is set.
-func (s *Server) initBootstrapToken() string {
-	st := s.identity()
-	st.bootMu.Lock()
-	defer st.bootMu.Unlock()
-	if st.bootToken != "" || st.bootConsumed {
-		return st.bootToken
-	}
-	if s.cfg.BootstrapToken != "" {
-		st.bootToken = s.cfg.BootstrapToken
-		slog.Info("bootstrap setup requires the token from KMS_BOOTSTRAP_TOKEN")
-		return st.bootToken
-	}
-	st.bootToken = cryptoutil.RandomHex(16)
-	slog.Warn("bootstrap token (one-time, needed to complete first-run setup)", "bootstrapToken", st.bootToken)
-	return st.bootToken
-}
-
-// checkBootstrapToken compares presented with the bootstrap token in
-// constant time.
-func (s *Server) checkBootstrapToken(presented string) bool {
-	want := s.initBootstrapToken()
-	presented = strings.TrimSpace(presented)
-	if want == "" || presented == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(presented), []byte(want)) == 1
-}
-
-// consumeBootstrapToken invalidates the bootstrap token after setup.
-func (s *Server) consumeBootstrapToken() {
-	st := s.identity()
-	st.bootMu.Lock()
-	st.bootToken, st.bootConsumed = "", true
-	st.bootMu.Unlock()
-}

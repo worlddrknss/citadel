@@ -13,6 +13,10 @@ var (
 	// ErrAlreadyBootstrapped is returned by Bootstrap once any console user
 	// exists.
 	ErrAlreadyBootstrapped = errors.New("already bootstrapped")
+	// ErrBootstrapTokenInvalid is returned by Bootstrap when
+	// BootstrapTokenHash is set and doesn't match an unconsumed, unexpired
+	// stored token (another replica consumed it first, or it expired).
+	ErrBootstrapTokenInvalid = errors.New("bootstrap token invalid or already used")
 )
 
 // Console sign-in methods recorded on a session.
@@ -96,6 +100,11 @@ type BootstrapRequest struct {
 	Username         string
 	DisplayName      string
 	PasswordHash     string
+	// BootstrapTokenHash, when set, is the SHA-256 (hex) of the generated
+	// bootstrap token the caller presented. A backend that stores generated
+	// tokens (PostgreSQL) consumes it in the same transaction, so the token
+	// works once across every replica.
+	BootstrapTokenHash string
 }
 
 // AuthStore persists console authentication state: single-user lookups,

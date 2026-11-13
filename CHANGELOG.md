@@ -26,6 +26,12 @@ All notable changes to Citadel are documented here. The format follows
 
 ### Fixed
 
+- A generated bootstrap token (no `KMS_BOOTSTRAP_TOKEN`) worked only on the
+  replica that printed it. The first replica to start now stores its SHA-256
+  in the database and logs the token; the others log that one was already
+  issued and where to find it. Any replica accepts it, the bootstrap
+  transaction consumes it (once, atomically), and an unused token expires
+  after 24 hours, after which the next replica to start issues a new one.
 - Audit chains upgraded from 1.x showed as "broken" at the first pre-2.0
   event whose `prev_hash` didn't connect, which 1.x's unlocked appends
   produced under concurrent requests. Such links between pre-2.0 (hash
