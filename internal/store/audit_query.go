@@ -129,16 +129,29 @@ type AuditChainSource interface {
 	AuditEventCount(ctx context.Context, accountID string) (int64, error)
 	LoadAuditVerification(ctx context.Context, accountID string) (AuditVerification, bool, error)
 	SaveAuditVerification(ctx context.Context, v AuditVerification) error
+	// GetAuditAnchor returns the account's pruning anchor, if it was ever
+	// pruned (see AuditRetentionStore).
+	GetAuditAnchor(ctx context.Context, accountID string) (AuditAnchor, bool, error)
 }
 
 // auditVerifyBatch is how many events one verification round trip reads.
 const auditVerifyBatch = 1000
+
+// auditVerifyResyncs bounds how often one walk restarts from an anchor that
+// advanced while it ran (a prune on another replica).
+const auditVerifyResyncs = 5
 
 // RunAuditVerification is the backend-independent chain walk behind
 // VerifyAuditChain. Each event must have the next sequence number, carry the
 // previous event's MAC as its PrevHash and (for version-2 rows) a MAC that
 // recomputes under key. The walk ends by checking that the last event is the
 // chain head, which catches a truncated tail.
+//
+// When the account has been pruned the walk starts at its anchor (whose own
+// MAC must verify): the first remaining event must follow the anchor's
+// position and link to its hash. If a prune advances the anchor while the
+// walk runs, the walk continues from the new anchor instead of reporting the
+// rows it removed as missing.
 //
 // One exception: a pre-2.0 (HashVersion 1) event whose PrevHash doesn't match
 // is counted in LegacyLinkBreaks and the walk continues from its own hash
@@ -167,10 +180,58 @@ func RunAuditVerification(ctx context.Context, src AuditChainSource, key []byte,
 	if err != nil {
 		return AuditVerification{}, err
 	}
+	if hasHead {
+		res.HeadHash = head.HeadHash
+	}
+	anchor, hasAnchor, err := src.GetAuditAnchor(ctx, accountID)
+	if err != nil {
+		return AuditVerification{}, err
+	}
+	finish := func(broken bool) (AuditVerification, error) {
+		res.Status = AuditChainVerified
+		if broken {
+			res.Status = AuditChainBroken
+		}
+		if err := src.SaveAuditVerification(ctx, res); err != nil {
+			return AuditVerification{}, err
+		}
+		return res, nil
+	}
+	if hasAnchor && !AuditAnchorValid(key, anchor) {
+		// A forged or edited anchor could hide deleted events.
+		res.VerifiedSeq, res.VerifiedID, res.VerifiedHash = 0, 0, ""
+		res.BrokenSeq, res.BrokenID = anchor.ChainSeq, anchor.EventID
+		return finish(true)
+	}
+	// startAt moves the walk to an anchor (the rows up to it are gone).
+	startAt := func(a AuditAnchor) (int64, string) {
+		res.VerifiedSeq, res.VerifiedID, res.VerifiedHash = a.ChainSeq, a.EventID, a.EventHash
+		return a.ChainSeq, a.EventHash
+	}
+	// resync reloads the anchor after a mismatch at position pos: when a
+	// prune moved it to pos or past it, the walk continues from there.
+	resyncs := 0
+	resync := func(pos int64) (int64, string, bool) {
+		if resyncs >= auditVerifyResyncs {
+			return 0, "", false
+		}
+		a, ok, err := src.GetAuditAnchor(ctx, accountID)
+		if err != nil || !ok || !AuditAnchorValid(key, a) || a.ChainSeq < pos || (hasAnchor && a.ChainSeq <= anchor.ChainSeq) {
+			return 0, "", false
+		}
+		resyncs++
+		anchor, hasAnchor = a, true
+		s, h := startAt(a)
+		return s, h, true
+	}
 
 	seq, hash := res.VerifiedSeq, res.VerifiedHash
 	broken := false
-	if seq > 0 {
+	if hasAnchor && seq <= anchor.ChainSeq {
+		// A full walk, a first walk, or a checkpoint that has since been
+		// pruned starts at the anchor (verified above).
+		seq, hash = startAt(anchor)
+	} else if seq > 0 {
 		// Incremental run: re-check the checkpoint event itself so a rewrite
 		// of the last verified row is still caught. (Rows before it are only
 		// re-walked by a full verification.)
@@ -180,14 +241,19 @@ func RunAuditVerification(ctx context.Context, src AuditChainSource, key []byte,
 		}
 		if len(cp) != 1 || cp[0].ChainSeq != seq || cp[0].EventHash != hash ||
 			(cp[0].HashVersion >= AuditHashVersion && !AuditMACValid(key, cp[0])) {
-			broken = true
-			res.BrokenSeq = seq
-			if len(cp) == 1 {
-				res.BrokenID = cp[0].ID
+			if s, h, ok := resync(seq); ok {
+				seq, hash = s, h
+			} else {
+				broken = true
+				res.BrokenSeq = seq
+				if len(cp) == 1 {
+					res.BrokenID = cp[0].ID
+				}
+				res.VerifiedSeq, res.VerifiedID, res.VerifiedHash = 0, 0, ""
 			}
-			res.VerifiedSeq, res.VerifiedID, res.VerifiedHash = 0, 0, ""
 		}
 	}
+walk:
 	for !broken {
 		batch, err := src.AuditChainBatch(ctx, accountID, seq, auditVerifyBatch)
 		if err != nil {
@@ -198,7 +264,7 @@ func RunAuditVerification(ctx context.Context, src AuditChainSource, key []byte,
 			linked := rec.PrevHash == hash
 			if rec.HashVersion >= AuditHashVersion {
 				// 2.0 events: strict linkage (including the first one's link
-				// to the last legacy event) and a valid MAC.
+				// to the last legacy event, or to the anchor) and a valid MAC.
 				ok = ok && linked && AuditMACValid(key, rec)
 			} else if ok {
 				res.LegacyEvents++
@@ -210,6 +276,13 @@ func RunAuditVerification(ctx context.Context, src AuditChainSource, key []byte,
 				}
 			}
 			if !ok {
+				if rec.ChainSeq > seq+1 {
+					// Rows missing: a prune on another replica, or a break.
+					if s, h, rok := resync(seq + 1); rok {
+						seq, hash = s, h
+						continue walk
+					}
+				}
 				res.BrokenID, res.BrokenSeq = rec.ID, rec.ChainSeq
 				broken = true
 				break
@@ -221,9 +294,6 @@ func RunAuditVerification(ctx context.Context, src AuditChainSource, key []byte,
 			break
 		}
 	}
-	if hasHead {
-		res.HeadHash = head.HeadHash
-	}
 	if !broken && hasHead && (head.ChainSeq != seq || head.HeadHash != hash) {
 		// Events after the last one we could read are missing (or the head
 		// was rewritten).
@@ -234,12 +304,5 @@ func RunAuditVerification(ctx context.Context, src AuditChainSource, key []byte,
 		broken = true
 		res.BrokenSeq = seq
 	}
-	res.Status = AuditChainVerified
-	if broken {
-		res.Status = AuditChainBroken
-	}
-	if err := src.SaveAuditVerification(ctx, res); err != nil {
-		return AuditVerification{}, err
-	}
-	return res, nil
+	return finish(broken)
 }

@@ -50,6 +50,7 @@ type Store interface {
 	AgentAccessStore
 	AgentAnomalyStore
 	NotificationStore
+	AuditRetentionStore
 }
 
 // KeyStore persists KMS keys, aliases, key policies and grants.

@@ -20,6 +20,7 @@ type memAuditState struct {
 	streams       map[string]store.AuditStreamConfig
 	outbox        []*memOutboxItem
 	outboxSeq     int64
+	retention     *memRetention
 }
 
 type memOutboxItem struct {
