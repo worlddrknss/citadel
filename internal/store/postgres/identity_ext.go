@@ -321,10 +321,20 @@ subject_format, auth_method, allowed_users_json, api_server, ca_pem, service_acc
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 		c.ClientID, c.AccountID, c.Name, idnJSONList(c.Audiences), c.TokenTTLSeconds, c.SubjectFormat, c.AuthMethod,
 		idnJSONList(c.AllowedUsers), c.APIServer, c.CAPEM, idnJSONList(c.ServiceAccounts), c.ReviewAudience, c.CreatedAt, c.UpdatedAt)
+	if workloadNameViolation(err) {
+		return store.ErrWorkloadClientNameTaken
+	}
 	if idnUniqueViolation(err) {
 		return store.ErrWorkloadClientExists
 	}
 	return err
+}
+
+// workloadNameViolation reports whether err is a violation of the
+// per-account client name index (migration 0900).
+func workloadNameViolation(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "workload_clients_account_name_uniq"
 }
 
 func (s *Store) GetWorkloadClient(ctx context.Context, clientID string) (store.WorkloadClient, error) {
@@ -358,6 +368,9 @@ auth_method=$7, allowed_users_json=$8, api_server=$9, ca_pem=$10, service_accoun
 WHERE client_id=$1 AND account_id=$2`,
 		c.ClientID, c.AccountID, c.Name, idnJSONList(c.Audiences), c.TokenTTLSeconds, c.SubjectFormat, c.AuthMethod,
 		idnJSONList(c.AllowedUsers), c.APIServer, c.CAPEM, idnJSONList(c.ServiceAccounts), c.ReviewAudience, c.UpdatedAt)
+	if workloadNameViolation(err) {
+		return store.ErrWorkloadClientNameTaken
+	}
 	if err != nil {
 		return err
 	}

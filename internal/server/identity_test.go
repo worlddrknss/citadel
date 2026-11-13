@@ -598,6 +598,24 @@ func TestWorkloadClientsCRUD(t *testing.T) {
 	upd["clientId"] = id
 	wantStatus(t, e.do("POST", "/v1/workload-identity/clients/update", upd, e.session("root", e.acctB)), http.StatusNotFound)
 	wantStatus(t, e.do("POST", "/v1/workload-identity/clients/update", upd, alice), http.StatusOK)
+
+	// Names are unique per account (ignoring case): creating or renaming
+	// onto a taken name is a 409 the console can show.
+	dup := accessKeyClient(e, "bob")
+	dup["name"] = strings.ToUpper(upd["name"].(string))
+	rec = e.do("POST", "/v1/workload-identity/clients", dup, alice)
+	wantStatus(t, rec, http.StatusConflict)
+	if body := decode(t, rec); body["error"] != "name_taken" || !strings.Contains(body["message"].(string), "already exists in this account") {
+		t.Fatalf("duplicate name = %v", body)
+	}
+	other := accessKeyClient(e, "bob")
+	other["name"] = "other-client"
+	rec = e.do("POST", "/v1/workload-identity/clients", other, alice)
+	wantStatus(t, rec, http.StatusCreated)
+	other["clientId"] = decode(t, rec)["clientId"]
+	other["name"] = upd["name"]
+	wantStatus(t, e.do("POST", "/v1/workload-identity/clients/update", other, alice), http.StatusConflict)
+
 	wantStatus(t, e.do("DELETE", "/v1/workload-identity/clients?clientId="+id, nil, e.session("root", e.acctB)), http.StatusNotFound)
 	wantStatus(t, e.do("DELETE", "/v1/workload-identity/clients?clientId="+id, nil, alice), http.StatusOK)
 	if !e.audited("citadel.CreateWorkloadClient", "ok") || !e.audited("citadel.UpdateWorkloadClient", "ok") || !e.audited("citadel.DeleteWorkloadClient", "ok") {

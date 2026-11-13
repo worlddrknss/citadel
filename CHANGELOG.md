@@ -20,6 +20,11 @@ All notable changes to Citadel are documented here. The format follows
   levels (SSM answers `HierarchyLevelLimitExceededException`). Names longer
   than 2048 characters are refused by every operation. The console checks the
   same rules with the same messages before submitting.
+- Workload identity client names are unique per account, ignoring case
+  (enforced by a database index). Creating or renaming a client onto a taken
+  name answers 409 `name_taken`, and the console shows it on the name field.
+  Upgrading renames existing duplicates other than the oldest by appending
+  `-` and the end of their client ID; client IDs don't change.
 - The Helm chart's `appVersion` (the default image tag) was still 2.0.0; it
   is now 2.0.2. The release workflow fails before building an image when
   `Chart.yaml` `appVersion` doesn't match the tag being released

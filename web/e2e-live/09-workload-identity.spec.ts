@@ -79,3 +79,26 @@ test('an account admin creates an access-key client but cannot manage the issuer
   await settle(page);
   await checkA11y(page);
 });
+
+test('client names are unique per account', async ({ page }) => {
+  await signIn(page, ORG.admin2);
+  await open(page, '/workload-identity');
+  await page.waitForLoadState('networkidle');
+  await page.getByRole('button', { name: 'New client' }).first().click();
+  const dlg = page.getByRole('dialog', { name: 'New workload client' });
+  await dlg.getByLabel('Name').fill('CI-Deployer');
+  await dlg.getByLabel('Allowed users').fill(ORG.editor.username);
+  await dlg.getByRole('button', { name: 'Create client' }).click();
+  const msg = 'A client named "CI-Deployer" already exists in this account. Choose another name.';
+  await expect(dlg.getByText(msg)).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dlg).toBeHidden();
+
+  // The server refuses it too (409), even if the console's list were stale.
+  const res = await page.request.post('/v1/workload-identity/clients', {
+    data: { name: 'CI-Deployer', audiences: ['sts.amazonaws.com'], tokenTtlSeconds: 900, subjectFormat: 'user:{username}', auth: { method: 'access-key', allowedUsers: [ORG.editor.username] } },
+    headers: { 'X-Citadel-Request': '1' }
+  });
+  expect(res.status()).toBe(409);
+  expect(await res.json()).toMatchObject({ error: 'name_taken', message: msg });
+});

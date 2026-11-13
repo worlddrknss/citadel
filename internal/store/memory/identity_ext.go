@@ -274,8 +274,22 @@ func (s *Store) CreateWorkloadClient(_ context.Context, c store.WorkloadClient) 
 	if _, ok := idn.clients[c.ClientID]; ok {
 		return store.ErrWorkloadClientExists
 	}
+	if workloadNameTakenLocked(idn.clients, c) {
+		return store.ErrWorkloadClientNameTaken
+	}
 	idn.clients[c.ClientID] = cloneWorkloadClient(c)
 	return nil
+}
+
+// workloadNameTakenLocked reports whether another client in c's account has
+// c's name, ignoring case (the Postgres store's unique index).
+func workloadNameTakenLocked(clients map[string]store.WorkloadClient, c store.WorkloadClient) bool {
+	for id, o := range clients {
+		if id != c.ClientID && o.AccountID == c.AccountID && strings.EqualFold(o.Name, c.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) GetWorkloadClient(_ context.Context, clientID string) (store.WorkloadClient, error) {
@@ -313,6 +327,9 @@ func (s *Store) UpdateWorkloadClient(_ context.Context, c store.WorkloadClient) 
 	old, ok := idn.clients[c.ClientID]
 	if !ok || old.AccountID != c.AccountID {
 		return store.ErrWorkloadClientNotFound
+	}
+	if workloadNameTakenLocked(idn.clients, c) {
+		return store.ErrWorkloadClientNameTaken
 	}
 	c.CreatedAt, c.LastIssuedAt = old.CreatedAt, old.LastIssuedAt
 	idn.clients[c.ClientID] = cloneWorkloadClient(c)
