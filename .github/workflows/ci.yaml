@@ -181,8 +181,14 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: |
+            web/package-lock.json
+            sdk/typescript/package-lock.json
       - run: npm ci --no-audit --no-fund
+      # The agent broker spec builds the TypeScript SDK to drive its MCP bridge.
+      - name: Install TypeScript SDK dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: sdk/typescript
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
       # Builds the console and the server (FIPS module), starts it in
