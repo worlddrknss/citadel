@@ -126,7 +126,7 @@
     box-shadow: inset 0 0 0 1px var(--border-strong);
   }
   .chips .badge {
-    font-size: 11.5px;
+    font-size: 12.5px;
   }
   .kv {
     grid-template-columns: 110px minmax(0, 1fr);
@@ -156,7 +156,7 @@
   }
   .code {
     margin: 12px;
-    font-size: 12px;
+    font-size: 13px;
     white-space: pre;
   }
   .snip {

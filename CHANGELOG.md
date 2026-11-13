@@ -6,6 +6,21 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.2]
+
+### Changed
+
+- Larger type throughout the console: body text is 14px (was 13px), and the
+  rest of the scale moved up one step.
+- Secret KMS pickers no longer list the account's managed default key next to
+  "Account default (alias/default)"; they were the same key.
+
+### Fixed
+
+- Users upgraded from 1.x whose account list held account names instead of
+  IDs saw a phantom account without an ID. Names now resolve to the account's
+  ID and unknown entries are ignored.
+
 ## [2.0.1]
 
 ### Fixed

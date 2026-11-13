@@ -247,13 +247,13 @@
   }
   .cn {
     font-family: var(--font-mono);
-    font-size: 12.5px;
+    font-size: 13.5px;
   }
   .badge.outline {
     background: transparent;
     color: var(--text-muted);
     box-shadow: inset 0 0 0 1px var(--border-strong);
-    font-size: 11.5px;
+    font-size: 12.5px;
   }
   .life {
     display: flex;
@@ -273,7 +273,7 @@
   }
   .days {
     min-width: 64px;
-    font-size: 12.5px;
+    font-size: 13.5px;
     font-weight: 500;
     color: var(--text-muted);
   }

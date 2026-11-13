@@ -285,7 +285,7 @@
     padding: 12px;
   }
   .code {
-    font-size: 12px;
+    font-size: 13px;
     background: var(--surface-sunken);
   }
   .errs {

@@ -608,7 +608,7 @@
     line-height: 16px;
   }
   .fips .subtle {
-    font-size: 11.5px;
+    font-size: 12.5px;
     line-height: 16px;
   }
 
@@ -650,7 +650,7 @@
     border-radius: 6px;
     background: var(--accent-soft);
     color: var(--accent-text);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
   }
   .orgtext {
@@ -666,7 +666,7 @@
     line-height: 1;
   }
   .orgacct {
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1;
   }
   .acct {
@@ -719,7 +719,7 @@
   }
   .envchip {
     height: 20px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .tools {
     display: flex;
@@ -760,7 +760,7 @@
     border-radius: 50%;
     background: var(--accent-soft);
     color: var(--accent-text);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
   }
   .usertext {
@@ -776,7 +776,7 @@
     line-height: 1;
   }
   .userrole {
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1;
     text-transform: capitalize;
   }

@@ -238,13 +238,13 @@
   }
   .name {
     font-weight: 600;
-    font-size: 13px;
+    font-size: 14px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .meta {
-    font-size: 12px;
+    font-size: 13px;
     line-height: 16px;
   }
   .none {

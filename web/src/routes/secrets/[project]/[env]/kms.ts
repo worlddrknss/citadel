@@ -7,6 +7,17 @@ export function kmsLabel(k: KMSKey): string {
   return k.keyId;
 }
 
+/** The account's managed default key (alias/default). The "Account default"
+ *  option already stands for it, so pickers don't list it a second time. */
+export function isAccountDefault(k: KMSKey): boolean {
+  return (k.aliases ?? []).includes('alias/default');
+}
+
+/** Keys to offer besides "Account default". */
+export function selectableKeys(keys: KMSKey[]): KMSKey[] {
+  return keys.filter((k) => !isAccountDefault(k));
+}
+
 /** Finds the key a detail's kmsKeyId refers to (it may be an ID, an ARN or an alias). */
 export function findKms(keys: KMSKey[], ref: string): KMSKey | undefined {
   if (!ref) return undefined;

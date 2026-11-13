@@ -17,14 +17,14 @@
   --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-display: 'Space Grotesk Variable', 'Inter Variable', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  --text-xs: 0.6875rem; /* 11px: labels */
-  --text-sm: 0.75rem; /* 12px: small */
-  --text-base: 0.8125rem; /* 13px: body, the app default */
-  --text-md: 0.875rem; /* 14px: body-lg */
-  --text-lg: 0.9375rem; /* 15px: h3 */
-  --text-xl: 1.25rem; /* 20px: h2 */
-  --text-2xl: 1.5rem; /* 24px: h1 */
-  --text-3xl: 2rem; /* 32px: display */
+  --text-xs: 0.75rem; /* 12px: labels */
+  --text-sm: 0.8125rem; /* 13px: small */
+  --text-base: 0.875rem; /* 14px: body, the app default */
+  --text-md: 0.9375rem; /* 15px: body-lg */
+  --text-lg: 1rem; /* 16px: h3 */
+  --text-xl: 1.3125rem; /* 21px: h2 */
+  --text-2xl: 1.625rem; /* 26px: h1 */
+  --text-3xl: 2.125rem; /* 34px: display */
 
   /* Space (4px grid) */
   --space-1: 4px;
@@ -258,7 +258,7 @@ pre {
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface-sunken);
-  font-size: 12.5px;
+  font-size: 13.5px;
   overflow: auto;
   line-height: 1.55;
 }

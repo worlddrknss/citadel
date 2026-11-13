@@ -62,7 +62,7 @@
   }
   .textarea {
     font-family: var(--font-mono);
-    font-size: 12.5px;
+    font-size: 13.5px;
     white-space: pre;
     overflow-wrap: normal;
     overflow-x: auto;

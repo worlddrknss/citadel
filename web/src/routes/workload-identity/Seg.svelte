@@ -52,7 +52,7 @@
     background: transparent;
     color: var(--text-muted);
     font: inherit;
-    font-size: 12.5px;
+    font-size: 13.5px;
     font-weight: 500;
     white-space: nowrap;
     cursor: pointer;

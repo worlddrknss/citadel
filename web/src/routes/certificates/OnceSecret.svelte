@@ -123,7 +123,7 @@
     margin: 0;
     max-height: 220px;
     overflow: auto;
-    font-size: 12px;
+    font-size: 13px;
     white-space: pre;
   }
   .val.one {

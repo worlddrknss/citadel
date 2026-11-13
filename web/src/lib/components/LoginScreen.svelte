@@ -427,7 +427,7 @@
     margin: 0;
     max-width: 460px;
     color: var(--text-muted);
-    font-size: 15px;
+    font-size: 16px;
     line-height: 24px;
   }
   .points {
@@ -453,7 +453,7 @@
   }
   .points div span {
     color: var(--text-muted);
-    font-size: 13px;
+    font-size: 14px;
   }
   .pi {
     display: inline-flex;
@@ -469,7 +469,7 @@
   .foot {
     margin: auto 0 0;
     color: var(--text-subtle);
-    font-size: 12px;
+    font-size: 13px;
   }
 
   .side {
@@ -510,7 +510,7 @@
   }
   .head h2 {
     margin: 0;
-    font: 600 22px/28px var(--font-display);
+    font: 600 24px/28px var(--font-display);
     letter-spacing: -0.01em;
   }
   .head p {
@@ -570,7 +570,7 @@
     background: none;
     color: var(--accent-text);
     font: inherit;
-    font-size: 12.5px;
+    font-size: 13.5px;
     cursor: pointer;
   }
   .linkish:hover {
@@ -605,7 +605,7 @@
     padding: 12px 28px;
     background: var(--accent-soft);
     color: var(--accent-text);
-    font-size: 12.5px;
+    font-size: 13.5px;
     font-weight: 500;
   }
   .fr-body {
@@ -648,7 +648,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--surface-hover);
-    font-size: 12.5px;
+    font-size: 13.5px;
   }
   .note > :global(svg) {
     margin-top: 2px;

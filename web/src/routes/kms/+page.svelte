@@ -490,7 +490,7 @@
     color: var(--info);
   }
   .key-sub {
-    font-size: 11.5px;
+    font-size: 12.5px;
     max-width: 280px;
     overflow: hidden;
     text-overflow: ellipsis;

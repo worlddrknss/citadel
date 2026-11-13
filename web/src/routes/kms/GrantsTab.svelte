@@ -249,7 +249,7 @@
     border-radius: 999px;
     box-shadow: inset 0 0 0 1px var(--border-strong);
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 12px;
   }
   .meta {
     font-size: var(--text-xs);

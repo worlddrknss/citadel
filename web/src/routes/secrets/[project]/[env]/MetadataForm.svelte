@@ -3,7 +3,7 @@
   import { api, type KMSKey } from '$lib/api';
   import { toast } from '$lib/stores/toast.svelte';
   import type { SecretDetail } from '../../api';
-  import { findKms, kmsLabel } from './kms';
+  import { findKms, isAccountDefault, kmsLabel, selectableKeys } from './kms';
 
   let {
     detail,
@@ -23,7 +23,9 @@
 
   $effect.pre(() => {
     description = detail.description ?? '';
-    kms = findKms(kmsKeys, detail.kmsKeyId)?.keyId ?? detail.kmsKeyId ?? '';
+    const found = findKms(kmsKeys, detail.kmsKeyId);
+    // The managed default key is what "Account default" means; show it as that.
+    kms = found && isAccountDefault(found) ? '' : (found?.keyId ?? detail.kmsKeyId ?? '');
   });
 
   const knownKms = $derived(!kms || kmsKeys.some((k) => k.keyId === kms));
@@ -58,9 +60,9 @@
   <label class="field">
     <span class="field-label">KMS key</span>
     <select class="select" bind:value={kms}>
-      <option value="">Account default</option>
+      <option value="">Account default (alias/default)</option>
       {#if !knownKms}<option value={kms}>{kms}</option>{/if}
-      {#each kmsKeys as k (k.keyId)}
+      {#each selectableKeys(kmsKeys) as k (k.keyId)}
         <option value={k.keyId}>{kmsLabel(k)}</option>
       {/each}
     </select>

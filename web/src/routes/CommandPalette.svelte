@@ -330,7 +330,7 @@
     border-radius: 999px;
     background: var(--surface-hover);
     color: var(--text-muted);
-    font: 500 12px/1 var(--font-mono);
+    font: 500 13px/1 var(--font-mono);
     white-space: nowrap;
     cursor: pointer;
   }

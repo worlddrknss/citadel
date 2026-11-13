@@ -371,7 +371,7 @@
   }
   .sub {
     display: block;
-    font-size: 11.5px;
+    font-size: 12.5px;
   }
   .idrow {
     display: inline-flex;
@@ -393,7 +393,7 @@
     border-radius: 50%;
     background: var(--accent-soft);
     color: var(--accent-text);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
   }
   .chips {

@@ -8,7 +8,7 @@
   import Modal from '$lib/components/Modal.svelte';
   import { toast } from '$lib/stores/toast.svelte';
   import { secretsApi } from '../../api';
-  import { kmsLabel } from './kms';
+  import { kmsLabel, selectableKeys } from './kms';
   import SecretInput from './SecretInput.svelte';
 
   let {
@@ -163,8 +163,8 @@
       <label class="field">
         <span class="field-label">KMS key</span>
         <select class="select" bind:value={kms}>
-          <option value="">Account default</option>
-          {#each kmsKeys as k (k.keyId)}
+          <option value="">Account default (alias/default)</option>
+          {#each selectableKeys(kmsKeys) as k (k.keyId)}
             <option value={k.keyId}>{kmsLabel(k)}</option>
           {/each}
         </select>

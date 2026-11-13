@@ -91,7 +91,7 @@
     flex-direction: column;
   }
   .textarea {
-    font-size: 12px;
+    font-size: 13px;
     white-space: pre;
     overflow-x: auto;
   }

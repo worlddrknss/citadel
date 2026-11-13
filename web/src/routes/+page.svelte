@@ -478,12 +478,12 @@
   }
   .cl-text h2 {
     margin: 0;
-    font: 600 15px/20px var(--font-sans);
+    font: 600 16px/20px var(--font-sans);
     letter-spacing: 0;
   }
   .cl-text p {
     margin: 0;
-    font-size: 12.5px;
+    font-size: 13.5px;
   }
   .cl-progress {
     display: flex;
@@ -582,11 +582,11 @@
     font-weight: 500;
   }
   .stat-value {
-    font: 600 30px/36px var(--font-display);
+    font: 600 32px/36px var(--font-display);
     letter-spacing: -0.02em;
   }
   .stat-detail {
-    font-size: 12.5px;
+    font-size: 13.5px;
     line-height: 18px;
   }
   .stat-err {
@@ -594,7 +594,7 @@
     align-items: center;
     gap: 6px;
     color: var(--danger);
-    font-size: 12.5px;
+    font-size: 13.5px;
   }
   .retry {
     align-self: flex-start;
@@ -625,7 +625,7 @@
   }
   .sec-head h2 {
     margin: 0;
-    font: 600 14px/20px var(--font-sans);
+    font: 600 15px/20px var(--font-sans);
     letter-spacing: 0;
   }
   .sec-state {
@@ -701,14 +701,14 @@
     border-top: 1px solid var(--border);
     background: var(--surface-hover);
     border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-    font-size: 12.5px;
+    font-size: 13.5px;
   }
   .sec-foot > span:first-child {
     display: inline-flex;
   }
   .foot-link {
     margin-left: auto;
-    font-size: 12.5px;
+    font-size: 13.5px;
     font-weight: 500;
   }
 
