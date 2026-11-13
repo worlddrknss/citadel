@@ -51,6 +51,39 @@ workload identity or IAM features (agents build on them).
   agents") immediately rejects all its requests, ends its leases, and revokes
   its tokens' sessions. Revoking is permanent.
 
+### As built in 2.2 (part A)
+
+Small decisions taken while implementing the foundation:
+
+- **Agent tokens** carry a non-secret lookup hint (the first 8 of the 52
+  base32 secret characters) so authentication costs one PBKDF2 (10,000
+  iterations) rather than one per token; verified tokens are cached by
+  SHA-256 for 5 minutes, but the token row and agent are read on every
+  request, so revocation is immediate.
+- **Federation:** bindings are found by the token's (unverified) issuer and
+  subject across accounts; the token is then verified against the issuer the
+  binding trusts (Citadel's own JWKS, which must also name the binding's
+  account in `citadel.account`, or a registered IAM OIDC provider). When one
+  identity is bound to several agents, the caller names the agent with
+  `X-Citadel-Agent-Id`.
+- **The account kill switch is a flag** (`agent_settings.agents_suspended`),
+  not a bulk status change: agents keep their own status, and turning it off
+  restores the previous state.
+- **Credentials** are usage profiles keyed by name in the account and
+  referencing a secret by its backing name; several profiles may point at one
+  secret. There is no foreign key to the secret: a profile whose secret is
+  gone reports `credential_unavailable`. A profile can't be deleted while
+  grants use it.
+- **Grants** are unique per (agent, credential). `totp` needs a `login`
+  credential; `raw` credentials support only `reveal`. Windows may name
+  weekdays; an overnight window counts as the day it starts.
+- **Policy reasons:** `no_grant` (also for unknown credentials),
+  `action_not_granted`, `not_yet_valid`, `grant_expired`, `outside_window`,
+  `rate_limited`, `credential_unavailable`, `agent_suspended`,
+  `agents_suspended`, `agent_revoked`.
+- **OpenAPI** gains the role `agent` (`x-citadel-role`) and the
+  `agentToken` security scheme for the Agent API.
+
 ## Brokered use (2.2)
 
 `POST /v1/agent/http` — the agent asks Citadel to perform an HTTP request with
