@@ -26,9 +26,13 @@ func (e *authEnv) mfaEnroll(cookie *http.Cookie) ([]byte, []string, map[string]a
 	if err != nil || len(key) != totp.SecretSize {
 		e.t.Fatalf("secret %v %v", key, err)
 	}
-	rec = e.do("POST", "/v1/account/mfa/enroll/confirm", map[string]string{"code": totp.Code(key, totp.Step(time.Now()))}, cookie)
+	step := totp.Step(time.Now())
+	rec = e.do("POST", "/v1/account/mfa/enroll/confirm", map[string]string{"code": totp.Code(key, step)}, cookie)
 	wantStatus(e.t, rec, http.StatusOK)
 	out := decode(e.t, rec)
+	// The step the enrolment code was for, so callers can replay exactly that
+	// code; recomputing "the current code" later breaks across a 30s boundary.
+	out["enrolStep"] = step
 	var codes []string
 	for _, c := range out["recoveryCodes"].([]any) {
 		codes = append(codes, c.(string))
@@ -67,7 +71,8 @@ func TestMFAEnrolSignInReplayAndRecovery(t *testing.T) {
 		t.Fatalf("status while pending = %v", st)
 	}
 
-	key, codes, _, _ := e.mfaEnroll(cookie)
+	key, codes, enrolOut, _ := e.mfaEnroll(cookie)
+	enrolStep := enrolOut["enrolStep"].(int64)
 	if len(codes) != 10 || len(codes[0]) != 14 {
 		t.Fatalf("recovery codes = %v", codes)
 	}
@@ -87,11 +92,14 @@ func TestMFAEnrolSignInReplayAndRecovery(t *testing.T) {
 
 	// The enrolment code's step is spent: replay with it fails.
 	tok := e.mfaLogin("bob", e.acctA)
-	wantStatus(t, e.do("POST", "/v1/login/mfa", map[string]string{"mfaToken": tok, "code": nextCode(key, 0)}, nil), http.StatusUnauthorized)
+	wantStatus(t, e.do("POST", "/v1/login/mfa", map[string]string{"mfaToken": tok, "code": totp.Code(key, enrolStep)}, nil), http.StatusUnauthorized)
 	if !e.audited("citadel.LoginMFA", "denied") {
 		t.Fatal("failed MFA not audited")
 	}
-	rec := e.do("POST", "/v1/login/mfa", map[string]string{"mfaToken": tok, "code": nextCode(key, 1)}, nil)
+	// The next step is fresh whether or not a step boundary has passed (it is
+	// at worst one step behind the current one, inside the skew window).
+	loginCode := totp.Code(key, enrolStep+1)
+	rec := e.do("POST", "/v1/login/mfa", map[string]string{"mfaToken": tok, "code": loginCode}, nil)
 	wantStatus(t, rec, http.StatusOK)
 	c := sessionCookie(rec)
 	if c == nil || decode(t, rec)["username"] != "bob" {
@@ -103,7 +111,7 @@ func TestMFAEnrolSignInReplayAndRecovery(t *testing.T) {
 	}
 	// Same code again with a fresh token: replay refused.
 	tok2 := e.mfaLogin("bob", e.acctA)
-	wantStatus(t, e.do("POST", "/v1/login/mfa", map[string]string{"mfaToken": tok2, "code": nextCode(key, 1)}, nil), http.StatusUnauthorized)
+	wantStatus(t, e.do("POST", "/v1/login/mfa", map[string]string{"mfaToken": tok2, "code": loginCode}, nil), http.StatusUnauthorized)
 
 	// Recovery code: works once, in any case or spacing.
 	rec = e.do("POST", "/v1/login/mfa", map[string]string{"mfaToken": tok2, "recoveryCode": strings.ToUpper(codes[0])}, nil)
