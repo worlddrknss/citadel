@@ -84,7 +84,10 @@ func New(t testing.TB) *Env {
 		*u.key = Key{ID: k.AccessKeyID, Secret: k.SecretKey}
 		users[u.name] = user
 	}
+	ts := httptest.NewUnstartedServer(nil)
+	base := "http://" + ts.Listener.Addr().String()
 	cfg := config.Config{
+		PublicURL:         base,
 		ExpectedAccessKey: "AKIASERVERTEST000001",
 		SecretAccessKey:   "servertest-secret-access-key-0123456789ab",
 		UIUsers:           users,
@@ -95,8 +98,9 @@ func New(t testing.TB) *Env {
 	if err != nil {
 		t.Fatalf("servertest: new server: %v", err)
 	}
-	env.HTTP = httptest.NewServer(s.Handler())
-	env.URL = env.HTTP.URL
-	t.Cleanup(env.HTTP.Close)
+	ts.Config.Handler = s.Handler()
+	ts.Start()
+	env.HTTP, env.URL = ts, base
+	t.Cleanup(ts.Close)
 	return env
 }

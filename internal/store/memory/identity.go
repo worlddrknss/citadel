@@ -270,4 +270,3 @@ func (s *Store) ListAccountUsers(_ context.Context, accountID string) ([]struct{
 	})
 	return users, nil
 }
-
