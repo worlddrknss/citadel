@@ -358,6 +358,8 @@ func (s *Server) handleKMS(w http.ResponseWriter, r *http.Request) {
 		s.handleGetSecretResourcePolicy(w, r)
 	case "secretsmanager.PutResourcePolicy":
 		s.handlePutSecretResourcePolicy(w, r)
+	case "secretsmanager.DeleteResourcePolicy":
+		s.handleDeleteSecretResourcePolicy(w, r)
 	case "secretsmanager.ValidateResourcePolicy":
 		s.handleValidateSecretResourcePolicy(w, r)
 	case "secretsmanager.RotateSecret":
@@ -384,6 +386,8 @@ func (s *Server) handleKMS(w http.ResponseWriter, r *http.Request) {
 		s.handleSSMGetParameterHistory(w, r)
 	case "AmazonSSM.LabelParameterVersion":
 		s.handleSSMLabelParameterVersion(w, r)
+	case "AmazonSSM.UnlabelParameterVersion":
+		s.handleSSMUnlabelParameterVersion(w, r)
 	case "AmazonSSM.AddTagsToResource":
 		s.handleSSMAddTagsToResource(w, r)
 	case "AmazonSSM.RemoveTagsFromResource":

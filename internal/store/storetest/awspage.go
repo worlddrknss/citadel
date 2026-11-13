@@ -161,6 +161,12 @@ func AWSPageStore(t *testing.T, st store.Store, paramsIsolated bool) {
 		if got := names(list(true)); !slices.Equal(got, []string{"pg/s1", "pg/s2", "pg/s3", "pg/s4"}) {
 			t.Fatalf("secrets incl. deleted = %v", got)
 		}
+		desc := collect(t, 2, func(after string, limit int) ([]store.SecretMetadataRecord, bool, error) {
+			return st.ListSecretsPage(ctxA, store.SecretPageQuery{After: after, Limit: limit, IncludeDeleted: true, Descending: true})
+		}, func(m store.SecretMetadataRecord) string { return m.Name })
+		if got := names(desc); !slices.Equal(got, []string{"pg/s4", "pg/s3", "pg/s2", "pg/s1"}) {
+			t.Fatalf("descending secrets = %v", got)
+		}
 	})
 
 	t.Run("ListParametersPage", func(t *testing.T) {
