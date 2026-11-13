@@ -55,6 +55,7 @@ type Server struct {
 	audit auditRuntime
 	obs   observabilityRuntime
 	rot   rotationRuntime
+	notif notificationRuntime
 
 	// testLEIssue / testLEComplete replace the Let's Encrypt issuance steps
 	// (tests).
@@ -246,6 +247,7 @@ func (s *Server) Handler() http.Handler {
 	s.registerSecretsRoutes(mux)
 	s.registerMFARoutes(mux)
 	s.registerRotationRoutes(mux)
+	s.registerNotificationRoutes(mux)
 
 	// Native session + self-service + master-admin actions (replace the legacy
 	// html/template admin pages).

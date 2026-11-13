@@ -17,6 +17,7 @@
   import MembershipModal from './MembershipModal.svelte';
   import SettingsPanel from './SettingsPanel.svelte';
   import SsoPanel from './SsoPanel.svelte';
+  import NotificationsPanel from './NotificationsPanel.svelte';
   import { roleTone, fmtDate, type RoleName, type UserRow } from './api';
 
   const isAdmin = $derived(session.can('admin'));
@@ -242,7 +243,8 @@
         { id: 'users', label: 'Users', count: loading ? undefined : users.length },
         { id: 'accounts', label: 'Accounts', count: loading ? undefined : accounts.length },
         { id: 'memberships', label: 'Memberships', count: loading ? undefined : memberships.length },
-        { id: 'settings', label: 'Settings' }
+        { id: 'settings', label: 'Settings' },
+        { id: 'notifications', label: 'Notifications' }
       ]}
       bind:active={tabValue}
       onchange={(t) => {
@@ -252,7 +254,7 @@
     />
   </div>
 
-  {#if loadError && tab !== 'settings'}
+  {#if loadError && tab !== 'settings' && tab !== 'notifications'}
     <div class="callout callout-danger err" role="alert">
       <Icon name="alert-circle" size={16} /><span>{loadError}</span>
       <button type="button" class="btn btn-ghost btn-sm push" onclick={load}>Retry</button>
@@ -320,6 +322,8 @@
         </EmptyState>
       {/snippet}
     </DataTable>
+  {:else if tab === 'notifications'}
+    <NotificationsPanel />
   {:else if tab === 'settings'}
     <div class="stack">
       <SettingsPanel />

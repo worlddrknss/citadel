@@ -62,6 +62,24 @@ their session token), or the static pair below.
 | `KMS_WORKLOAD_K8S_REVIEWER_TOKEN_FILE` | in-cluster token | File with the bearer token Citadel uses for the Kubernetes TokenReview API, re-read on every use. Defaults to the pod's service-account token when running in Kubernetes. The service account needs the `system:auth-delegator` ClusterRole. |
 | `KMS_WORKLOAD_K8S_REVIEWER_TOKEN` **secret** | — | Static alternative to the token file. Don't set both. |
 
+## Email notifications (SMTP)
+
+Email [notification channels](notifications.md) send through one outgoing
+mail server for the whole deployment. Leave `KMS_SMTP_HOST` unset to turn
+email channels off (webhook and Slack channels still work). There is no
+plaintext mode: the connection is always TLS, and credentials are only sent
+after it is encrypted.
+
+| Variable | Default | Description |
+|---|---|---|
+| `KMS_SMTP_HOST` | — | Mail server host name or address, without a port. |
+| `KMS_SMTP_PORT` | `587` (`465` with `tls`) | Mail server port. |
+| `KMS_SMTP_TLS` | `starttls` (`tls` on port 465) | `starttls`: connect, then upgrade with STARTTLS (a server that doesn't offer it is refused); `tls`: implicit TLS (SMTPS). The server's certificate is verified against the system roots. |
+| `KMS_SMTP_USERNAME` | — | User for AUTH PLAIN. Leave unset for a relay that needs no authentication. |
+| `KMS_SMTP_PASSWORD` **secret** | — | Password for `KMS_SMTP_USERNAME`. |
+| `KMS_SMTP_PASSWORD_FILE` | — | File holding the password, re-read on every send (for a mounted secret). Don't set both. |
+| `KMS_SMTP_FROM` | — | Required with `KMS_SMTP_HOST`. Sender address, optionally with a display name: `Citadel <citadel@example.com>`. |
+
 ## Rate limits
 
 Rate limits have no settings. Each replica keeps token buckets in memory

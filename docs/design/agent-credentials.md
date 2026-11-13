@@ -126,7 +126,11 @@ Desktop, Cursor and VS Code (`docs/agents-mcp.md`).
 - **Notifications:** a notification channel framework (webhook, Slack
   incoming webhook, email via SMTP config) used for approval requests,
   kill-switch events and anomaly alerts. Signed webhooks (HMAC-SHA256 +
-  timestamp), same SSRF rules as SIEM streaming.
+  timestamp), same SSRF rules as SIEM streaming. Implemented in
+  `internal/server/notifications.go`: features call
+  `s.notify(ctx, accountID, event, payload)`; see `docs/notifications.md`.
+  Webhooks use the dial-time guard (loopback, link-local, metadata refused;
+  private ranges allowed), as rotation webhooks do.
 - **Leases:** approvals and `leaseTtl` grants produce a lease (id, agent,
   credential, scope, expiresAt). Leases end at expiry, on suspend, or when
   revoked in the console. Brokered use under a lease is attributed to it.
