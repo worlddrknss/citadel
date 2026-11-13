@@ -383,7 +383,7 @@ const GET: Record<string, Handler> = {
   '/v1/admin/users': () => ({
     users: [
       { username: 'alice', displayName: 'Alice Admin', role: 'admin', accounts: [ACCOUNT], memberships: [{ accountId: ACCOUNT, role: 'admin' }], platformAdmin: true },
-      { username: 'bob', displayName: 'Bob', role: 'editor', accounts: [ACCOUNT], memberships: [{ accountId: ACCOUNT, role: 'editor' }], platformAdmin: false }
+      { username: 'bob', displayName: 'Bob', role: 'editor', accounts: [ACCOUNT], memberships: [{ accountId: ACCOUNT, role: 'editor' }], platformAdmin: false, mfaEnabled: true }
     ]
   }),
   '/v1/admin/accounts': () => ({
@@ -397,6 +397,7 @@ const GET: Record<string, Handler> = {
     approvalMinApprovers: 1,
     sessionIdleMinutes: 30,
     sessionMaxHours: 12,
+    requireMFA: false,
     updatedAt: ago(5 * DAY),
     updatedBy: 'alice'
   }),
@@ -431,9 +432,27 @@ const issuerInfo = {
   nextRotationAt: ahead(70 * DAY)
 };
 
+// TOTP enrolment fixtures (the secret is RFC 6238's SHA256 test seed).
+export const mfaEnrollment = {
+  secret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZA',
+  otpauthUri: 'otpauth://totp/Citadel:alice?algorithm=SHA256&digits=6&issuer=Citadel&period=30&secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZA',
+  issuer: 'Citadel',
+  account: 'alice',
+  algorithm: 'SHA256',
+  digits: 6,
+  period: 30
+};
+export const mfaRecoveryCodes = Array.from({ length: 10 }, (_, i) => `k7qm-x2pa-${String(i).padStart(4, 'a')}`);
+/** The code the mock accepts. */
+export const MFA_CODE = '123456';
+
 /** Non-GET handlers by "METHOD path". Anything else gets {ok:true}. */
 const WRITE: Record<string, Handler> = {
   'POST /v1/login': () => me,
+  'POST /v1/account/mfa/enroll/start': () => mfaEnrollment,
+  'POST /v1/account/mfa/disable': () => ({ disabled: true }),
+  'POST /v1/account/mfa/recovery-codes': () => ({ recoveryCodes: mfaRecoveryCodes }),
+  'POST /v1/admin/users/mfa/reset': (_, b) => ({ reset: b.confirm === b.username, sessionsRevoked: 2 }),
   'POST /v1/logout': () => ({ loggedOut: true }),
   'POST /v1/kms/keys/schedule-deletion': (_, b) => ({ keyId: b.keyId, deletionDate: ahead(Number(b.windowDays ?? 30) * DAY) }),
   'POST /v1/kms/keys/cancel-deletion': (_, b) => ({ keyId: b.keyId, restored: true }),
@@ -666,7 +685,7 @@ const RAW: Record<string, (q: URLSearchParams) => { contentType: string; body: s
 };
 
 /** Endpoints that answer without a session. */
-const PUBLIC = new Set(['/v1/openapi.yaml', '/v1/server/info', '/v1/auth/providers', '/v1/bootstrap', '/v1/login']);
+const PUBLIC = new Set(['/v1/openapi.yaml', '/v1/server/info', '/v1/auth/providers', '/v1/bootstrap', '/v1/login', '/v1/login/mfa']);
 
 export interface MockOptions {
   /** Start with a valid session cookie (default true). */
@@ -679,6 +698,13 @@ export class MockApi {
   unhandled: string[] = [];
   /** Every request, as "METHOD /path?query". */
   log: string[] = [];
+
+  /** POST /v1/login asks for a second factor (MFA_CODE or a recovery code). */
+  mfaLogin = false;
+  /** The session is restricted to MFA enrolment (organization policy). */
+  mfaEnrollmentRequired = false;
+  /** GET /v1/account/mfa state. */
+  mfaEnabled = false;
 
   constructor(opts: MockOptions = {}) {
     this.signedIn = opts.signedIn ?? true;
@@ -709,8 +735,33 @@ export class MockApi {
     } catch {
       /* not JSON */
     }
+    if (method === 'POST' && path === '/v1/login' && this.mfaLogin) {
+      return route.fulfill({ status: 200, json: { mfaRequired: true, mfaToken: 'mock-mfa-token' } });
+    }
+    if (method === 'POST' && path === '/v1/login/mfa') {
+      const good = body.mfaToken === 'mock-mfa-token' && (body.code === MFA_CODE || mfaRecoveryCodes.includes(String(body.recoveryCode ?? '').toLowerCase()));
+      if (!good) return route.fulfill({ status: 401, json: { error: 'invalid_code', message: 'invalid or already used code' } });
+      this.signedIn = true;
+      return route.fulfill({ status: 200, json: me });
+    }
     if (method === 'POST' && path === '/v1/login') this.signedIn = true;
     if (method === 'POST' && path === '/v1/logout') this.signedIn = false;
+    if (method === 'GET' && path === '/v1/me' && this.mfaEnrollmentRequired) {
+      return route.fulfill({ status: 200, json: { ...me, mfaEnrollmentRequired: true } });
+    }
+    if (method === 'GET' && path === '/v1/account/mfa') {
+      return route.fulfill({
+        status: 200,
+        json: { enabled: this.mfaEnabled, pending: false, enabledAt: this.mfaEnabled ? ago(DAY) : undefined, recoveryCodesLeft: this.mfaEnabled ? 10 : 0, required: this.mfaEnrollmentRequired, algorithm: 'SHA256', digits: 6, period: 30 }
+      });
+    }
+    if (method === 'POST' && path === '/v1/account/mfa/enroll/confirm') {
+      if (body.code !== MFA_CODE) return route.fulfill({ status: 400, json: { error: 'invalid_code', message: 'that code is not valid; check the time on your device and try again' } });
+      const upgraded = this.mfaEnrollmentRequired;
+      this.mfaEnrollmentRequired = false;
+      this.mfaEnabled = true;
+      return route.fulfill({ status: 200, json: { enabled: true, recoveryCodes: mfaRecoveryCodes, ...(upgraded ? { me } : {}) } });
+    }
 
     if (method === 'GET' && RAW[path]) {
       const r = RAW[path](url.searchParams);
