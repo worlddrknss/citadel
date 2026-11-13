@@ -6,9 +6,11 @@
   import { errorMessage } from '#lib/api.ts';
   import { api } from '#lib/api.ts';
   import { session } from '#lib/stores/session.svelte.ts';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import { param, setParams } from '#lib/url.ts';
   import { certApi, type CertRow } from './api';
-  import { cnOf, firstDomain, rowKey, safeFileName, type Filter, type SortKey } from './certs';
+  import { cnOf, firstDomain, isImported, rowKey, safeFileName, type Filter, type SortKey } from './certs';
   import CATree from './CATree.svelte';
   import CertTable from './CertTable.svelte';
   import CertDrawer from './CertDrawer.svelte';
@@ -101,11 +103,14 @@
     if (c.source === 'pca-ca') return cnOf(c.subject) || c.id;
     if (c.source === 'lets-encrypt') return firstDomain(c.subject) || c.id;
     if (c.commonName) return c.commonName;
+    if (isImported(c)) return c.subject || c.id;
     const serial = c.serial || c.subject;
     return serial ? `serial ${serial.length > 16 ? serial.slice(0, 16) + '…' : serial}` : c.id;
   }
   function issuerOf(c: CertRow): string {
-    return c.source === 'lets-encrypt' ? "Let's Encrypt" : caName(c.issuerCaId) || '—';
+    if (c.source === 'lets-encrypt') return "Let's Encrypt";
+    if (isImported(c)) return cnOf(c.issuer) || c.issuer || '—';
+    return caName(c.issuerCaId) || '—';
   }
 
   // ---- URL state -----------------------------------------------------------
@@ -168,6 +173,25 @@
     renewOpen = true;
   }
 
+  /** Deletes a certificate imported through ACM; Citadel-issued ones are revoked instead. */
+  async function askDelete(c: CertRow) {
+    const ok = await confirm({
+      title: 'Delete imported certificate?',
+      message: `${nameOf(c)} and its private key are removed from Citadel. Anything that reads it through ACM stops finding it. This can't be undone.`,
+      confirmLabel: 'Delete',
+      danger: true
+    });
+    if (!ok) return;
+    try {
+      await certApi.deleteImported(c.id);
+      toast.success('Certificate deleted');
+      if (selectedKey === rowKey(c)) closeDrawer();
+      await load();
+    } catch (e) {
+      toast.error(e);
+    }
+  }
+
   async function issued(r: IssueResult) {
     await load();
     if (r.generated) {
@@ -185,7 +209,7 @@
   }
 </script>
 
-<PageHeader title="Certificates" description="Private CA hierarchy and public certificates from Let's Encrypt, in one place.">
+<PageHeader title="Certificates" description="Private CA hierarchy, public certificates from Let's Encrypt and certificates imported through ACM, in one place.">
   {#snippet actions()}
     {#if canAdmin}
       <button type="button" class="btn btn-secondary" onclick={() => (importOpen = true)}><Icon name="upload" size={16} />Import</button>
@@ -263,6 +287,7 @@
       onopen={openCert}
       onrenew={askRenew}
       onrevoke={askRevoke}
+      ondelete={askDelete}
       onissue={() => issue()}
     />
   </div>
@@ -279,6 +304,7 @@
   onclose={closeDrawer}
   onrenew={askRenew}
   onrevoke={askRevoke}
+  ondelete={askDelete}
   onissuefrom={(ca) => issue(ca.id)}
   onsubordinate={(ca) => newCA(ca.id)}
 />

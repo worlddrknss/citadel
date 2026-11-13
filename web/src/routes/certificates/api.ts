@@ -3,7 +3,7 @@
 // redesign report; the server rejects unknown JSON fields, so optional new
 // fields are only sent when they carry a value.
 
-import { req, api, type Certificate, type CertificateDetail, type LEOrder } from '#lib/api.ts';
+import { req, api, type Certificate, type CertificateDetail, type ChainCertificate, type LEOrder } from '#lib/api.ts';
 
 /**
  * A row of GET /v1/certificates. The extra fields are part of the extended
@@ -28,6 +28,9 @@ export type Template = 'server' | 'client';
 export const certApi = {
   list: () => api.certificates() as Promise<{ certificates: CertRow[] }>,
   detail: (source: string, id: string) => api.certificateDetail(source, id),
+  /** Deletes a certificate imported through ACM ImportCertificate (admin). */
+  deleteImported: (arn: string) =>
+    req<{ arn: string; deleted: boolean }>(`/v1/certificates/acm?${new URLSearchParams({ arn })}`, { method: 'DELETE' }),
 
   createCA: (body: {
     caType: 'ROOT' | 'SUBORDINATE';
@@ -147,7 +150,7 @@ export interface EabKey {
   acmeAccountId?: string;
 }
 
-export type { Certificate, CertificateDetail };
+export type { Certificate, CertificateDetail, ChainCertificate };
 
 /** How often the console polls a running Let's Encrypt order. */
 export const LE_POLL_INTERVAL_MS = 2_000;

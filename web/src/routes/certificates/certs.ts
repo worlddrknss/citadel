@@ -107,6 +107,46 @@ export function pathLenDescription(pathLen?: number): string {
   return `${pathLen} — up to ${pathLen} more CA level${pathLen === 1 ? '' : 's'} below it`;
 }
 
+/** Certificates imported through ACM ImportCertificate. */
+export const SOURCE_IMPORTED = 'acm-imported';
+
+export function isImported(c: { source?: string }): boolean {
+  return c.source === SOURCE_IMPORTED;
+}
+
+/** The Source badge of a certificate row. */
+export function sourceLabel(source?: string): string {
+  switch (source) {
+    case 'lets-encrypt':
+      return 'ACME';
+    case SOURCE_IMPORTED:
+      return 'Imported';
+    case 'pca-ca':
+    case 'pca-cert':
+      return 'Private CA';
+    default:
+      return source ? titleCase(source) : '—';
+  }
+}
+
+/** Renew and revoke apply only to certificates a Citadel CA issued. */
+export function canRenewOrRevoke(c: { source?: string; status?: string }): boolean {
+  return c.source === 'pca-cert' && !isRevoked(c);
+}
+
+/** Label of a chain element's position. */
+export function chainRoleLabel(role: string): string {
+  return role === 'leaf' ? 'Leaf' : role === 'root' ? 'Root' : 'Intermediate';
+}
+
+/**
+ * Whether a chain ends at a self-signed root. When it doesn't, Citadel does
+ * not hold the remaining issuers.
+ */
+export function chainComplete(chain?: { selfSigned: boolean }[]): boolean {
+  return !!chain?.length && chain[chain.length - 1].selfSigned;
+}
+
 export function rowKey(c: { source: string; id: string }): string {
   return `${c.source}:${c.id}`;
 }

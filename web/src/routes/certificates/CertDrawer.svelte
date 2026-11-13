@@ -1,6 +1,7 @@
-<!-- Detail drawer for a CA, an issued certificate or a Let's Encrypt
-     certificate: metadata, PEM and chain with copy/download, and the
-     renew / revoke / CRL actions that apply to it. -->
+<!-- Detail drawer for a CA, an issued certificate, a Let's Encrypt
+     certificate or one imported through ACM: metadata, PEM, the full chain
+     to the root with per-certificate downloads, and the renew / revoke /
+     delete / CRL actions that apply to it. -->
 <script lang="ts">
   import Drawer from '#lib/components/Drawer.svelte';
   import Tabs from '#lib/components/Tabs.svelte';
@@ -9,7 +10,7 @@
   import Icon from '#lib/components/Icon.svelte';
   import { api, errorMessage } from '#lib/api.ts';
   import { certApi, type CertRow, type CertificateDetail } from './api';
-  import { certStatus, cnOf, fmtDateTime, keyAlgLabel, titleCase, downloadText, safeFileName, isRevoked, firstDomain, pathLenDescription } from './certs';
+  import { certStatus, cnOf, fmtDateTime, keyAlgLabel, titleCase, downloadText, safeFileName, isRevoked, isImported, canRenewOrRevoke, sourceLabel, chainRoleLabel, chainComplete, firstDomain, pathLenDescription } from './certs';
 
   let {
     open = $bindable(false),
@@ -22,6 +23,7 @@
     onclose,
     onrenew,
     onrevoke,
+    ondelete,
     onissuefrom,
     onsubordinate
   }: {
@@ -35,6 +37,7 @@
     onclose: () => void;
     onrenew: (c: CertRow) => void;
     onrevoke: (c: CertRow) => void;
+    ondelete: (c: CertRow) => void;
     onissuefrom: (ca: CertRow) => void;
     onsubordinate: (ca: CertRow) => void;
   } = $props();
@@ -78,16 +81,26 @@
         ? cnOf(row.subject) || row.id
         : row.source === 'lets-encrypt'
           ? firstDomain(row.subject) || row.id
-          : row.commonName || cnOf(detail?.subject) || row.id
+          : row.commonName || cnOf(detail?.subject) || (isImported(row) ? row.subject : '') || row.id
       : ''
   );
   const st = $derived(row && !isCA ? certStatus(row) : null);
   const tabs = $derived([
     { id: 'overview', label: 'Overview' },
     ...(detail?.pem ? [{ id: 'pem', label: 'PEM' }] : []),
-    ...(detail?.chainPem && !isCA ? [{ id: 'chain', label: 'Chain' }] : [])
+    ...((detail?.chain?.length ?? 0) > 1 || (detail?.chainPem && !isCA) ? [{ id: 'chain', label: 'Chain' }] : [])
   ]);
-  const fullChain = $derived(detail?.pem ? [detail.pem.trim(), detail.chainPem?.trim()].filter(Boolean).join('\n') + '\n' : '');
+  const fullChain = $derived(
+    detail?.chain?.length
+      ? detail.chain.map((c) => c.pem.trim()).join('\n') + '\n'
+      : detail?.pem
+        ? [detail.pem.trim(), detail.chainPem?.trim()].filter(Boolean).join('\n') + '\n'
+        : ''
+  );
+  /** The issuer chain without this certificate. */
+  const issuerChain = $derived(
+    detail?.chain && detail.chain.length > 1 ? detail.chain.slice(1).map((c) => c.pem.trim()).join('\n') + '\n' : detail?.chainPem ?? ''
+  );
   const crlHref = $derived(row && isCA ? api.crlUrl(row.id) : '');
   const file = $derived(safeFileName(name));
 </script>
@@ -115,7 +128,7 @@
           <Badge tone={(row.status ?? '').toUpperCase() === 'ACTIVE' ? 'success' : 'neutral'} dot={false}>{titleCase(row.status || 'Unknown')}</Badge>
         {:else if st}
           <Badge tone={st.tone} dot={false}><Icon name={st.icon} size={12} />{st.label}</Badge>
-          <span class="badge outline">{row.source === 'lets-encrypt' ? 'ACME' : 'Private CA'}</span>
+          <span class="badge outline">{sourceLabel(row.source)}</span>
         {/if}
       </div>
 
@@ -148,28 +161,66 @@
             </span>
           </div>
           <pre class="pem">{detail.pem}</pre>
-        {:else if activeTab === 'chain' && detail.chainPem}
+        {:else if activeTab === 'chain' && (detail.chain?.length || detail.chainPem)}
           <div class="pemhead">
-            <span class="field-label">Issuer chain</span>
+            <span class="field-label">Chain to the root</span>
             <span class="tools">
-              <CopyButton value={detail.chainPem} label="Copy chain PEM" />
-              <button type="button" class="btn btn-ghost btn-sm" onclick={() => downloadText(`${file}-chain.pem`, detail!.chainPem!)}>
-                <Icon name="download" size={14} />Chain
-              </button>
+              {#if issuerChain}
+                <CopyButton value={issuerChain} label="Copy issuer chain PEM" />
+                <button type="button" class="btn btn-ghost btn-sm" onclick={() => downloadText(`${file}-chain.pem`, issuerChain)}>
+                  <Icon name="download" size={14} />Chain
+                </button>
+              {/if}
               <button type="button" class="btn btn-ghost btn-sm" onclick={() => downloadText(`${file}-fullchain.pem`, fullChain)}>
                 <Icon name="download" size={14} />Full chain
               </button>
             </span>
           </div>
-          <pre class="pem">{detail.chainPem}</pre>
-          <p class="subtle small">Full chain = this certificate followed by its issuer, the order most servers expect.</p>
+          {#if detail.chain?.length}
+            <ol class="chain" aria-label="Certificate chain, leaf to root">
+              {#each detail.chain as c, i (i)}
+                <li class="link" data-testid="chain-cert">
+                  <div class="linkhead">
+                    <Badge tone={c.role === 'root' ? 'info' : c.role === 'leaf' ? 'success' : 'neutral'} dot={false}>{chainRoleLabel(c.role)}</Badge>
+                    <span class="mono linkname">{cnOf(c.subject) || c.subject}</span>
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-sm push"
+                      aria-label="Download {chainRoleLabel(c.role).toLowerCase()} certificate {cnOf(c.subject) || c.subject}"
+                      onclick={() => downloadText(`${safeFileName(cnOf(c.subject) || c.subject)}.pem`, c.pem)}
+                    >
+                      <Icon name="download" size={14} />.pem
+                    </button>
+                  </div>
+                  <dl class="kv chainkv">
+                    <dt>Subject</dt>
+                    <dd class="mono">{c.subject}</dd>
+                    <dt>Issuer</dt>
+                    <dd class="mono">{c.issuer}{c.selfSigned ? ' (self-signed)' : ''}</dd>
+                    <dt>Valid</dt>
+                    <dd>{fmtDateTime(c.notBefore)} – {fmtDateTime(c.notAfter)}</dd>
+                    <dt>Serial</dt>
+                    <dd class="mono">{c.serial}</dd>
+                  </dl>
+                </li>
+              {/each}
+            </ol>
+            {#if !chainComplete(detail.chain)}
+              <p class="subtle small" data-testid="chain-incomplete">
+                Citadel doesn't hold the issuer of the last certificate, so the chain stops there.
+              </p>
+            {/if}
+          {:else if detail.chainPem}
+            <pre class="pem">{detail.chainPem}</pre>
+          {/if}
+          <p class="subtle small">Full chain = this certificate followed by its issuers, the order most servers expect.</p>
         {:else}
           <dl class="kv">
             <dt>Subject</dt>
             <dd class="mono">{detail.subject || '—'}</dd>
             {#if !isCA}
               <dt>Issuer</dt>
-              <dd>{row.source === 'lets-encrypt' ? "Let's Encrypt" : caName(row.issuerCaId) || detail.issuer || '—'}</dd>
+              <dd>{row.source === 'lets-encrypt' ? "Let's Encrypt" : (!isImported(row) && caName(row.issuerCaId)) || detail.issuer || '—'}</dd>
             {:else if row.parentCaId}
               <dt>Parent CA</dt>
               <dd>{caName(row.parentCaId)}</dd>
@@ -239,7 +290,7 @@
         {#if canAdmin && (row.status ?? '').toUpperCase() === 'ACTIVE' && (row.caType ?? '').toUpperCase() !== 'SUBORDINATE'}
           <button type="button" class="btn btn-secondary btn-sm" onclick={() => onsubordinate(row)}><Icon name="git-pull-request" size={14} />New subordinate</button>
         {/if}
-      {:else if row.source === 'pca-cert' && !isRevoked(row)}
+      {:else if canRenewOrRevoke(row)}
         {#if canIssue}
           <button type="button" class="btn btn-secondary btn-sm" onclick={() => onrenew(row)}><Icon name="refresh" size={14} />Renew</button>
         {/if}
@@ -248,6 +299,11 @@
         {/if}
       {:else if row.source === 'lets-encrypt'}
         <span class="subtle small">Renew Let's Encrypt certificates by requesting the same domains again.</span>
+      {:else if isImported(row)}
+        <span class="subtle small">Imported through ACM. Replace it with ACM ImportCertificate.</span>
+        {#if canAdmin}
+          <button type="button" class="btn btn-danger-ghost btn-sm end" onclick={() => ondelete(row)}><Icon name="trash" size={14} />Delete</button>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -315,6 +371,51 @@
     font-size: 12.5px;
     max-height: 420px;
     white-space: pre;
+  }
+  .chain {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  .link {
+    position: relative;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+  .link + .link::before {
+    content: '';
+    position: absolute;
+    left: var(--space-5);
+    top: calc(-1 * var(--space-3) - 1px);
+    height: var(--space-3);
+    border-left: 1px solid var(--border-strong);
+  }
+  .linkhead {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .linkname {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+  }
+  .push {
+    margin-left: auto;
+  }
+  .chainkv {
+    grid-template-columns: 70px minmax(0, 1fr);
+    font-size: 13px;
+  }
+  .chainkv dd {
+    overflow-wrap: anywhere;
   }
   .crl {
     display: flex;

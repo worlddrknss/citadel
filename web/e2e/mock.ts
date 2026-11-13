@@ -150,23 +150,54 @@ const parameters = [
 ];
 
 const certificates = [
-  // Real list rows: source is pca-ca, pca-cert or lets-encrypt; template is server|client.
+  // Real list rows: source is pca-ca, pca-cert, lets-encrypt or acm-imported; template is server|client.
   { source: 'pca-ca', id: 'ca-root-1', subject: 'CN=Acme Root CA', commonName: 'Acme Root CA', status: 'ACTIVE', notBefore: ago(100 * DAY), notAfter: ahead(3000 * DAY), caType: 'ROOT', serial: '01', keyAlgorithm: 'EC_secp384r1', expiringSoon: false, isCA: true },
   { source: 'pca-ca', id: 'ca-sub-1', subject: 'CN=Acme Issuing CA', commonName: 'Acme Issuing CA', status: 'ACTIVE', notBefore: ago(90 * DAY), notAfter: ahead(1500 * DAY), caType: 'SUBORDINATE', parentCaId: 'ca-root-1', serial: '04', keyAlgorithm: 'EC_prime256v1', expiringSoon: false, isCA: true, pathLen: 0 },
   { source: 'pca-cert', id: 'cert-api-1', subject: 'api.acme.test', commonName: 'api.acme.test', status: 'ISSUED', notBefore: ago(80 * DAY), notAfter: ahead(10 * DAY), issuerCaId: 'ca-root-1', serial: '02', keyAlgorithm: 'EC_prime256v1', template: 'server', expiringSoon: true },
-  { source: 'lets-encrypt', id: 'cert-www-1', subject: 'www.acme.test', commonName: 'www.acme.test', status: 'ISSUED', notBefore: ago(20 * DAY), notAfter: ahead(70 * DAY), serial: '03', keyAlgorithm: 'EC_prime256v1', expiringSoon: false }
+  { source: 'lets-encrypt', id: 'cert-www-1', subject: 'www.acme.test', commonName: 'www.acme.test', status: 'ISSUED', notBefore: ago(20 * DAY), notAfter: ahead(70 * DAY), serial: '03', keyAlgorithm: 'EC_prime256v1', expiringSoon: false },
+  { source: 'acm-imported', id: 'arn:aws:acm:us-east-1:000000000000:certificate/imp1', subject: 'legacy.acme.test', commonName: 'legacy.acme.test', status: 'ISSUED', notBefore: ago(30 * DAY), notAfter: ahead(200 * DAY), serial: '05', keyAlgorithm: 'EC_prime256v1', issuer: 'CN=External Issuing CA,O=Example', expiringSoon: false }
 ];
+
+const pemOf = (tag: string) => `-----BEGIN CERTIFICATE-----\nMII${tag}\n-----END CERTIFICATE-----\n`;
+
+/** The chain GET /v1/certificates/detail returns: leaf first, root last. */
+function certChain(c: (typeof certificates)[number]) {
+  const link = (role: string, subject: string, issuer: string, serial: string, isCA: boolean) => ({
+    role,
+    subject,
+    issuer,
+    serial,
+    notBefore: c.notBefore,
+    notAfter: c.notAfter,
+    isCA,
+    selfSigned: role === 'root',
+    pem: pemOf(serial)
+  });
+  if (c.source === 'acm-imported') {
+    return [
+      link('leaf', `CN=${c.commonName}`, 'CN=External Issuing CA,O=Example', 'a1', false),
+      link('intermediate', 'CN=External Issuing CA,O=Example', 'CN=External Root CA,O=Example', 'a2', true),
+      link('root', 'CN=External Root CA,O=Example', 'CN=External Root CA,O=Example', 'a3', true)
+    ];
+  }
+  if (c.source === 'pca-ca') {
+    const root = link('root', 'CN=Acme Root CA', 'CN=Acme Root CA', '01', true);
+    return c.id === 'ca-root-1' ? [root] : [link('intermediate', c.subject, 'CN=Acme Root CA', '04', true), root];
+  }
+  return [link('leaf', `CN=${c.commonName}`, 'CN=Acme Root CA', c.serial, false), link('root', 'CN=Acme Root CA', 'CN=Acme Root CA', '01', true)];
+}
 
 function certDetail(id: string) {
   const c = certificates.find((x) => x.id === id) ?? certificates[1];
   return {
     ...c,
-    issuer: 'CN=Acme Root CA',
+    issuer: c.source === 'acm-imported' ? 'CN=External Issuing CA,O=Example' : 'CN=Acme Root CA',
     keyAlgorithm: 'EC_prime256v1',
     signatureAlgorithm: 'SHA256WITHECDSA',
     sans: [c.commonName],
     isCA: !!c.caType,
-    pem: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----'
+    pem: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----',
+    chain: certChain(c)
   };
 }
 
@@ -520,6 +551,7 @@ const WRITE: Record<string, Handler> = {
   }),
   'POST /v1/kms/grants': () => ({ grantId: 'grant-1', grantToken: 'grant-token-1' }),
   'DELETE /v1/kms/grants': () => ({ revoked: true }),
+  'DELETE /v1/certificates/acm': (q) => ({ arn: q.get('arn'), deleted: true }),
   'POST /v1/kms/keys/tags': () => ({ tagged: true }),
   'DELETE /v1/kms/keys/tags': () => ({ untagged: true }),
   'POST /v1/kms/encrypt': (_, b) => ({ keyId: b.keyId, ciphertextBlob: 'Y2lwaGVydGV4dA==', encryptionAlgorithm: b.encryptionAlgorithm }),

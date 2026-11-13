@@ -226,6 +226,21 @@ export interface Certificate {
   notAfter?: string;
   caType?: string;
   issuerCaId?: string;
+  /** Issuer DN of certificates Citadel did not issue (acm-imported rows). */
+  issuer?: string;
+}
+
+/** One certificate of a chain in GET /v1/certificates/detail, leaf first. */
+export interface ChainCertificate {
+  role: 'leaf' | 'intermediate' | 'root';
+  subject: string;
+  issuer: string;
+  serial: string;
+  notBefore: string;
+  notAfter: string;
+  isCA: boolean;
+  selfSigned: boolean;
+  pem: string;
 }
 
 export type LEOrderStatus = 'pending' | 'processing' | 'issued' | 'failed';
@@ -269,6 +284,8 @@ export interface CertificateDetail {
   revocationReason?: string;
   pem?: string;
   chainPem?: string;
+  /** The full chain, this certificate first and the root last, as far as Citadel holds the issuers. */
+  chain?: ChainCertificate[];
 }
 
 export interface AuditEvent {
