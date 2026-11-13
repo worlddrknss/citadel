@@ -146,7 +146,7 @@ func (s *Server) certificateChain(ctx context.Context, start *x509.Certificate, 
 	if start == nil {
 		return nil
 	}
-	provided := parsePEMCertificates(extraPEM)
+	provided := parsePEMCertificatesLenient(extraPEM)
 	var cas []*x509.Certificate
 	if list, err := s.store.ListCertificateAuthorities(ctx); err == nil {
 		for _, ca := range list {
@@ -222,9 +222,9 @@ func inChain(c *x509.Certificate, chain []*x509.Certificate) bool {
 	return false
 }
 
-// parsePEMCertificates parses the CERTIFICATE blocks of s, skipping any that
+// parsePEMCertificatesLenient parses the CERTIFICATE blocks of s, skipping any that
 // do not parse.
-func parsePEMCertificates(s string) []*x509.Certificate {
+func parsePEMCertificatesLenient(s string) []*x509.Certificate {
 	var out []*x509.Certificate
 	rest := []byte(s)
 	for len(out) < maxChainDepth {

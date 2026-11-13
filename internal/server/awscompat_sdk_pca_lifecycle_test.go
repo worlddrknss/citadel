@@ -9,7 +9,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/acmpca"
+	"github.com/aws/aws-sdk-go-v2/service/acmpca/schemas"
 	pcatypes "github.com/aws/aws-sdk-go-v2/service/acmpca/types"
+	"github.com/aws/smithy-go/transport/http/protocol/awsjson"
 
 	"github.com/worlddrknss/citadel/internal/config"
 	"github.com/worlddrknss/citadel/internal/store"
@@ -34,7 +36,11 @@ func newPCAClient(t *testing.T) *acmpca.Client {
 		HTTPClient:  srv.Client(),
 		Retryer:     func() aws.Retryer { return aws.NopRetryer{} },
 	}
-	return acmpca.NewFromConfig(cfg, func(o *acmpca.Options) { o.EndpointResolverV2 = fixedEndpoint[acmpca.EndpointParameters]{*u} })
+	// acmpca prefers Smithy RPCv2 CBOR; Citadel serves AWS JSON 1.1.
+	return acmpca.NewFromConfig(cfg, func(o *acmpca.Options) {
+		o.EndpointResolverV2 = fixedEndpoint[acmpca.EndpointParameters]{*u}
+		o.Protocol = awsjson.New11(schemas.ACMPrivateCA)
+	})
 }
 
 func TestSDKPCADeleteRestore(t *testing.T) {
