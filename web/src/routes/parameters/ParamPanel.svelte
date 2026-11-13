@@ -1,14 +1,14 @@
 <!-- Parameter detail panel: overview, version history with labels, tags. -->
 <script lang="ts">
   import { tick } from 'svelte';
-  import { base } from '$app/paths';
-  import { api, errorMessage, type KMSKey, type ParameterHistoryEntry, type ParameterTag } from '$lib/api';
-  import Icon from '$lib/components/Icon.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import Tabs from '$lib/components/Tabs.svelte';
-  import CopyButton from '$lib/components/CopyButton.svelte';
-  import SecretValue from '$lib/components/SecretValue.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
+  import { base } from '#lib/paths.ts';
+  import { api, errorMessage, type KMSKey, type ParameterHistoryEntry, type ParameterTag } from '#lib/api.ts';
+  import Icon from '#lib/components/Icon.svelte';
+  import Badge from '#lib/components/Badge.svelte';
+  import Tabs from '#lib/components/Tabs.svelte';
+  import CopyButton from '#lib/components/CopyButton.svelte';
+  import SecretValue from '#lib/components/SecretValue.svelte';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import TagsEditor from '../kms/TagsEditor.svelte';
   import InlineValue from './InlineValue.svelte';
   import { params, leaf, parentPath, fmtDateTime, TYPE_TONE, type Param } from './api';

@@ -1,9 +1,9 @@
 <!-- Workload client detail: configuration and copy-paste usage. -->
 <script lang="ts">
-  import Drawer from '$lib/components/Drawer.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import CopyButton from '$lib/components/CopyButton.svelte';
-  import Icon from '$lib/components/Icon.svelte';
+  import Drawer from '#lib/components/Drawer.svelte';
+  import Badge from '#lib/components/Badge.svelte';
+  import CopyButton from '#lib/components/CopyButton.svelte';
+  import Icon from '#lib/components/Icon.svelte';
   import Seg from './Seg.svelte';
   import { usage, ttlLabel, fmtDateTime, type IssuerInfo, type WorkloadClient } from './api';
 

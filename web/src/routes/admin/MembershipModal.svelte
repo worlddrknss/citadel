@@ -1,10 +1,10 @@
 <!-- Add a user to an account, or change the role of an existing membership. -->
 <script lang="ts">
   import { untrack } from 'svelte';
-  import Modal from '$lib/components/Modal.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import { api, errorMessage, type Account } from '$lib/api';
-  import { toast } from '$lib/stores/toast.svelte';
+  import Modal from '#lib/components/Modal.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import { api, errorMessage, type Account } from '#lib/api.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import { ROLES, type RoleName, type UserRow } from './api';
 
   let {

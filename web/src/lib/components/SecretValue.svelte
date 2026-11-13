@@ -4,7 +4,7 @@
 -->
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { toast } from '$lib/stores/toast.svelte';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import CopyButton from './CopyButton.svelte';
   import Icon from './Icon.svelte';
 

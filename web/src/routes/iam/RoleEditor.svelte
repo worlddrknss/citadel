@@ -2,10 +2,10 @@
      its JSON document; both are validated against the registered providers. -->
 <script lang="ts">
   import { untrack } from 'svelte';
-  import Modal from '$lib/components/Modal.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import { api, errorMessage, type OIDCProvider, type Role, type TrustPolicy } from '$lib/api';
-  import { toast } from '$lib/stores/toast.svelte';
+  import Modal from '#lib/components/Modal.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import { api, errorMessage, type OIDCProvider, type Role, type TrustPolicy } from '#lib/api.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import Seg from './Seg.svelte';
   import { iamApi } from './api';
   import { validateTrust, hasErrors, trustToJson, parseTrustJson, splitList, type TrustErrors } from './trust';

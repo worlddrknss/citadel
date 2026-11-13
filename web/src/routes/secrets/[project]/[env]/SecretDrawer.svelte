@@ -12,14 +12,14 @@
 
 <script lang="ts">
   import { tick, untrack } from 'svelte';
-  import { base } from '$app/paths';
-  import { api, type KMSKey } from '$lib/api';
-  import CopyButton from '$lib/components/CopyButton.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import SecretValue from '$lib/components/SecretValue.svelte';
-  import Tabs from '$lib/components/Tabs.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
+  import { base } from '#lib/paths.ts';
+  import { api, type KMSKey } from '#lib/api.ts';
+  import CopyButton from '#lib/components/CopyButton.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import SecretValue from '#lib/components/SecretValue.svelte';
+  import Tabs from '#lib/components/Tabs.svelte';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import { secretsApi, type SecretDetail } from '../../api';
   import { fullDate, shortDate } from '../../lib';
   import AccessList from './AccessList.svelte';

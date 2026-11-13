@@ -2,7 +2,7 @@
 // and SIEM streaming. Falls back to the legacy GET /v1/audit (latest 500,
 // filtered here) when the server doesn't have the paged endpoint yet.
 
-import { api, req } from '$lib/api';
+import { api, req } from '#lib/api.ts';
 import { isNotImplemented, qs, rawRequest } from '../http';
 
 export type ResultFilter = '' | 'success' | 'denied' | 'error';

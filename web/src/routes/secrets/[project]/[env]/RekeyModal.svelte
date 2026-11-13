@@ -1,8 +1,8 @@
 <!-- Re-encrypt every secret in the environment under another KMS key. -->
 <script lang="ts">
-  import { api, type KMSKey } from '$lib/api';
-  import Modal from '$lib/components/Modal.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
+  import { api, type KMSKey } from '#lib/api.ts';
+  import Modal from '#lib/components/Modal.svelte';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import { kmsLabel } from './kms';
 
   let {

@@ -1,17 +1,17 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
   import { goto } from '$app/navigation';
-  import { base } from '$app/paths';
+  import { base } from '#lib/paths.ts';
   import { page } from '$app/state';
-  import { api, type ChangeRequest, type KMSKey } from '$lib/api';
-  import EmptyState from '$lib/components/EmptyState.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import PageHeader from '$lib/components/PageHeader.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
-  import { session } from '$lib/stores/session.svelte';
-  import { revealPolicy } from '$lib/stores/revealPolicy.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { param, setParams } from '$lib/url';
+  import { api, type ChangeRequest, type KMSKey } from '#lib/api.ts';
+  import EmptyState from '#lib/components/EmptyState.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import PageHeader from '#lib/components/PageHeader.svelte';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
+  import { session } from '#lib/stores/session.svelte.ts';
+  import { revealPolicy } from '#lib/stores/revealPolicy.svelte.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { param, setParams } from '#lib/url.ts';
   import { defaultPolicy, secretsApi, type EnvPolicy, type ProjectInfo, type SecretList, type SecretRow } from '../../api';
   import { envLabel, envTier, joinPath, normPath, sortEnvs, type Tier } from '../../lib';
   import BulkBar from './BulkBar.svelte';
@@ -181,7 +181,7 @@
 
   // ---- Navigation -----------------------------------------------------------
   function urlWith(updates: Record<string, string | null>): string {
-    const u = new URL(page.url);
+    const u = new URL(page.url.href);
     for (const [k, v] of Object.entries(updates)) {
       if (v === null || v === '') u.searchParams.delete(k);
       else u.searchParams.set(k, v);

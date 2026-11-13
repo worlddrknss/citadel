@@ -1,7 +1,7 @@
 <!-- Inline editor for a secret's description and KMS key. -->
 <script lang="ts">
-  import { api, type KMSKey } from '$lib/api';
-  import { toast } from '$lib/stores/toast.svelte';
+  import { api, type KMSKey } from '#lib/api.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import type { SecretDetail } from '../../api';
   import { findKms, isAccountDefault, kmsLabel, selectableKeys } from './kms';
 

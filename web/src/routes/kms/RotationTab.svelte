@@ -1,10 +1,10 @@
 <!-- Automatic key rotation: status, enable/disable with a period, history. -->
 <script lang="ts">
-  import Icon from '$lib/components/Icon.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
-  import { errorMessage } from '$lib/api';
+  import Icon from '#lib/components/Icon.svelte';
+  import Badge from '#lib/components/Badge.svelte';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
+  import { errorMessage } from '#lib/api.ts';
   import { kms, fmtDate, fmtDateTime, periodLabel, SYMMETRIC, type KeyDetail, type RotationStatus } from './api';
 
   let { detail, canEdit, onchanged }: { detail: KeyDetail; canEdit: boolean; onchanged: () => void } = $props();

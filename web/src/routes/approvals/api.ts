@@ -1,8 +1,8 @@
-// Approvals calls beyond $lib/api's list/create/approve/reject. Contracts are
+// Approvals calls beyond #lib/api's list/create/approve/reject. Contracts are
 // documented on each call; values never travel except through the explicit,
 // audited reveal call.
 
-import { ApiError, req, type ChangeRequest } from '$lib/api';
+import { ApiError, req, type ChangeRequest } from '#lib/api.ts';
 import { qs } from '../http';
 
 export interface ValueFingerprint {

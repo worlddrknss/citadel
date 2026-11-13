@@ -1,14 +1,14 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { ApiError, errorMessage } from '$lib/api';
-  import { session } from '$lib/stores/session.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
-  import { param, setParams } from '$lib/url';
-  import Icon from '$lib/components/Icon.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import PageHeader from '$lib/components/PageHeader.svelte';
-  import EmptyState from '$lib/components/EmptyState.svelte';
+  import { ApiError, errorMessage } from '#lib/api.ts';
+  import { session } from '#lib/stores/session.svelte.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
+  import { param, setParams } from '#lib/url.ts';
+  import Icon from '#lib/components/Icon.svelte';
+  import Badge from '#lib/components/Badge.svelte';
+  import PageHeader from '#lib/components/PageHeader.svelte';
+  import EmptyState from '#lib/components/EmptyState.svelte';
   import { isNotImplemented } from '../http';
   import { fullTime, initials, relTime } from '../time';
   import PoliciesModal from './PoliciesModal.svelte';

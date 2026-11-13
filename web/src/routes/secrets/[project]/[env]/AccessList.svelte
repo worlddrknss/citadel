@@ -1,7 +1,7 @@
 <!-- "Who can read this": principals granted by the secret's resource policy,
      plus account admins, who can always manage it. -->
 <script lang="ts">
-  import Icon from '$lib/components/Icon.svelte';
+  import Icon from '#lib/components/Icon.svelte';
   import { parsePolicyAccess } from '../../api';
 
   let { policy }: { policy: string } = $props();

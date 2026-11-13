@@ -1,6 +1,6 @@
 <!-- Add (or overwrite) one tag on several secrets. -->
 <script lang="ts">
-  import Modal from '$lib/components/Modal.svelte';
+  import Modal from '#lib/components/Modal.svelte';
 
   let {
     open = $bindable(false),

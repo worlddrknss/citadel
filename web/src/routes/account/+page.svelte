@@ -1,14 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import PageHeader from '$lib/components/PageHeader.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import EmptyState from '$lib/components/EmptyState.svelte';
-  import CopyButton from '$lib/components/CopyButton.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import { api, errorMessage, type AccessKey } from '$lib/api';
-  import { session } from '$lib/stores/session.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
+  import PageHeader from '#lib/components/PageHeader.svelte';
+  import Badge from '#lib/components/Badge.svelte';
+  import EmptyState from '#lib/components/EmptyState.svelte';
+  import CopyButton from '#lib/components/CopyButton.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import { api, errorMessage, type AccessKey } from '#lib/api.ts';
+  import { session } from '#lib/stores/session.svelte.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
   import OnceSecret from './OnceSecret.svelte';
   import { accountApi, describeAgent, relTime, type SignInSession } from './api';
 

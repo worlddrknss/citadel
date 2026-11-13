@@ -3,10 +3,10 @@
   approval the same form opens a change request instead of writing.
 -->
 <script lang="ts">
-  import { api, ApiError, type KMSKey } from '$lib/api';
-  import Icon from '$lib/components/Icon.svelte';
-  import Modal from '$lib/components/Modal.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
+  import { api, ApiError, type KMSKey } from '#lib/api.ts';
+  import Icon from '#lib/components/Icon.svelte';
+  import Modal from '#lib/components/Modal.svelte';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import { secretsApi } from '../../api';
   import { kmsLabel, selectableKeys } from './kms';
   import SecretInput from './SecretInput.svelte';

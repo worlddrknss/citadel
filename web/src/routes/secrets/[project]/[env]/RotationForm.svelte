@@ -1,10 +1,10 @@
 <!-- Inline rotation settings: Lambda, schedule, optional immediate rotation,
      and turning rotation off. -->
 <script lang="ts">
-  import { api } from '$lib/api';
-  import Icon from '$lib/components/Icon.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
+  import { api } from '#lib/api.ts';
+  import Icon from '#lib/components/Icon.svelte';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import type { SecretDetail } from '../../api';
 
   let {

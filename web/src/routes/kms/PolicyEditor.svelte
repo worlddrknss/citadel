@@ -1,9 +1,9 @@
 <!-- Key policy JSON editor with live validation, format and reset. -->
 <script lang="ts">
-  import { api } from '$lib/api';
-  import Icon from '$lib/components/Icon.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
+  import { api } from '#lib/api.ts';
+  import Icon from '#lib/components/Icon.svelte';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
   import type { KeyDetail } from './api';
 
   let { detail, canEdit, onsaved }: { detail: KeyDetail; canEdit: boolean; onsaved: () => void } = $props();

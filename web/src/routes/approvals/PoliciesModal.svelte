@@ -1,12 +1,12 @@
 <!-- Approval policies: which environments need how many approvals. -->
 <script lang="ts">
-  import { api, errorMessage, type Project } from '$lib/api';
-  import { session } from '$lib/stores/session.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import Modal from '$lib/components/Modal.svelte';
+  import { api, errorMessage, type Project } from '#lib/api.ts';
+  import { session } from '#lib/stores/session.svelte.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
+  import Icon from '#lib/components/Icon.svelte';
+  import Badge from '#lib/components/Badge.svelte';
+  import Modal from '#lib/components/Modal.svelte';
   import { isNotImplemented } from '../http';
   import { approvalsApi, envTone, MAX_APPROVALS, type ApprovalPolicy } from './api';
 

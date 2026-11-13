@@ -2,7 +2,7 @@
 // never cleared early by an older one's timeout (the old per-page `flash`
 // pattern did exactly that).
 
-import { errorMessage } from '$lib/api';
+import { errorMessage } from '#lib/api.ts';
 
 export type ToastKind = 'success' | 'error' | 'info';
 export interface Toast {

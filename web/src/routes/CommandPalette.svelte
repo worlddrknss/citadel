@@ -5,7 +5,7 @@
   secrets. Enter navigates. Sources load in parallel and fail independently.
 -->
 <script lang="ts" module>
-  import type { IconName } from '$lib/components/Icon.svelte';
+  import type { IconName } from '#lib/components/Icon.svelte';
 
   export interface PaletteNav {
     href: string;
@@ -32,10 +32,10 @@
 
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { base } from '$app/paths';
-  import { api } from '$lib/api';
-  import Icon from '$lib/components/Icon.svelte';
-  import { session } from '$lib/stores/session.svelte';
+  import { base } from '#lib/paths.ts';
+  import { api } from '#lib/api.ts';
+  import Icon from '#lib/components/Icon.svelte';
+  import { session } from '#lib/stores/session.svelte.ts';
 
   let {
     open = $bindable(false),

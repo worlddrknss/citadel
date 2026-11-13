@@ -2,10 +2,10 @@
      audiences, how long they live and what their subject looks like. -->
 <script lang="ts">
   import { untrack } from 'svelte';
-  import Modal from '$lib/components/Modal.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import { errorMessage } from '$lib/api';
-  import { toast } from '$lib/stores/toast.svelte';
+  import Modal from '#lib/components/Modal.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import { errorMessage } from '#lib/api.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import Seg from './Seg.svelte';
   import {
     wiApi,

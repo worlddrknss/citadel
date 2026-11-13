@@ -1,11 +1,11 @@
 <!-- Let's Encrypt: ACME client settings, and requesting a public certificate
      with HTTP-01 (automatic) or DNS-01 (manual TXT records). -->
 <script lang="ts">
-  import Icon from '$lib/components/Icon.svelte';
-  import CopyButton from '$lib/components/CopyButton.svelte';
-  import { api, errorMessage } from '$lib/api';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import CopyButton from '#lib/components/CopyButton.svelte';
+  import { api, errorMessage } from '#lib/api.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
   import Seg from './Seg.svelte';
 
   type Env = 'staging' | 'production' | 'custom';

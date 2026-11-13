@@ -1,10 +1,10 @@
 <!-- New private CA: a root, or a subordinate signed by an existing CA. -->
 <script lang="ts">
   import { untrack } from 'svelte';
-  import Modal from '$lib/components/Modal.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import { errorMessage } from '$lib/api';
-  import { toast } from '$lib/stores/toast.svelte';
+  import Modal from '#lib/components/Modal.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import { errorMessage } from '#lib/api.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import Seg from './Seg.svelte';
   import { certApi, type CertRow, type KeyAlgorithm } from './api';
   import { cnOf, KEY_ALGORITHMS } from './certs';

@@ -1,6 +1,6 @@
 <!-- One-field dialog for naming a new folder or environment. -->
 <script lang="ts">
-  import Modal from '$lib/components/Modal.svelte';
+  import Modal from '#lib/components/Modal.svelte';
 
   let {
     open = $bindable(false),

@@ -18,8 +18,8 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, ApiError, errorMessage } from '$lib/api';
-  import { session } from '$lib/stores/session.svelte';
+  import { api, ApiError, errorMessage } from '#lib/api.ts';
+  import { session } from '#lib/stores/session.svelte.ts';
   import Icon from './Icon.svelte';
   import Logo from './Logo.svelte';
   import ThemeToggle from './ThemeToggle.svelte';

@@ -1,4 +1,4 @@
-import type { KMSKey } from '$lib/api';
+import type { KMSKey } from '#lib/api.ts';
 
 /** "payments-prod · 1a2b3c4d…" — the first alias reads better than a key ID. */
 export function kmsLabel(k: KMSKey): string {

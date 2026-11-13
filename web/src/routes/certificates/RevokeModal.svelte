@@ -1,10 +1,10 @@
 <!-- Revoke a certificate: pick a CRL reason and type the common name to
      confirm. Revocation is permanent. -->
 <script lang="ts">
-  import Modal from '$lib/components/Modal.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import { api, errorMessage } from '$lib/api';
-  import { toast } from '$lib/stores/toast.svelte';
+  import Modal from '#lib/components/Modal.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import { api, errorMessage } from '#lib/api.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import type { CertRow } from './api';
   import { REVOKE_REASONS } from './certs';
 

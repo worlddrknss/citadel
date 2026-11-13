@@ -17,10 +17,10 @@
 </script>
 
 <script lang="ts">
-  import Modal from '$lib/components/Modal.svelte';
-  import CopyButton from '$lib/components/CopyButton.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
+  import Modal from '#lib/components/Modal.svelte';
+  import CopyButton from '#lib/components/CopyButton.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import { toast } from '#lib/stores/toast.svelte.ts';
   import { downloadText } from './download';
 
 

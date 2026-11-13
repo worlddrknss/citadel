@@ -4,9 +4,9 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { errorMessage } from '$lib/api';
-  import CopyButton from '$lib/components/CopyButton.svelte';
-  import Icon from '$lib/components/Icon.svelte';
+  import { errorMessage } from '#lib/api.ts';
+  import CopyButton from '#lib/components/CopyButton.svelte';
+  import Icon from '#lib/components/Icon.svelte';
 
   let {
     load,

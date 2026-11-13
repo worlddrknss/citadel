@@ -1,7 +1,7 @@
 <!-- Inverted bar shown while secrets are selected (board: "2 selected | Copy
      to staging · Move to folder · Add tag … Delete ×"). -->
 <script lang="ts">
-  import Icon from '$lib/components/Icon.svelte';
+  import Icon from '#lib/components/Icon.svelte';
 
   let {
     count,

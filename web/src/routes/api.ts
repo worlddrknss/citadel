@@ -1,8 +1,8 @@
-// Client calls used by the app shell and the Overview page that $lib/api
+// Client calls used by the app shell and the Overview page that #lib/api
 // doesn't have yet. Each documents the backend contract it expects; callers
 // treat isNotImplemented() errors as "feature not available on this server".
 
-import { req, type Me } from '$lib/api';
+import { req, type Me } from '#lib/api.ts';
 
 export interface ServerInfo {
   /** Server started with GODEBUG=fips140=on/only. */

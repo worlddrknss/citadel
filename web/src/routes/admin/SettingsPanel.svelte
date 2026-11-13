@@ -2,11 +2,11 @@
      lifetimes. SSO lives in its own card below (SsoPanel). -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import { api, errorMessage } from '$lib/api';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { session } from '$lib/stores/session.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import { api, errorMessage } from '#lib/api.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { session } from '#lib/stores/session.svelte.ts';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
   import { adminApi, fmtDate, type OrgSettings } from './api';
 
   let saved = $state<OrgSettings | null>(null);

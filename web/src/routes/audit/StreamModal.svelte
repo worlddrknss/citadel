@@ -1,10 +1,10 @@
 <!-- SIEM streaming settings: an HTTPS endpoint that receives every audit event. -->
 <script lang="ts">
-  import { errorMessage } from '$lib/api';
-  import { session } from '$lib/stores/session.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import Modal from '$lib/components/Modal.svelte';
+  import { errorMessage } from '#lib/api.ts';
+  import { session } from '#lib/stores/session.svelte.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import Icon from '#lib/components/Icon.svelte';
+  import Modal from '#lib/components/Modal.svelte';
   import { isNotImplemented } from '../http';
   import { auditApi } from './api';
 

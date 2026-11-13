@@ -4,7 +4,7 @@
 // enforces it (403 reveal_forbidden); pages use this to hide Reveal/Export
 // instead of offering buttons that fail.
 
-import { req } from '$lib/api';
+import { req } from '#lib/api.ts';
 import { session } from './session.svelte';
 
 function createRevealPolicy() {

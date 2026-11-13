@@ -4,8 +4,8 @@
   offered separately underneath and runs its own type-the-key confirmation.
 -->
 <script lang="ts">
-  import Icon from '$lib/components/Icon.svelte';
-  import Modal from '$lib/components/Modal.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import Modal from '#lib/components/Modal.svelte';
 
   let {
     open = $bindable(false),

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { confirmState } from '$lib/stores/confirm.svelte';
+  import { confirmState } from '#lib/stores/confirm.svelte.ts';
   import Modal from './Modal.svelte';
 
   let typed = $state('');

@@ -1,16 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import PageHeader from '$lib/components/PageHeader.svelte';
-  import Tabs from '$lib/components/Tabs.svelte';
-  import DataTable, { type Column } from '$lib/components/DataTable.svelte';
-  import EmptyState from '$lib/components/EmptyState.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import Icon from '$lib/components/Icon.svelte';
-  import { api, errorMessage, type OIDCProvider, type Role } from '$lib/api';
-  import { session } from '$lib/stores/session.svelte';
-  import { toast } from '$lib/stores/toast.svelte';
-  import { confirm } from '$lib/stores/confirm.svelte';
-  import { param, setParams } from '$lib/url';
+  import PageHeader from '#lib/components/PageHeader.svelte';
+  import Tabs from '#lib/components/Tabs.svelte';
+  import DataTable, { type Column } from '#lib/components/DataTable.svelte';
+  import EmptyState from '#lib/components/EmptyState.svelte';
+  import Badge from '#lib/components/Badge.svelte';
+  import Icon from '#lib/components/Icon.svelte';
+  import { api, errorMessage, type OIDCProvider, type Role } from '#lib/api.ts';
+  import { session } from '#lib/stores/session.svelte.ts';
+  import { toast } from '#lib/stores/toast.svelte.ts';
+  import { confirm } from '#lib/stores/confirm.svelte.ts';
+  import { param, setParams } from '#lib/url.ts';
   import RoleEditor from './RoleEditor.svelte';
   import RoleDrawer from './RoleDrawer.svelte';
   import ProviderModal from './ProviderModal.svelte';
