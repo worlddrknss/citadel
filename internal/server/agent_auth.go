@@ -428,10 +428,13 @@ func (s *Server) verifyFederatedToken(ctx context.Context, tok, iss, accountID s
 		}
 		return out
 	}
-	if _, err := s.store.GetOIDCProviderByURL(ctx, accountID, iss); err != nil {
+	// Fetch keys only from the provider URL registered in the account, never
+	// from the token's own (still unverified) issuer claim.
+	provider, err := s.store.GetOIDCProviderByURL(ctx, accountID, iss)
+	if err != nil {
 		return nil
 	}
-	c, err := verifyWebIdentityToken(ctx, s.oidcHTTPClient(), tok, iss)
+	c, err := verifyWebIdentityToken(ctx, s.oidcHTTPClient(), tok, store.NormalizeIssuerURL(provider.URL))
 	if err != nil {
 		return nil
 	}
