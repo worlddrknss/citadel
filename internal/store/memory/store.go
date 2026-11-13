@@ -40,6 +40,7 @@ type Store struct {
 	appr         memApprovals
 	awsCompatState
 	pki pkiState
+	ak  accessKeyState
 	kms *memKMS
 }
 
