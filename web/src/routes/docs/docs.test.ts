@@ -152,10 +152,10 @@ describe('search', () => {
 
 describe('the bundled docs', () => {
   it('include every docs/*.md and put each in the nav', () => {
-    expect(Object.keys(SOURCES)).toEqual(expect.arrayContaining(['getting-started', 'getting-started-agents', 'agents', 'agents-mcp', 'design/agent-credentials']));
+    expect(Object.keys(SOURCES)).toEqual(expect.arrayContaining(['getting-started', 'getting-started-agents', 'agents', 'agents-mcp', 'sdks', 'sdk-typescript', 'sdk-go', 'design/agent-credentials']));
     expect(new Set(ORDER)).toEqual(new Set(Object.keys(SOURCES)));
     for (const d of NAV_DOCS) expect(SOURCES[d.slug], d.slug).toBeDefined();
-    expect(DOCS_NAV.map((g) => g.label)).toEqual(['Getting started', 'Agents', 'Secrets & keys', 'Operations', 'Reference', 'Design notes']);
+    expect(DOCS_NAV.map((g) => g.label)).toEqual(['Getting started', 'Agents', 'SDKs', 'Secrets & keys', 'Operations', 'Reference', 'Design notes']);
   });
   it('lists docs the manifest misses under Reference or Design notes', () => {
     const nav = navFor([...NAV_DOCS.map((d) => d.slug), 'new-thing', 'design/other'], { 'new-thing': 'New thing' });

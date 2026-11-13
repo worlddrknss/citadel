@@ -617,7 +617,7 @@ hosts or values):
 ## Management API
 
 The console uses `/v1/agents...` (session or access-key auth, scoped to the
-current account); see the API reference (`docs/openapi.yaml`). The Go SDK
+current account); see the API reference (`docs/openapi.yaml`). The [Go SDK](sdk-go.md)
 wraps the common calls (`CreateAgent`, `CreateAgentToken`,
 `CreateAgentCredential`, `PutAgentGrant`, `SuspendAgent`,
 `SetAgentsSuspended`, `ListAgentAccessRequests`, `ListAgentLeases`,

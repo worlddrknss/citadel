@@ -26,6 +26,19 @@ test('opens from the sidebar and navigates between docs', async ({ page }) => {
   await expect(page.locator('main h1')).toHaveText('Credentials for AI agents');
 });
 
+test('has the SDK pages in their own group', async ({ page }) => {
+  await open(page, '/docs');
+  const nav = page.getByRole('navigation', { name: 'Docs pages' });
+  await expect(nav.getByText('SDKs', { exact: true })).toBeVisible();
+  await nav.getByRole('link', { name: 'TypeScript SDK' }).click();
+  await expect(page).toHaveURL(/\/app\/docs\/sdk-typescript$/);
+  await expect(page.locator('main h1')).toHaveText('TypeScript SDK');
+  await page.locator('article').getByRole('link', { name: 'SDKs and client libraries' }).first().click();
+  await expect(page).toHaveURL(/\/app\/docs\/sdks$/);
+  await nav.getByRole('link', { name: 'Go SDK' }).click();
+  await expect(page.locator('main h1')).toHaveText('Go SDK');
+});
+
 test('deep links to a heading, with an On this page contents', async ({ page }) => {
   await page.goto('/app/docs/agents#minted-credentials');
   const heading = page.getByRole('heading', { level: 2, name: 'Minted credentials' });

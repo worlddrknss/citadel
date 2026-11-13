@@ -186,6 +186,12 @@ appears in the file.
 citadel mcp [--url <url>] [--token-env <name>]
 ```
 
+The bridge is the `citadel` command of the TypeScript SDK package. The
+package is not on npm yet, so `npx -y @worlddrknss/citadel mcp` can't
+download it: install it from the repository first and use `citadel mcp` (or
+`npx citadel mcp` in the project you installed it in) as the command. See
+[TypeScript SDK](sdk-typescript.md#the-citadel-mcp-stdio-bridge).
+
 | Setting | Meaning |
 | --- | --- |
 | `--url` or `CITADEL_URL` | Citadel's base URL. The bridge appends `/mcp` (a URL already ending in `/mcp` is used as is). It must be `https`; plain `http` is accepted only for `localhost` and loopback addresses. |
