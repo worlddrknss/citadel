@@ -624,7 +624,10 @@ wraps the common calls (`CreateAgent`, `CreateAgentToken`,
 `RevokeAgentLease`, ...) and, configured with `AgentToken` (or
 `CITADEL_AGENT_TOKEN`), the Agent API (`AgentWhoAmI`, `AgentCredentials`,
 `AgentRequestAccess`, `AgentAccessRequest`, `WaitForAgentAccess`,
-`AgentLeases`, `AgentTOTPCode`, `AgentGetLogin`, `AgentReveal`). For 2.4 it
+`AgentLeases`, `AgentTOTPCode`, `AgentGetLogin`, `AgentReveal`, `AgentHTTP`);
+the [TypeScript SDK](sdk-typescript.md#the-agent-api)'s `CitadelAgent` covers
+the Agent API too. Both expose an Agent API error's `reason` and
+`requestId`. For 2.4 it
 also has `SetAgentLogin`, `GetAgentLogin`, `ListAgentAnomalies` and
 `SetAgentAnomalySettings`, and the credential and grant inputs take the
 `Login`, `AWSSTS`, `GitHubApp`, `OAuth2` and `Scope` settings. Approving and denying are console-only by design, so the SDK

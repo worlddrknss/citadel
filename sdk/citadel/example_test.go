@@ -227,9 +227,9 @@ func ExampleClient_WaitForAgentAccess() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	// Asking again while a request is pending returns the same request,
-	// which is also how to find the request behind an approval_required
-	// error.
+	// Ask for access the agent has no grant for. (For a grant with
+	// requiresApproval, the refusal names the request: see
+	// ExampleApprovalRequestID.)
 	req, err := c.AgentRequestAccess(ctx, citadel.AgentAccessInput{
 		Credential: "deploy-key",
 		Actions:    []string{"reveal"},
@@ -253,6 +253,96 @@ func ExampleClient_WaitForAgentAccess() {
 		log.Fatal(err)
 	}
 	fmt.Println(len(v.Value) > 0, v.LeaseID, v.LeaseExpiresAt)
+}
+
+// Brokered HTTP: Citadel makes the request with the credential injected,
+// so the agent never holds the secret.
+func ExampleClient_AgentHTTP() {
+	c, err := citadel.New(citadel.Config{}) // CITADEL_AGENT_TOKEN
+	if err != nil {
+		log.Fatal(err)
+	}
+	ctx := context.Background()
+	res, err := c.AgentHTTP(ctx, citadel.AgentHTTPRequest{
+		Credential: "github-pat",
+		URL:        "https://api.github.com/user/repos",
+		Header:     map[string]string{"Accept": "application/vnd.github+json"},
+		TaskID:     "fix-issue-1234",
+	})
+	if err != nil {
+		// Refusals carry a stable reason: no_grant, host_not_allowed,
+		// destination_blocked, upstream_timeout...
+		log.Fatalf("refused (%s): %v", citadel.ErrorReason(err), err)
+	}
+	// An upstream error status is a successful brokered call.
+	if !res.OK() {
+		log.Fatalf("GitHub answered %d: %s", res.Status, res.Text())
+	}
+	var repos []struct {
+		FullName string `json:"full_name"`
+	}
+	if err := res.JSON(&repos); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(len(repos), "repositories; redacted:", res.Redacted)
+
+	// A JSON body (JSON), or Body: text is sent as is, other bytes base64.
+	created, err := c.AgentHTTP(ctx, citadel.AgentHTTPRequest{
+		Credential: "github-pat",
+		Method:     "POST",
+		URL:        "https://api.github.com/repos/acme/app/issues",
+		JSON:       map[string]string{"title": "Flaky test in CI"},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(created.Status)
+}
+
+// A grant with requiresApproval refuses with approval_required and the
+// access request it opened: wait for it, then retry under the lease.
+func ExampleApprovalRequestID() {
+	c, err := citadel.New(citadel.Config{}) // CITADEL_AGENT_TOKEN
+	if err != nil {
+		log.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	v, err := c.AgentReveal(ctx, "deploy-key")
+	if requestID, ok := citadel.ApprovalRequestID(err); ok && requestID != "" {
+		approved, werr := c.WaitForAgentAccess(ctx, requestID, 5*time.Second)
+		if werr != nil {
+			log.Fatalf("not approved (%v): %s", werr, approved.DecisionComment)
+		}
+		v, err = c.AgentReveal(ctx, "deploy-key")
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(len(v.Value) > 0, v.LeaseID)
+}
+
+// Brokered calls are POSTs, so the client doesn't repeat them after a 500,
+// 502, 504 or a timeout: the upstream may already have acted. Opt in for an
+// upstream call that is safe to repeat.
+func ExampleWithRetryNonIdempotent() {
+	c, err := citadel.New(citadel.Config{}) // CITADEL_AGENT_TOKEN
+	if err != nil {
+		log.Fatal(err)
+	}
+	ctx := citadel.WithRetryNonIdempotent(context.Background())
+	res, err := c.AgentHTTP(ctx, citadel.AgentHTTPRequest{
+		Credential: "payments",
+		Method:     "POST",
+		URL:        "https://pay.example.com/charges",
+		Header:     map[string]string{"Idempotency-Key": "order-42"},
+		JSON:       map[string]int{"amount": 100},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(res.Status)
 }
 
 // Browser agents: a login's username and password for one page, and its

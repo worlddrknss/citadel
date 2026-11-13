@@ -19,8 +19,9 @@ dependencies, runs in route handlers, server components, server actions,
 middleware and edge runtimes, and includes `loadSecrets`, which loads a
 whole folder of secrets with an in-memory cache. Its types are generated
 from the OpenAPI spec, so you can call any `/v1` operation with types, not
-only the ones it wraps. It also contains the `citadel mcp` stdio bridge for
-AI agents.
+only the ones it wraps. Its `CitadelAgent` client covers the Agent API for
+agents you write yourself, and it contains the `citadel mcp` stdio bridge
+for AI agents.
 
 **Go.** The Go SDK uses only the standard library. It wraps more of the API
 than the TypeScript SDK: besides secrets, parameters, KMS and certificates,
@@ -128,10 +129,11 @@ with it. Use the SDK from the same release as your server, or an older one:
   credentials 2.4, and audit retention 2.5. The API deliberately doesn't
   disclose the server's version (`GET /v1/server/info` doesn't include it),
   so check the release you deployed, such as the image tag.
-- **The SDK's own version number** (`2.1.0` in `package.json` and in Go's
-  `citadel.Version`) is the version the SDK first shipped with and isn't
-  bumped on every release. Match SDKs to servers by repository release, not
-  by that number.
+- **The SDK's own version number** (`package.json` and `VERSION` in
+  TypeScript, `citadel.Version` in Go, sent in the `User-Agent` header) is
+  the Citadel release the SDK ships with, from 2.6.0 on; the release
+  workflow refuses a tag the SDKs don't match. (Before 2.6.0 it stayed at
+  `2.1.0`.)
 - **Go module versions.** The repository's Go module is
   `github.com/worlddrknss/citadel`, without a `/v2` suffix, so Go can't use
   the `v2.x.y` release tags directly and a bare `go get` resolves to an old

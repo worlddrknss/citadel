@@ -33,11 +33,11 @@ then add it as a dependency:
 
 ```sh
 mkdir -p vendor && cp /path/to/citadel/sdk/typescript/worlddrknss-citadel-*.tgz vendor/
-npm install ./vendor/worlddrknss-citadel-2.1.0.tgz
+npm install ./vendor/worlddrknss-citadel-2.6.0.tgz
 npm install server-only   # recommended for Next.js; see "Keep it on the server"
 ```
 
-`package.json` then records `"@worlddrknss/citadel": "file:vendor/worlddrknss-citadel-2.1.0.tgz"`.
+`package.json` then records `"@worlddrknss/citadel": "file:vendor/worlddrknss-citadel-2.6.0.tgz"`.
 Build the tarball from the same release as your server (see
 [Versions and compatibility](sdks.md#versions-and-compatibility)). Installing
 straight from GitHub (`npm install github:worlddrknss/citadel`) doesn't work:
@@ -58,7 +58,7 @@ acts with its owner's role: a viewer's key can read, an editor's key can
 write, and an admin's key can manage. The SDK sends it as
 `Authorization: Bearer <id>:<secret>`, which only the native API accepts;
 the AWS-compatible APIs need SigV4 (see [Authentication](sdks.md#authentication)).
-Agent tokens are passed per call instead (see [The Agent API](#the-agent-api)).
+Agent tokens go to `CitadelAgent` instead (see [The Agent API](#the-agent-api)).
 
 Constructor options override the environment:
 
@@ -70,7 +70,7 @@ const citadel = new Citadel({
   accessKeyId: process.env.CITADEL_ACCESS_KEY_ID,
   secretAccessKey: process.env.CITADEL_SECRET_ACCESS_KEY,
   timeoutMs: 10_000, // per attempt (default 30 s; 0 disables)
-  maxRetries: 3, // 429/5xx and network errors (default 3)
+  maxRetries: 3, // see Errors, retries and timeouts (default 3)
   retryBaseDelayMs: 200, // first backoff delay (default 200 ms)
   retryMaxDelayMs: 10_000, // longest single delay, Retry-After included (default 10 s)
   headers: { 'X-Request-Source': 'shop-web' }, // sent with every request
@@ -300,70 +300,73 @@ and the Agent API (`/v1/agent/*`) accepts nothing else. See
 agents use the [MCP server](agents-mcp.md); call the Agent API from code
 when you write the agent yourself.
 
-The SDK has no typed methods for the Agent API yet. This wrapper adds them
-with `request()` and the generated types; each call overrides the
-`Authorization` header with the agent token, so no access key is needed:
+`CitadelAgent` is the Agent API client. It reads `CITADEL_URL` and
+`CITADEL_AGENT_TOKEN`, takes the same connection options as `Citadel`
+(`timeoutMs`, `maxRetries`, `fetch`, `headers`...) and, like `Citadel`, is
+server-only:
 
 ```ts
 // lib/citadel-agent.ts
-import { Citadel, type components, type RequestOptions } from '@worlddrknss/citadel';
+import { CitadelAgent } from '@worlddrknss/citadel';
 
-type S = components['schemas'];
-
-export function agentApi(token: string, client: Citadel = new Citadel()) {
-  const authorization = `Bearer ${token}`;
-  const get = <T>(path: string, query?: Record<string, string>, opts?: RequestOptions) =>
-    client.request<T>({ method: 'GET', path, query, authorization }, opts);
-  const post = <T>(path: string, body: unknown, opts?: RequestOptions) =>
-    client.request<T>({ method: 'POST', path, body, authorization }, opts);
-  return {
-    whoami: (opts?: RequestOptions) => get<S['AgentWhoAmI']>('/v1/agent/whoami', undefined, opts),
-    credentials: async (opts?: RequestOptions) => (await get<S['AgentUsableCredentialList']>('/v1/agent/credentials', undefined, opts)).credentials,
-    http: (input: S['AgentHttpRequest'], opts?: RequestOptions) => post<S['AgentHttpResponse']>('/v1/agent/http', input, opts),
-    reveal: (input: S['AgentRevealRequest'], opts?: RequestOptions) => post<S['AgentRevealResponse']>('/v1/agent/credentials/reveal', input, opts),
-    login: (input: S['AgentLoginRequest'], opts?: RequestOptions) => post<S['AgentLogin']>('/v1/agent/login', input, opts),
-    totp: (input: S['AgentTOTPRequest'], opts?: RequestOptions) => post<S['AgentTOTPCode']>('/v1/agent/totp', input, opts),
-    requestAccess: (input: S['AgentAccessRequestInput'], opts?: RequestOptions) => post<S['AgentAccessRequest']>('/v1/agent/access-requests', input, opts),
-    accessRequest: (id: string, opts?: RequestOptions) => get<S['AgentAccessRequest']>(`/v1/agent/access-requests/${encodeURIComponent(id)}`, undefined, opts),
-    leases: async (credential?: string, opts?: RequestOptions) =>
-      (await get<S['AgentLeaseList']>('/v1/agent/leases', credential ? { credential } : undefined, opts)).leases,
-  };
-}
-
-export const agent = agentApi(process.env.CITADEL_AGENT_TOKEN ?? '');
+export const agent = new CitadelAgent({
+  baseUrl: 'https://citadel.example.com', // default: CITADEL_URL
+  token: process.env.CITADEL_AGENT_TOKEN, // the default
+  taskId: 'fix-issue-1234', // optional: X-Citadel-Task-Id on every call
+});
 ```
 
+The token is sent only in the `Authorization` header. It is kept in a
+private field, so it doesn't show up when the client is logged, and never
+appears in errors.
+
 With a [federated token](agents.md#workload-identity-federation) (such as a
-GitHub Actions ID token), pass it instead of the agent token. If the
-identity is bound to more than one agent, also send the agent's ID:
-`new Citadel({ headers: { 'X-Citadel-Agent-Id': 'agt_...' } })`.
+GitHub Actions ID token), pass it as `token`. If the identity is bound to
+more than one agent, also pass the agent's ID: `agentId: 'agt_...'` (sent as
+`X-Citadel-Agent-Id`).
+
+| Method | Endpoint |
+| --- | --- |
+| `whoami()` | `GET /v1/agent/whoami` |
+| `listCredentials()` | `GET /v1/agent/credentials` |
+| `http(input)` | `POST /v1/agent/http` (brokered request) |
+| `reveal(credential)` | `POST /v1/agent/credentials/reveal` |
+| `getLogin({ credential, url })` | `POST /v1/agent/login` |
+| `getTotpCode(credential)` | `POST /v1/agent/totp` |
+| `requestAccess(input)` | `POST /v1/agent/access-requests` |
+| `getAccessRequest(requestId)` | `GET /v1/agent/access-requests/{id}` |
+| `waitForAccess(requestId, { intervalMs, signal })` | polls `getAccessRequest` until decided |
+| `listLeases({ credential })` | `GET /v1/agent/leases` |
 
 ### Who am I, and brokered HTTP
 
 ```ts
 const me = await agent.whoami();
-const usable = (await agent.credentials()).filter((c) => c.usable).map((c) => c.name);
+const usable = (await agent.listCredentials()).filter((c) => c.usable).map((c) => c.name);
 
 // Brokered HTTP: Citadel injects the credential; the agent never sees it.
-const res = await agent.http(
-  {
-    credential: 'github-pat',
-    method: 'GET',
-    url: 'https://api.github.com/user/repos',
-    headers: { Accept: 'application/vnd.github+json' },
-    bodyEncoding: 'text',
-    taskId: 'fix-issue-1234',
-  },
-  { maxRetries: 0 }, // don't repeat upstream side effects on a 502/504
-);
-const repos: unknown = res.bodyEncoding === 'text' ? JSON.parse(res.body) : null;
+const res = await agent.http({
+  credential: 'github-pat',
+  url: 'https://api.github.com/user/repos',
+  headers: { Accept: 'application/vnd.github+json' },
+});
+const repos = res.ok ? res.json<unknown[]>() : [];
+
+// A JSON body (`json`), text (`body: string`) or bytes (`body: Uint8Array`).
+const issue = await agent.http({
+  credential: 'github-pat',
+  method: 'POST',
+  url: 'https://api.github.com/repos/acme/app/issues',
+  json: { title: 'Flaky test in CI' },
+});
 ```
 
-An upstream error status is a successful brokered call: check `res.status`.
-The client retries `502` and `504` answers for every method, and Citadel
-returns those when the upstream is unreachable or times out, which may be
-after the upstream acted. Pass `{ maxRetries: 0 }` for brokered requests that
-change something.
+`method` defaults to `GET`. `json` sets `Content-Type: application/json`
+unless `headers` has one; bytes are sent base64 encoded (the SDK sets
+`bodyEncoding`). The result has the upstream's `status`, `headers`,
+`truncated` and `redacted`, plus `ok`, `text()`, `bytes()` and `json()`,
+which decode a base64 body for you. An upstream error status is a
+successful brokered call: check `res.ok` or `res.status`.
 
 ### Reveal, logins and TOTP
 
@@ -372,36 +375,33 @@ change something.
 const deployKey = await agent.reveal({ credential: 'deploy-key', taskId: 'release-42' });
 
 // Browser agents: a login for one page (`reveal`), and its TOTP code (`totp`).
-const login = await agent.login({ credential: 'acme-admin', url: 'https://admin.acme.example/login' });
-const { code, secondsRemaining } = await agent.totp({ credential: 'acme-admin' });
+const login = await agent.getLogin({ credential: 'acme-admin', url: 'https://admin.acme.example/login' });
+const { code, secondsRemaining } = await agent.getTotpCode('acme-admin');
 ```
 
 Minted credentials (`github_app`, `oauth2_client_credentials`, `aws_sts`)
-reveal a short-lived token with `expiresAt`. See
+reveal a short-lived token with `expiresAt`; a reveal under a lease returns
+`leaseId` and `leaseExpiresAt`. See
 [Revealing a credential](agents.md#revealing-a-credential) and
 [Logins for browser agents](agents.md#logins-for-browser-agents).
 
 ### Access requests and leases
 
 ```ts
-// Ask a person for access. Asking again while it is pending returns the
-// same request, which is also how to find the request behind an
-// `approval_required` error.
-let request = await agent.requestAccess({
+// Ask a person for access, then wait for the decision (polls every 5 s by
+// default; pass `signal` to give up).
+const request = await agent.requestAccess({
   credential: 'deploy-key',
   actions: ['reveal'],
   reason: 'Tag the release; the pipeline needs the deploy key',
   duration: '15m',
   taskId: 'release-42',
 });
-while (request.status === 'pending') {
-  await new Promise((r) => setTimeout(r, 5_000));
-  request = await agent.accessRequest(request.requestId);
+const decided = await agent.waitForAccess(request.requestId);
+if (decided.status !== 'approved') {
+  throw new Error(`access ${decided.status}: ${decided.decisionComment ?? ''}`);
 }
-if (request.status !== 'approved') {
-  throw new Error(`access ${request.status}: ${request.decisionComment ?? ''}`);
-}
-const leases = await agent.leases('deploy-key');
+const leases = await agent.listLeases({ credential: 'deploy-key' });
 ```
 
 Approving and denying happen in the console only. See
@@ -409,25 +409,59 @@ Approving and denying happen in the console only. See
 
 ### Agent API errors
 
-Agent API errors are JSON `{ error, reason, message }`. `CitadelError.code`
-carries `error`, not `reason`: a missing grant is `code: 'forbidden'` with
-the reason only in the message. `approval_required` is both, so you can
-branch on it:
+Agent API errors are JSON `{ error, reason, message }`, plus `requestId` for
+`approval_required`. `CitadelError` carries all of them: `code` is `error`
+(`forbidden`, `approval_required`, `upstream_error`...), `reason` the stable
+reason (`no_grant`, `host_not_allowed`, `upstream_timeout`...) and
+`requestId` the access request a `requiresApproval` grant opened. Wait for
+that request and retry; there is no need to ask again:
 
 ```ts
 try {
-  return (await agent.reveal({ credential: 'deploy-key' })).value;
+  return (await agent.reveal('deploy-key')).value;
 } catch (err) {
-  if (CitadelError.is(err, 'approval_required')) {
-    const pending = await agent.requestAccess({ credential: 'deploy-key', actions: ['reveal'], reason: 'release' });
-    return `waiting for ${pending.requestId}`;
+  // A grant with requiresApproval: the error names the access request
+  // Citadel opened. Wait for it, then retry under the lease.
+  if (CitadelError.is(err, 'approval_required') && err.requestId) {
+    const decided = await agent.waitForAccess(err.requestId);
+    if (decided.status === 'approved') return (await agent.reveal('deploy-key')).value;
+    return `not approved: ${decided.decisionComment ?? decided.status}`;
   }
   if (CitadelError.is(err) && err.isForbidden) {
-    // no_grant, host_not_allowed, agent_suspended...: err.message explains.
-    return `refused: ${err.message}`;
+    // err.reason: no_grant, action_not_granted, host_not_allowed, agent_suspended...
+    return `refused: ${err.reason ?? err.code}`;
   }
   throw err;
 }
+```
+
+`requestId` is missing when the agent already has 20 pending requests.
+
+### Brokered calls and retries
+
+`http`, `reveal`, `getLogin`, `getTotpCode` and `requestAccess` are POSTs, so
+the client doesn't repeat them after a 500, 502 or 504, a 503 without
+`Retry-After`, a timeout or a network error: the broker answers 502 or 504
+when the upstream failed or timed out, possibly after it acted, and a retry
+could charge a card or post a message twice. Rate limits (429) and a busy
+broker (503 with `Retry-After`), which Citadel answers before sending
+anything, are retried. When an upstream call is safe to repeat, opt in per
+call:
+
+```ts
+// Not retried after a 502/504 or a timeout: the upstream may have acted.
+const once = await agent.http({ credential: 'payments', method: 'POST', url: 'https://pay.example.com/charges', json: { amount: 100 } });
+// An idempotent upstream call (an Idempotency-Key header): safe to retry.
+const retried = await agent.http(
+  {
+    credential: 'payments',
+    method: 'POST',
+    url: 'https://pay.example.com/charges',
+    headers: { 'Idempotency-Key': 'order-42' },
+    json: { amount: 100 },
+  },
+  { retryNonIdempotent: true },
+);
 ```
 
 ## Management
@@ -460,9 +494,9 @@ const { agents } = await citadel.request<S['AgentList']>({ method: 'GET', path: 
 `secrets.delete` schedules deletion (restorable with `secrets.restore`
 during the recovery window) unless you pass `force: true`. Writing to an
 environment that requires approval fails with `approval_required`; submit a
-change request instead. Agents, grants, notification channels, audit and
-the other areas have no typed methods; use `request()` or the
-[Go SDK](sdk-go.md).
+change request instead. Managing agents and grants, notification channels,
+audit and the other areas have no typed methods; use `request()` or the
+[Go SDK](sdk-go.md). (Agents themselves use [`CitadelAgent`](#the-agent-api).)
 
 ## Errors, retries and timeouts
 
@@ -474,7 +508,8 @@ Every failure throws a `CitadelError`:
 | `code` | The API's stable `error` code: `not_found`, `unauthorized`, `forbidden`, `invalid_request`, `approval_required`, `reveal_forbidden`, `rate_limited`, and others. The client's own codes are `timeout`, `connection_error`, `invalid_response` and `binary_value`. |
 | `message` | A human-readable explanation. Don't branch on it. |
 | `operation`, `attempts`, `retryAfterMs` | The request (`GET /v1/secrets`), how many attempts were made, and the server's `Retry-After` hint. |
-| `isNotFound`, `isUnauthorized`, `isForbidden` | Shortcuts for 404, 401 and 403. |
+| `reason`, `requestId` | Agent API only: the stable denial or failure reason (`no_grant`, `upstream_timeout`...) and, for `approval_required`, the access request to wait for. |
+| `isNotFound`, `isUnauthorized`, `isForbidden`, `isApprovalRequired` | Shortcuts for 404, 401, 403 and `approval_required`. |
 
 `CitadelTimeoutError` and `CitadelConnectionError` are subclasses.
 `CitadelError.is(err, 'not_found')` checks an error without `instanceof`, so
@@ -496,12 +531,16 @@ try {
 
 Retries:
 
-- 429, 500, 502, 503 and 504 responses are retried for every method, up to
-  `maxRetries` times, with full-jitter exponential backoff from
-  `retryBaseDelayMs`. A `Retry-After` header is honoured, capped at
-  `retryMaxDelayMs`.
-- Network errors and timeouts are retried only for GET and DELETE: without
-  a response, the client can't know whether the server applied the request.
+- Retries happen up to `maxRetries` times, with full-jitter exponential
+  backoff from `retryBaseDelayMs`. A `Retry-After` header is honoured,
+  capped at `retryMaxDelayMs`.
+- 429, and 503 with `Retry-After`, are retried for every method: Citadel
+  answers them before acting.
+- 500, 502, 504, a 503 without `Retry-After`, network errors and timeouts
+  are retried only for idempotent methods (GET, HEAD, PUT, DELETE). For a
+  POST they can come after the request took effect (see
+  [Brokered calls and retries](#brokered-calls-and-retries)); pass
+  `retryNonIdempotent: true` for a call that is safe to repeat.
 - `timeoutMs` bounds each attempt, not the whole call. Pass an
   `AbortSignal` to bound or cancel the call, retries included.
 
@@ -550,7 +589,7 @@ CITADEL_URL=https://citadel.example.com CITADEL_AGENT_TOKEN=cagt_... npx citadel
 
 Until the package is on npm, `npx -y @worlddrknss/citadel mcp` (used in
 [Connecting MCP clients](agents-mcp.md)) can't download it. Install the
-tarball first, globally (`npm install -g ./worlddrknss-citadel-2.1.0.tgz`,
+tarball first, globally (`npm install -g ./worlddrknss-citadel-2.6.0.tgz`,
 then run `citadel mcp`) or in a project (then `npx citadel mcp`), and use
 that command in the client's configuration. Settings, behaviour and
 per-client configuration are in [Connecting MCP clients](agents-mcp.md#the-stdio-bridge).
