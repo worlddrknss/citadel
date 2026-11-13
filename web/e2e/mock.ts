@@ -61,7 +61,11 @@ function secretList(project: string, env: string, path: string) {
     path: '/',
     folders: ['db'],
     folderCounts: { db: 2 },
-    items: ['API_KEY', 'STRIPE_KEY'].map((k, i) => secretItem(project, env, '/', k, i)),
+    items: ['API_KEY', 'STRIPE_KEY'].map((k, i) => ({
+      ...secretItem(project, env, '/', k, i),
+      // STRIPE_KEY's built-in rotation is failing (the table flags it).
+      ...(k === 'STRIPE_KEY' ? { rotationDue: true, rotationStatus: 'failed' } : {})
+    })),
     shadowed: []
   };
 }
@@ -283,7 +287,10 @@ const GET: Record<string, Handler> = {
       status: 'active',
       createdAt: ago(30 * DAY),
       policyDocument: '',
-      rotation: { enabled: false },
+      rotation:
+        key === 'STRIPE_KEY'
+          ? { enabled: true, afterDays: 30, nextRotationDate: ago(DAY), due: true, rotatorType: 'random', status: 'failed' }
+          : { enabled: false },
       valueLength: 24,
       fingerprint: 'hmac:3f9a0b1c2d4e',
       version: 2
@@ -297,6 +304,7 @@ const GET: Record<string, Handler> = {
     ]
   }),
   '/v1/secrets/policy': (q) => ({ key: q.get('key'), policyDocument: '' }),
+  '/v1/secrets/rotation': (q) => (q.get('key') === 'STRIPE_KEY' ? stripeRotation : { enabled: false, mode: 'none', schedule: {}, status: '', due: false, history: [] }),
   '/v1/secrets/settings': () => ({ viewersCanReveal: false, updatedAt: ago(DAY), updatedBy: 'alice' }),
   '/v1/change-requests': () => ({ changeRequests }),
   // Real shape: project policies plus organization approval environments
@@ -445,6 +453,29 @@ export const mfaEnrollment = {
 export const mfaRecoveryCodes = Array.from({ length: 10 }, (_, i) => `k7qm-x2pa-${String(i).padStart(4, 'a')}`);
 /** The code the mock accepts. */
 export const MFA_CODE = '123456';
+// GET /v1/secrets/rotation for STRIPE_KEY: a random rotator whose retries
+// ran out.
+const stripeRotation = {
+  enabled: true,
+  mode: 'builtin',
+  lambdaArn: `arn:citadel:rotator:us-east-1:${ACCOUNT}:random`,
+  rotator: { type: 'random', config: { length: 40 } },
+  schedule: { afterDays: 30 },
+  nextRotationDate: ago(DAY),
+  windowEnd: ahead(DAY),
+  lastRotatedDate: ago(31 * DAY),
+  status: 'failed',
+  lastStep: 'testSecret',
+  lastError: 'the pending value is empty',
+  attempts: 5,
+  nextAttemptAt: ahead(29 * DAY),
+  pendingVersionId: 'v-pending-0123456789',
+  due: true,
+  history: [
+    { versionId: 'v-pending-0123456789', rotator: 'random', trigger: 'retry', status: 'failed', step: 'testSecret', error: 'the pending value is empty', startedAt: ago(DAY), finishedAt: ago(DAY) },
+    { versionId: 'v-current', rotator: 'random', trigger: 'schedule', status: 'succeeded', step: 'finishSecret', startedAt: ago(31 * DAY), finishedAt: ago(31 * DAY) }
+  ]
+};
 
 /** Non-GET handlers by "METHOD path". Anything else gets {ok:true}. */
 const WRITE: Record<string, Handler> = {
@@ -453,6 +484,14 @@ const WRITE: Record<string, Handler> = {
   'POST /v1/account/mfa/disable': () => ({ disabled: true }),
   'POST /v1/account/mfa/recovery-codes': () => ({ recoveryCodes: mfaRecoveryCodes }),
   'POST /v1/admin/users/mfa/reset': (_, b) => ({ reset: b.confirm === b.username, sessionsRevoked: 2 }),
+  'POST /v1/secrets/rotation': (_, b) => ({
+    configured: true,
+    builtin: !!b.rotator,
+    ...(b.rotateImmediately ? { versionId: 'v-new-0123456789' } : {}),
+    ...((b.rotator as { type?: string } | undefined)?.type === 'webhook' ? { signingSecret: 'whsec_mock0123456789abcdef0123456789abcdef' } : {})
+  }),
+  'POST /v1/secrets/rotation/rotate': () => ({ started: true, versionId: 'v-new-0123456789' }),
+  'POST /v1/secrets/rotation/signing-secret': () => ({ signingSecret: 'whsec_mock_regenerated_0123456789abcdef' }),
   'POST /v1/logout': () => ({ loggedOut: true }),
   'POST /v1/kms/keys/schedule-deletion': (_, b) => ({ keyId: b.keyId, deletionDate: ahead(Number(b.windowDays ?? 30) * DAY) }),
   'POST /v1/kms/keys/cancel-deletion': (_, b) => ({ keyId: b.keyId, restored: true }),

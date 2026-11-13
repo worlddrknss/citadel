@@ -2,12 +2,13 @@
   Secret detail panel from the board, shown beside the table (it wraps below
   on narrow screens). Tabs: Details (value, ARN, KMS key, rotation,
   description, tags, recent versions, who can read), Versions (full timeline
-  with per-version values and restore), Access (principals + resource policy).
+  with per-version values and restore), Rotation (built-in rotator, schedule,
+  rotate now, history), Access (principals + resource policy).
   It is an inline panel rather than the shared modal Drawer because the board
   keeps the table usable next to it.
 -->
 <script lang="ts" module>
-  export type DrawerTab = 'details' | 'versions' | 'access';
+  export type DrawerTab = 'details' | 'versions' | 'rotation' | 'access';
 </script>
 
 <script lang="ts">
@@ -22,11 +23,13 @@
   import { toast } from '#lib/stores/toast.svelte.ts';
   import { secretsApi, type SecretDetail } from '../../api';
   import { fullDate, shortDate } from '../../lib';
+  import { rotationApi, statusBadge } from '../../rotation';
+  import Badge from '#lib/components/Badge.svelte';
   import AccessList from './AccessList.svelte';
   import { findKms, kmsDisplay } from './kms';
   import MetadataForm from './MetadataForm.svelte';
   import PolicyEditor from './PolicyEditor.svelte';
-  import RotationForm from './RotationForm.svelte';
+  import RotationTab from './RotationTab.svelte';
   import TagEditor from './TagEditor.svelte';
   import VersionsTimeline, { numberVersions, type NumberedVersion } from './VersionsTimeline.svelte';
 
@@ -77,7 +80,6 @@
   let error = $state('');
   let busy = $state(false);
   let editMeta = $state(false);
-  let editRotation = $state(false);
   let editTags = $state(false);
   let heading = $state<HTMLHeadingElement>();
   let panel = $state<HTMLElement>();
@@ -111,7 +113,7 @@
     void secretKey;
     void reloadToken;
     untrack(() => {
-      editMeta = editRotation = editTags = false;
+      editMeta = editTags = false;
       load(!!detail && detail.key === secretKey);
     });
   });
@@ -135,23 +137,15 @@
     if (!detail) return;
     const ok = await confirm({
       title: `Rotate ${detail.key} now?`,
-      message: `Runs the rotation Lambda once. It creates a new version and moves AWSCURRENT to it when the Lambda finishes.`,
+      message: 'Runs the rotator once: a new value is created as AWSPENDING, set and tested, then becomes AWSCURRENT. The old value stays as AWSPREVIOUS.',
       confirmLabel: 'Rotate now'
     });
-    if (!ok || !detail.rotation.lambdaArn) return;
+    if (!ok) return;
     busy = true;
     try {
-      await api.configureRotation({
-        project: detail.project,
-        env: detail.env,
-        path: detail.path,
-        key: detail.key,
-        lambdaArn: detail.rotation.lambdaArn,
-        afterDays: detail.rotation.afterDays || 30,
-        rotateImmediately: true
-      });
+      await rotationApi.rotateNow({ project: detail.project, env: detail.env, path: detail.path, key: detail.key });
       toast.success(`Rotation started for ${detail.key}`);
-      await refresh();
+      ontab('rotation');
     } catch (e) {
       toast.error(e, 'Could not start rotation');
     } finally {
@@ -198,9 +192,20 @@
   const tabs = $derived([
     { id: 'details', label: 'Details' },
     { id: 'versions', label: 'Versions', count: versions.length || undefined },
+    { id: 'rotation', label: 'Rotation' },
     { id: 'access', label: 'Access' }
   ]);
   const coord = $derived({ project, env, path, key: secretKey });
+  const rotBadge = $derived(
+    detail
+      ? statusBadge({
+          enabled: detail.rotation.enabled,
+          mode: detail.rotation.rotatorType ? 'builtin' : detail.rotation.enabled ? 'lambda' : 'none',
+          status: (detail.rotation.status ?? '') as '',
+          due: !!detail.rotation.due
+        })
+      : null
+  );
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -289,25 +294,19 @@
           <span class="row-between">
             <span class="rot">
               <span class="inline">
-                {#if detail.rotation.enabled}
-                  <span class="badge badge-success"><span class="badge-dot" aria-hidden="true"></span>On</span>
-                  {#if detail.rotation.afterDays}Every {detail.rotation.afterDays} days{/if}
-                {:else}
-                  <span class="badge"><span class="badge-dot" aria-hidden="true"></span>Off</span>
-                {/if}
+                {#if rotBadge}<Badge tone={rotBadge.tone}>{rotBadge.text}</Badge>{/if}
+                {#if detail.rotation.enabled && detail.rotation.afterDays}Every {detail.rotation.afterDays} days{/if}
               </span>
               {#if detail.rotation.enabled}
                 <span class="subtle small">
                   {detail.rotation.nextRotationDate ? `Next on ${shortDate(detail.rotation.nextRotationDate)}` : 'Next date pending'}
-                  {#if detail.rotation.lambdaArn} · <span class="mono">{detail.rotation.lambdaArn.split(':').pop()}</span>{/if}
+                  {#if detail.rotation.rotatorType} · {detail.rotation.rotatorType}{:else if detail.rotation.lambdaArn} · <span class="mono">{detail.rotation.lambdaArn.split(':').pop()}</span>{/if}
                 </span>
               {/if}
             </span>
-            {#if canEdit && !editRotation}
-              <button type="button" class="btn btn-ghost btn-sm" onclick={() => (editRotation = true)}>
-                {detail.rotation.enabled ? 'Edit' : 'Set up'}
-              </button>
-            {/if}
+            <button type="button" class="btn btn-ghost btn-sm" onclick={() => ontab('rotation')}>
+              {canEdit && !detail.rotation.enabled ? 'Set up' : 'Manage'}
+            </button>
           </span>
         </dd>
         <dt>Description</dt>
@@ -324,9 +323,6 @@
 
       {#if editMeta}
         <MetadataForm {detail} {kmsKeys} oncancel={() => (editMeta = false)} onsaved={() => { editMeta = false; refresh(); }} />
-      {/if}
-      {#if editRotation}
-        <RotationForm {detail} oncancel={() => (editRotation = false)} onsaved={() => { editRotation = false; refresh(); }} />
       {/if}
 
       <section class="sec">
@@ -380,6 +376,8 @@
           onrestore={restoreVersion}
         />
       {/if}
+    {:else if tab === 'rotation'}
+      <RotationTab {coord} {canEdit} {deleted} {requireApproval} onchanged={refresh} />
     {:else}
       <section class="sec">
         <span class="label">Who can read this</span>
@@ -400,15 +398,11 @@
         <button type="button" class="btn btn-primary btn-sm" onclick={() => onedit(secretKey)}>
           <Icon name={requireApproval ? 'git-pull-request' : 'edit'} size={14} />{requireApproval ? 'Request change' : 'Edit value'}
         </button>
-        <button
-          type="button"
-          class="btn btn-secondary btn-sm"
-          disabled={busy || !detail.rotation.enabled || !detail.rotation.lambdaArn}
-          title={detail.rotation.enabled ? undefined : 'Set up rotation first'}
-          onclick={rotateNow}
-        >
-          <Icon name="rotate" size={14} />Rotate now
-        </button>
+        {#if detail.rotation.enabled && detail.rotation.rotatorType && !requireApproval}
+          <button type="button" class="btn btn-secondary btn-sm" disabled={busy} onclick={rotateNow}>
+            <Icon name="rotate" size={14} />Rotate now
+          </button>
+        {/if}
       {/if}
       <button type="button" class="btn btn-danger-ghost btn-sm end" onclick={() => ondelete(secretKey)}>
         <Icon name="trash" size={14} />{deleted ? 'Force delete' : 'Delete'}

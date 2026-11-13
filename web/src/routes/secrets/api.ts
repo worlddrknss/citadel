@@ -27,6 +27,10 @@ export interface SecretRow extends Item {
   updatedBy?: string;
   /** Tags, so the list can be filtered by tag without a detail call each. */
   tags?: SecretTag[];
+  /** The rotation window has opened and the secret hasn't rotated yet. */
+  rotationDue?: boolean;
+  /** Set when the built-in rotator needs attention. */
+  rotationStatus?: 'retrying' | 'failed';
 }
 
 export interface SecretList extends ListResult {

@@ -196,6 +196,15 @@
                       <Icon name="clock" size={12} />Deletes {shortDate(r.deletionDate)}
                     </span>
                   {/if}
+                  {#if !r.deletionDate && (r.rotationStatus === 'failed' || r.rotationStatus === 'retrying')}
+                    <span class="badge badge-danger tiny" title={r.rotationStatus === 'failed' ? 'Rotation failed; it is reattempted at the next window' : 'The last rotation attempt failed; it is being retried'}>
+                      <Icon name="alert-triangle" size={12} />Rotation failed
+                    </span>
+                  {:else if !r.deletionDate && r.rotationDue}
+                    <span class="badge badge-warning tiny" title="The rotation window has opened">
+                      <Icon name="rotate" size={12} />Rotation due
+                    </span>
+                  {/if}
                   {#if pendingKeys.has(r.key)}
                     <span class="badge badge-info tiny" title="A change request for this key is waiting for approval">
                       <Icon name="git-pull-request" size={12} />Change pending

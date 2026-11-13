@@ -137,6 +137,10 @@ export interface SecretRotation {
   lambdaArn?: string;
   afterDays?: number;
   nextRotationDate?: string;
+  due?: boolean;
+  /** Built-in rotator ("random", "postgresql", "webhook"); absent for a Lambda schedule. */
+  rotatorType?: string;
+  status?: string;
 }
 
 export interface ItemDetail {
@@ -479,11 +483,14 @@ export const api = {
     env: string;
     path: string;
     key: string;
-    lambdaArn: string;
-    afterDays: number;
+    lambdaArn?: string;
+    rotator?: { type: string; config?: Record<string, unknown>; configSecret?: string };
+    afterDays?: number;
+    scheduleExpression?: string;
+    duration?: string;
     rotateImmediately: boolean;
   }) =>
-    req<{ configured: boolean }>('/v1/secrets/rotation', {
+    req<{ configured: boolean; builtin?: boolean; versionId?: string; signingSecret?: string }>('/v1/secrets/rotation', {
       method: 'POST',
       body: JSON.stringify(body)
     }),

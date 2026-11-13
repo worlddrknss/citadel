@@ -45,6 +45,7 @@ export const PAGES = [
   { path: '/secrets', heading: 'Secrets' },
   { path: '/secrets/payments', heading: /Payments/ },
   { path: '/secrets/payments/dev', heading: /Payments/ },
+  { path: '/secrets/payments/dev?secret=STRIPE_KEY&tab=rotation', heading: /Payments/ },
   { path: '/parameters', heading: 'Parameters' },
   { path: '/kms', heading: /KMS/ },
   { path: '/certificates', heading: 'Certificates' },
