@@ -68,3 +68,30 @@ test('users who are not platform admins get no full re-check', async ({ page }) 
   const res = await page.request.post('/v1/audit/verify?full=true', { headers: { 'X-Citadel-Request': '1' } });
   expect(res.status()).toBe(403);
 });
+
+test('write-ahead audit: a change records a pending attempt linked to its outcome', async ({ page }) => {
+  await signIn(page, ORG.admin);
+  await apiPost(page, '/v1/secrets', { project: 'audit-demo', env: 'dev', path: '/', key: 'WRITE_AHEAD', value: 'wa-value' });
+
+  // The attempt (the route, result pending) and the handler's outcome share a correlation ID.
+  const attempts = await (await page.request.get('/v1/audit/events?result=pending&action=POST%20%2Fv1%2Fsecrets&limit=1')).json();
+  const attempt = attempts.events[0];
+  expect(attempt).toMatchObject({ result: 'pending', action: 'POST /v1/secrets' });
+  expect(attempt.correlationId).toMatch(/^[0-9a-f]{32}$/);
+  const linked = await (await page.request.get(`/v1/audit/events?correlation=${attempt.correlationId}`)).json();
+  expect(linked.events).toHaveLength(2);
+  expect(linked.events[0]).toMatchObject({ result: 'success', correlationId: attempt.correlationId });
+
+  // The console labels the attempt and jumps to its outcome.
+  await open(page, '/audit?range=all&result=pending');
+  await page.getByRole('button', { name: `Expand event ${attempt.id}` }).click();
+  await page.getByRole('button', { name: 'Show outcome' }).click();
+  await expect(page).toHaveURL(new RegExp(`correlation=${attempt.correlationId}`));
+  await expect(page.getByText('Showing 1–2 of 2 matching events')).toBeVisible();
+
+  // Reads write no attempt.
+  const pendingTotal = async () => (await (await page.request.get('/v1/audit/events?result=pending&limit=1')).json()).total;
+  const before = await pendingTotal();
+  await page.request.get('/v1/secrets?project=audit-demo&env=dev');
+  expect(await pendingTotal()).toBe(before);
+});
