@@ -61,7 +61,7 @@ type NotificationEventType struct {
 
 // NotificationChannels is the result of ListNotificationChannels.
 type NotificationChannels struct {
-	Channels []NotificationChannel  `json:"channels"`
+	Channels []NotificationChannel   `json:"channels"`
 	Events   []NotificationEventType `json:"events"`
 	// EmailAvailable says whether the server has SMTP settings.
 	EmailAvailable bool `json:"emailAvailable"`
