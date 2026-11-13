@@ -13,9 +13,9 @@ import (
 const certificateExpiryInterval = time.Hour
 
 // certificateExpiryJob marks expired certificates and CAs (private CA, ACM
-// and Let's Encrypt) EXPIRED. Let's Encrypt certificates are not renewed
-// automatically: the existing client needs an interactive HTTP-01 or DNS-01
-// flow, so the console list reports expiringSoon instead.
+// and Let's Encrypt) EXPIRED. HTTP-01 Let's Encrypt certificates are renewed
+// by the letsencrypt-renew job (le_autorenew.go); DNS-01 ones need the
+// operator, and the console list reports expiringSoon for them.
 func (s *Server) certificateExpiryJob(ctx context.Context) error {
 	s.markExpiredCertificates(ctx, time.Now().UTC())
 	return nil

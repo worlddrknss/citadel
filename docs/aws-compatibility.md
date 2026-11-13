@@ -161,6 +161,9 @@ behaviours the aws-sdk-go-v2 harness covers; it is not a full matrix.
 | ACM PCA GetCertificateAuthorityCsr | ✅ | Returns the PEM CSR of a CA created as `SUBORDINATE` through this API (`InvalidStateException` for other CAs). |
 | ACM PCA IssueCertificate with `SubordinateCACertificate_PathLen{0,1,2,3}/V1` | ✅ | Signs a CA certificate with that path length. The path length must fit below the issuing CA's constraint. These certificates can't be renewed through the console's leaf renewal. |
 | ACM PCA ImportCertificateAuthorityCertificate | 🟡 | Activates a `PENDING_CERTIFICATE` CA. The certificate must be a CA certificate for the CA's key and must chain through `CertificateChain` to a self-signed root. When a Citadel CA in the same account signed it, that CA becomes the parent, and chains returned later run up to the root. An externally signed CA is linked to no parent, so later chains stop at the subordinate CA. Re-importing on an `ACTIVE` CA (renewing a CA certificate) isn't supported. |
+| ACM PCA UpdateCertificateAuthority | 🟡 | `Status` `ACTIVE` or `DISABLED`. `RevocationConfiguration` is accepted and ignored. An expired CA can't be enabled. |
+| ACM PCA DeleteCertificateAuthority | 🟡 | As AWS: the CA must be `DISABLED` (or expired, or never activated); it becomes `DELETED` with `RestorableUntil` after `PermanentDeletionTimeInDays` (7–30, default 30), then is purged with its certificates. Citadel also refuses (`InvalidStateException`) while the CA has issued certificates or subordinate CAs that are still valid: revoke them first. |
+| ACM PCA RestoreCertificateAuthority | 🟡 | Within the window. The CA returns to `DISABLED` (AWS restores a CA deleted while `PENDING_CERTIFICATE` to that state). |
 
 aws-sdk-go-v2 `service/acmpca` v1.57 and later uses the Smithy RPCv2 CBOR
 protocol by default, which Citadel doesn't serve. Select AWS JSON 1.1 on the

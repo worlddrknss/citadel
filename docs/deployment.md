@@ -99,6 +99,19 @@ Either way:
   challenge responses live in that replica's memory, so with several replicas
   either use DNS-01 or route `/.well-known/acme-challenge/` to a single
   replica while issuing.
+- HTTP-01 Let's Encrypt certificates renew automatically 30 days before they
+  expire (the `letsencrypt-renew` job, hourly; turn it off per certificate in
+  the console or with `POST /v1/certificates/letsencrypt/auto-renew`). The
+  replica that claims a renewal serves its challenge, so the same
+  single-replica routing applies. A failed renewal is retried with backoff
+  (1 hour, doubling to 24 hours), shown on the certificate, logged with an
+  `ALERT` prefix and audited as `citadel.LetsEncryptAutoRenewFailed` with
+  result `error`: alert on that action. DNS-01 certificates are never renewed
+  automatically; the console marks them for manual renewal.
+- Deleted private CAs stay restorable for 7 to 30 days; the `pki-ca-purge`
+  job (hourly) then removes them with their certificates and audits
+  `citadel.PurgeCertificateAuthority`. The CA's KMS signing key is not
+  deleted; schedule its deletion in KMS if it is no longer needed.
 
 ## Trusted proxies and client addresses
 

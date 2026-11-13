@@ -250,6 +250,12 @@ root secret. See [rotation.md](rotation.md).
   [configuration.md](configuration.md)); the failed sign-in and MFA lockouts
   and other limits (ACME, audit export) remain per replica. Shared counters fail
   open if the database is unavailable.
+- Deleting a private CA certificate that is still valid revokes it first
+  (reason `CessationOfOperation`), and its row is kept, so a certificate can
+  never leave the inventory while still trusted, and the CRL keeps listing
+  revoked certificates until they expire. A CA can be deleted only when it is
+  disabled and nothing it issued is still valid; until its restore window
+  ends it can be restored.
 - Let's Encrypt HTTP-01 challenge responses are held in memory by the
   replica running the order. Behind several replicas, the CA's validation
   request can reach a replica that doesn't have the response; use manual

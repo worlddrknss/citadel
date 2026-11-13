@@ -101,6 +101,26 @@ All notable changes to Citadel are documented here. The format follows
   serial, validity and PEM. The chain is built from the stored issuer chain
   and the account's CAs, and stops where Citadel doesn't hold the next
   issuer. The drawer's Chain tab lists each certificate with a PEM download.
+- Delete certificates: `DELETE /v1/certificates?source=&id=` for private CA,
+  Let's Encrypt and imported certificates (admin, audited as
+  `citadel.DeleteCertificate`). A private CA certificate that is still valid
+  is revoked first and stays on the CRL. The console asks for the name of a
+  certificate that is still valid.
+- Disable, delete and restore CAs with AWS ACM PCA semantics: the native
+  `POST /v1/certificates/authorities/status|delete|restore` and the ACM PCA
+  `UpdateCertificateAuthority`, `DeleteCertificateAuthority` and
+  `RestoreCertificateAuthority` actions. A CA must be disabled and have no
+  certificates still valid; it stays restorable for 7–30 days (default 30),
+  after which the `pki-ca-purge` job removes it. The CA drawer explains what
+  blocks deletion and shows the restore window.
+- Let's Encrypt automatic renewal: HTTP-01 certificates renew 30 days before
+  expiry (`letsencrypt-renew` job), with retries and backoff, and failures
+  audited as `citadel.LetsEncryptAutoRenewFailed`. Auto-renew can be turned
+  off per certificate (`POST /v1/certificates/letsencrypt/auto-renew`). The
+  console shows the renewal state; DNS-01 certificates are marked for manual
+  renewal with an expiry countdown.
+- Migration `1190_pki_lifecycle` (metadata-only column additions; backfills
+  the challenge type of Let's Encrypt certificates from their order rows).
 
 ### Changed
 
