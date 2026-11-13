@@ -4,7 +4,15 @@
 import { req, type AuditEvent } from '#lib/api.ts';
 
 export type AgentStatus = 'active' | 'suspended' | 'revoked';
-export type CredentialKind = 'http_header' | 'http_basic' | 'http_query' | 'login' | 'raw';
+export type CredentialKind =
+  | 'http_header'
+  | 'http_basic'
+  | 'http_query'
+  | 'login'
+  | 'raw'
+  | 'aws_sts'
+  | 'github_app'
+  | 'oauth2_client_credentials';
 export type GrantAction = 'use' | 'reveal' | 'totp';
 
 export interface Agent {
@@ -82,6 +90,8 @@ export interface AgentGrant {
   updatedAt: string;
   usableNow: boolean;
   reason?: string;
+  /** Narrows a minted credential's tokens (2.4). */
+  scope?: GrantScope;
 }
 
 export interface AgentDetail {
@@ -112,7 +122,131 @@ export interface AgentCredential {
   updatedAt: string;
   updatedBy?: string;
   grants: { grantId: string; agentId: string; agentName: string; actions: GrantAction[] }[];
+  login?: LoginConfig;
+  awsSts?: AwsStsConfig;
+  githubApp?: GitHubAppConfig;
+  oauth2?: OAuth2Config;
 }
+
+// ---- logins and minted credentials (2.4) --------------------------------------
+
+export interface LoginConfig {
+  urlPatterns: string[];
+  totpAlgorithm?: '' | 'SHA256' | 'SHA512';
+  totpDigits?: number;
+  totpPeriod?: number;
+}
+
+export interface AwsStsConfig {
+  roleArn: string;
+  endpoint?: string;
+  region?: string;
+  externalId?: string;
+  sessionName?: string;
+  sessionPolicy?: string;
+  durationSeconds?: number;
+  signingService?: string;
+  signingRegion?: string;
+}
+
+export interface GitHubAppConfig {
+  appId: string;
+  installationId: number;
+  baseUrl?: string;
+  repositories?: string[];
+  permissions?: Record<string, string>;
+}
+
+export interface OAuth2Config {
+  tokenUrl: string;
+  clientId?: string;
+  clientAuth?: '' | 'basic' | 'post';
+  scopes?: string[];
+  audience?: string;
+  resource?: string;
+  headerName?: string;
+  headerPrefix?: string;
+}
+
+export interface GrantScope {
+  repositories?: string[];
+  permissions?: Record<string, string>;
+  sessionPolicy?: string;
+  scopes?: string[];
+}
+
+export interface TotpCode {
+  credential: string;
+  code: string;
+  expiresAt: string;
+  secondsRemaining: number;
+  digits: number;
+  period: number;
+  algorithm: string;
+}
+
+/** A login's state: never its password or TOTP seed. */
+export interface LoginState {
+  name: string;
+  username: string;
+  hasPassword: boolean;
+  hasTotpSeed: boolean;
+  totpStatus?: '' | 'ok' | 'sha1_unsupported' | 'invalid';
+  totpMessage?: string;
+  totp?: TotpCode;
+}
+
+export interface LoginInput {
+  name: string;
+  username?: string;
+  password?: string;
+  totpSeed?: string;
+  clearTotpSeed?: boolean;
+}
+
+export type AnomalyKind = 'new_host' | 'off_hours' | 'rate_spike' | 'repeated_denials';
+
+export interface AgentAnomaly {
+  anomalyId: string;
+  kind: AnomalyKind;
+  detail: string;
+  detectedAt: string;
+  suspended: boolean;
+}
+
+export interface AnomalySettings {
+  alertsEnabled: boolean;
+  autoSuspend: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface AgentBaseline {
+  established: boolean;
+  events: number;
+  hosts: string[];
+  activeHours: number[];
+  meanPerHour: number;
+  windowDays: number;
+  rateSpikeMin: number;
+  rateSpikeFactor: number;
+  denialsWindowMinutes: number;
+  denialsThreshold: number;
+}
+
+export interface AgentAnomalies {
+  anomalies: AgentAnomaly[];
+  settings: AnomalySettings;
+  baseline: AgentBaseline;
+  canManage: boolean;
+}
+
+export const ANOMALY_LABELS: Record<AnomalyKind, string> = {
+  new_host: 'New host',
+  off_hours: 'Off-hours use',
+  rate_spike: 'Rate spike',
+  repeated_denials: 'Repeated denials'
+};
 
 export interface CredentialInput {
   name: string;
@@ -131,6 +265,10 @@ export interface CredentialInput {
   queryParam?: string;
   allowHttp?: boolean;
   allowedCidrs?: string[];
+  login?: LoginConfig;
+  awsSts?: AwsStsConfig;
+  githubApp?: GitHubAppConfig;
+  oauth2?: OAuth2Config;
 }
 
 export interface GrantInput {
@@ -144,6 +282,7 @@ export interface GrantInput {
   requiresApproval?: boolean;
   /** 0 (not set) or 60..86400. */
   leaseTtlSeconds?: number;
+  scope?: GrantScope;
 }
 
 // ---- access requests and leases (2.3), routes_agent_access.go ----------------
@@ -250,6 +389,13 @@ export const agentsApi = {
   updateCredential: (body: CredentialInput) => post<AgentCredential>('/v1/agents/credentials/update', body),
   deleteCredential: (name: string) => req<{ deleted: boolean }>(`/v1/agents/credentials?${qs({ name })}`, { method: 'DELETE' }),
 
+  /** A login's state; with code, the current TOTP code (a live preview). */
+  login: (name: string, code = false) => req<LoginState>(`/v1/agents/credentials/login?${qs({ name, ...(code ? { code: 'true' } : {}) })}`),
+  putLogin: (body: LoginInput) => post<LoginState>('/v1/agents/credentials/login', body),
+  anomalies: (agentId: string) => req<AgentAnomalies>(`/v1/agents/anomalies?${qs({ agentId })}`),
+  saveAnomalySettings: (agentId: string, s: { alertsEnabled: boolean; autoSuspend: boolean }) =>
+    post<AnomalySettings>('/v1/agents/anomaly-settings', { agentId, ...s }),
+
   /** Access requests, newest first: one agent's or the account's; pending only by default. */
   accessRequests: async (opts: { agentId?: string; status?: 'pending' | 'all' } = {}) =>
     (
@@ -288,18 +434,44 @@ export const KIND_LABELS: Record<CredentialKind, string> = {
   http_basic: 'HTTP basic auth',
   http_query: 'Query parameter',
   login: 'Website login',
-  raw: 'Raw value'
+  raw: 'Raw value',
+  aws_sts: 'AWS role (STS)',
+  github_app: 'GitHub App',
+  oauth2_client_credentials: 'OAuth 2.0 client'
 };
 
 export const KIND_HINTS: Record<CredentialKind, string> = {
   http_header: 'Citadel adds the value as a request header (Authorization: Bearer … by default).',
   http_basic: 'The secret is JSON {"username", "password"}; Citadel sends it as HTTP basic auth.',
   http_query: 'Citadel adds the value as a query parameter.',
-  login: 'The secret is JSON {"username", "password", "totpSeed"?, "url"} for browser agents.',
-  raw: 'An opaque value agents can only get through an explicit reveal grant.'
+  login: 'The secret is JSON {"username", "password", "totpSeed"?}. Browser agents get one-time codes and, on the pages listed, the username and password.',
+  raw: 'An opaque value agents can only get through an explicit reveal grant.',
+  aws_sts: 'The secret holds AWS keys as JSON {"accessKeyId", "secretAccessKey"}. Agents get short-lived role credentials; Citadel signs their AWS requests.',
+  github_app: "The secret is the GitHub App's private key (PEM). Agents get short-lived installation tokens, restricted per grant.",
+  oauth2_client_credentials: 'The secret is the OAuth client secret. Agents get short-lived access tokens from the token endpoint.'
 };
 
 export const isHttpKind = (k: CredentialKind) => k === 'http_header' || k === 'http_basic' || k === 'http_query';
+/** Kinds minted on use: agents only ever get a short-lived token. */
+export const isMintedKind = (k: CredentialKind) => k === 'aws_sts' || k === 'github_app' || k === 'oauth2_client_credentials';
+
+export const LOGIN_PATTERN_RE = /^https:\/\/(\*\.)?[a-z0-9.-]+(:[0-9]{1,5})?(\/[^\s?#]*)?$/i;
+export const ROLE_ARN_RE = /^arn:[a-z0-9-]+:iam::[0-9]{12}:role\/[\w+=,.@/-]{1,512}$/;
+
+/** Parses "name=level" lines into GitHub permissions; null when a line is malformed. */
+export function parsePermissions(v: string): Record<string, string> | null {
+  const out: Record<string, string> = {};
+  for (const line of splitList(v)) {
+    const [k, lvl] = line.split('=');
+    if (!k || !/^[a-z_]{1,64}$/.test(k) || !['read', 'write', 'admin'].includes(lvl ?? '')) return null;
+    out[k] = lvl;
+  }
+  return out;
+}
+export const formatPermissions = (p?: Record<string, string>) =>
+  Object.entries(p ?? {})
+    .map(([k, v]) => `${k}=${v}`)
+    .join('\n');
 
 export const STATUS_TONE: Record<AgentStatus, 'success' | 'warning' | 'danger'> = { active: 'success', suspended: 'warning', revoked: 'danger' };
 export const STATUS_LABEL: Record<AgentStatus, string> = { active: 'Active', suspended: 'Suspended', revoked: 'Revoked' };
@@ -322,6 +494,17 @@ export function validateCredential(c: CredentialInput): string {
   }
   for (const p of c.allowedPathPrefixes ?? []) if (!p.startsWith('/')) return `Path prefixes start with / ("${p}").`;
   if (c.kind === 'http_query' && !/^[A-Za-z0-9._~-]{1,64}$/.test(c.queryParam ?? '')) return 'Name the query parameter.';
+  if (c.kind === 'login') {
+    const pats = c.login?.urlPatterns ?? [];
+    if (pats.length === 0) return 'Add at least one page URL the login may be used on.';
+    for (const p of pats) if (!LOGIN_PATTERN_RE.test(p)) return `"${p}" is not an https:// URL pattern.`;
+  }
+  if (c.kind === 'aws_sts' && !ROLE_ARN_RE.test(c.awsSts?.roleArn ?? '')) return 'Enter the IAM role ARN to assume.';
+  if (c.kind === 'github_app') {
+    if (!/^[A-Za-z0-9.]{1,64}$/.test(c.githubApp?.appId ?? '')) return 'Enter the App ID.';
+    if (!((c.githubApp?.installationId ?? 0) > 0)) return 'Enter the installation ID.';
+  }
+  if (c.kind === 'oauth2_client_credentials' && !/^https?:\/\/\S+$/.test(c.oauth2?.tokenUrl ?? '')) return 'Enter the token endpoint URL.';
   return '';
 }
 
@@ -339,6 +522,28 @@ export function validateGrant(g: GrantInput, kind: CredentialKind | undefined): 
   const ttl = g.leaseTtlSeconds ?? 0;
   if (ttl !== 0 && (ttl < 60 || ttl > 86400)) return 'Lease length: 1 minute to 24 hours.';
   return '';
+}
+
+/** Validates a grant's scope against its credential (2.4); '' when valid. */
+export function validateScope(s: GrantScope | undefined, c: AgentCredential | undefined): string {
+  if (!c) return '';
+  if (c.kind === 'github_app') {
+    const def = c.githubApp;
+    const repos = s?.repositories ?? [];
+    const perms = s?.permissions ?? {};
+    if (!def?.repositories?.length && !Object.keys(def?.permissions ?? {}).length && !repos.length && !Object.keys(perms).length)
+      return 'Restrict the token to some repositories or permissions: this App credential has no defaults.';
+    if (def?.repositories?.length) for (const r of repos) if (!def.repositories.includes(r)) return `"${r}" is not one of the credential's repositories.`;
+  }
+  if (c.kind === 'aws_sts' && s?.sessionPolicy && c.awsSts?.sessionPolicy) return 'The credential already has a session policy.';
+  if (c.kind === 'oauth2_client_credentials' && c.oauth2?.scopes?.length)
+    for (const sc of s?.scopes ?? []) if (!c.oauth2.scopes.includes(sc)) return `"${sc}" is not one of the credential's scopes.`;
+  return '';
+}
+
+/** "12s", "0s": seconds left on a TOTP code at now. */
+export function codeSecondsLeft(expiresAt: string, now = Date.now()): number {
+  return Math.max(0, Math.ceil((Date.parse(expiresAt) - now) / 1000));
 }
 
 /** One-line summary of a grant's limits. */

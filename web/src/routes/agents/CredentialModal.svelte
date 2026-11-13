@@ -10,6 +10,9 @@
   import {
     agentsApi,
     isHttpKind,
+    isMintedKind,
+    formatPermissions,
+    parsePermissions,
     splitList,
     validateCredential,
     HTTP_METHODS,
@@ -34,7 +37,7 @@
     onsaved: () => void;
   } = $props();
 
-  const kinds: CredentialKind[] = ['http_header', 'http_basic', 'http_query', 'login', 'raw'];
+  const kinds: CredentialKind[] = ['http_header', 'http_basic', 'http_query', 'login', 'raw', 'aws_sts', 'github_app', 'oauth2_client_credentials'];
   const uid = Math.random().toString(36).slice(2, 8);
 
   let name = $state('');
@@ -50,6 +53,29 @@
   let cidrs = $state('');
   let saving = $state(false);
   let saveError = $state('');
+  // login
+  let urlPatterns = $state('');
+  let totpAlgorithm = $state<'' | 'SHA256' | 'SHA512'>('');
+  // aws_sts
+  let roleArn = $state('');
+  let stsEndpoint = $state('');
+  let awsRegion = $state('');
+  let externalId = $state('');
+  let sessionPolicy = $state('');
+  let durationSeconds = $state(0);
+  let signingService = $state('');
+  // github_app
+  let appId = $state('');
+  let installationId = $state('');
+  let ghBaseUrl = $state('');
+  let ghRepos = $state('');
+  let ghPerms = $state('');
+  // oauth2_client_credentials
+  let tokenUrl = $state('');
+  let clientId = $state('');
+  let clientAuth = $state<'' | 'basic' | 'post'>('');
+  let oauthScopes = $state('');
+  let audience = $state('');
 
   $effect(() => {
     if (!open) return;
@@ -65,24 +91,76 @@
     queryParam = c?.queryParam ?? '';
     allowHttp = c?.allowHttp ?? false;
     cidrs = (c?.allowedCidrs ?? []).join('\n');
+    urlPatterns = (c?.login?.urlPatterns ?? []).join('\n');
+    totpAlgorithm = c?.login?.totpAlgorithm ?? '';
+    roleArn = c?.awsSts?.roleArn ?? '';
+    stsEndpoint = c?.awsSts?.endpoint ?? '';
+    awsRegion = c?.awsSts?.region ?? '';
+    externalId = c?.awsSts?.externalId ?? '';
+    sessionPolicy = c?.awsSts?.sessionPolicy ?? '';
+    durationSeconds = c?.awsSts?.durationSeconds ?? 0;
+    signingService = c?.awsSts?.signingService ?? '';
+    appId = c?.githubApp?.appId ?? '';
+    installationId = c?.githubApp?.installationId ? String(c.githubApp.installationId) : '';
+    ghBaseUrl = c?.githubApp?.baseUrl ?? '';
+    ghRepos = (c?.githubApp?.repositories ?? []).join('\n');
+    ghPerms = formatPermissions(c?.githubApp?.permissions);
+    tokenUrl = c?.oauth2?.tokenUrl ?? '';
+    clientId = c?.oauth2?.clientId ?? '';
+    clientAuth = c?.oauth2?.clientAuth ?? '';
+    oauthScopes = (c?.oauth2?.scopes ?? []).join(' ');
+    audience = c?.oauth2?.audience ?? '';
     saveError = '';
   });
+
+  const brokerable = $derived(isHttpKind(kind) || isMintedKind(kind));
+  const permsParsed = $derived(parsePermissions(ghPerms));
 
   const input = $derived<CredentialInput>({
     name: name.trim(),
     ...(credential ? {} : { project: coord.project, env: coord.env, path: coord.path, key: coord.key }),
     kind,
     description: description.trim(),
-    allowedHosts: splitList(hosts.toLowerCase()),
-    allowedMethods: isHttpKind(kind) ? methods : [],
+    allowedHosts: kind === 'login' ? [] : splitList(hosts.toLowerCase()),
+    allowedMethods: brokerable ? methods : [],
     allowedPathPrefixes: splitList(paths),
     headerName: kind === 'http_header' ? headerName.trim() : '',
     headerPrefix: kind === 'http_header' ? headerPrefix : '',
     queryParam: kind === 'http_query' ? queryParam.trim() : '',
-    allowHttp: isHttpKind(kind) && allowHttp,
-    allowedCidrs: splitList(cidrs)
+    allowHttp: brokerable && allowHttp,
+    allowedCidrs: splitList(cidrs),
+    ...(kind === 'login' ? { login: { urlPatterns: splitList(urlPatterns), totpAlgorithm } } : {}),
+    ...(kind === 'aws_sts'
+      ? {
+          awsSts: {
+            roleArn: roleArn.trim(),
+            endpoint: stsEndpoint.trim(),
+            region: awsRegion.trim(),
+            externalId: externalId.trim(),
+            sessionPolicy: sessionPolicy.trim(),
+            durationSeconds: Number(durationSeconds) || 0,
+            signingService: signingService.trim()
+          }
+        }
+      : {}),
+    ...(kind === 'github_app'
+      ? {
+          githubApp: {
+            appId: appId.trim(),
+            installationId: Number(installationId) || 0,
+            baseUrl: ghBaseUrl.trim(),
+            repositories: splitList(ghRepos),
+            permissions: permsParsed ?? {}
+          }
+        }
+      : {}),
+    ...(kind === 'oauth2_client_credentials'
+      ? { oauth2: { tokenUrl: tokenUrl.trim(), clientId: clientId.trim(), clientAuth, scopes: splitList(oauthScopes), audience: audience.trim() } }
+      : {})
   });
-  const formError = $derived(validateCredential(input));
+  const formError = $derived(
+    kind === 'github_app' && permsParsed === null ? 'Permissions: one name=read|write|admin per line.' : validateCredential(input)
+  );
 
   function toggleMethod(m: string, on: boolean) {
     methods = on ? [...methods, m] : methods.filter((x) => x !== m);
@@ -137,13 +215,125 @@
         <label class="field-label" for="cr-qp-{uid}">Query parameter</label>
         <input id="cr-qp-{uid}" class="input mono" bind:value={queryParam} spellcheck="false" placeholder="api_key" />
       </div>
+    {:else if kind === 'login'}
+      <div class="field">
+        <label class="field-label" for="cr-urls-{uid}">Pages the login may be used on</label>
+        <textarea id="cr-urls-{uid}" class="input mono" rows="2" bind:value={urlPatterns} spellcheck="false" placeholder="https://app.example.com/login&#10;https://*.example.com"></textarea>
+        <span class="field-hint">One per line: https://host[:port][/path]. Agents get the username and password only for a page under one of these.</span>
+      </div>
+      <div class="field">
+        <label class="field-label" for="cr-totp-{uid}">TOTP algorithm for a bare seed</label>
+        <select id="cr-totp-{uid}" class="select" bind:value={totpAlgorithm}>
+          <option value="">From the otpauth:// URI</option>
+          <option value="SHA256">SHA-256</option>
+          <option value="SHA512">SHA-512</option>
+        </select>
+        <span class="field-hint">SHA-1 seeds can't be used: Citadel runs in FIPS 140-3 mode, where HMAC-SHA-1 is not approved.</span>
+      </div>
+    {:else if kind === 'aws_sts'}
+      <div class="field">
+        <label class="field-label" for="cr-arn-{uid}">Role to assume</label>
+        <input id="cr-arn-{uid}" class="input mono" bind:value={roleArn} spellcheck="false" placeholder="arn:aws:iam::123456789012:role/agent-deploy" />
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label class="field-label" for="cr-svc-{uid}">Sign requests for service <span class="subtle">(optional)</span></label>
+          <input id="cr-svc-{uid}" class="input mono" bind:value={signingService} spellcheck="false" placeholder="s3" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="cr-reg-{uid}">Region</label>
+          <input id="cr-reg-{uid}" class="input mono" bind:value={awsRegion} spellcheck="false" placeholder="us-east-1" />
+        </div>
+      </div>
+      <details class="adv">
+        <summary>Session</summary>
+        <div class="field">
+          <label class="field-label" for="cr-pol-{uid}">Session policy <span class="subtle">(optional; then grants can't add one)</span></label>
+          <textarea id="cr-pol-{uid}" class="input mono" rows="3" bind:value={sessionPolicy} spellcheck="false" placeholder={'{"Version":"2012-10-17","Statement":[…]}'}></textarea>
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label class="field-label" for="cr-dur-{uid}">Session length</label>
+            <select id="cr-dur-{uid}" class="select" bind:value={durationSeconds}>
+              <option value={0}>1 hour (default)</option>
+              <option value={900}>15 minutes</option>
+              <option value={7200}>2 hours</option>
+              <option value={43200}>12 hours</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field-label" for="cr-ext-{uid}">External ID <span class="subtle">(optional)</span></label>
+            <input id="cr-ext-{uid}" class="input mono" bind:value={externalId} spellcheck="false" />
+          </div>
+        </div>
+        <div class="field">
+          <label class="field-label" for="cr-sts-{uid}">STS endpoint <span class="subtle">(optional)</span></label>
+          <input id="cr-sts-{uid}" class="input mono" bind:value={stsEndpoint} spellcheck="false" placeholder="https://sts.amazonaws.com/" />
+        </div>
+      </details>
+    {:else if kind === 'github_app'}
+      <div class="row2">
+        <div class="field">
+          <label class="field-label" for="cr-app-{uid}">App ID</label>
+          <input id="cr-app-{uid}" class="input mono" bind:value={appId} spellcheck="false" placeholder="123456" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="cr-inst-{uid}">Installation ID</label>
+          <input id="cr-inst-{uid}" class="input mono" inputmode="numeric" bind:value={installationId} spellcheck="false" />
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label class="field-label" for="cr-repos-{uid}">Default repositories</label>
+          <textarea id="cr-repos-{uid}" class="input mono" rows="2" bind:value={ghRepos} spellcheck="false" placeholder="api&#10;web"></textarea>
+        </div>
+        <div class="field">
+          <label class="field-label" for="cr-perms-{uid}">Default permissions</label>
+          <textarea id="cr-perms-{uid}" class="input mono" rows="2" bind:value={ghPerms} spellcheck="false" placeholder="contents=read&#10;pull_requests=write"></textarea>
+        </div>
+      </div>
+      <span class="field-hint">Grants may narrow these. Without defaults, every grant must name repositories or permissions: Citadel never issues installation-wide tokens.</span>
+      <div class="field">
+        <label class="field-label" for="cr-ghurl-{uid}">API base URL <span class="subtle">(GitHub Enterprise Server only)</span></label>
+        <input id="cr-ghurl-{uid}" class="input mono" bind:value={ghBaseUrl} spellcheck="false" placeholder="https://github.example.com/api/v3" />
+      </div>
+    {:else if kind === 'oauth2_client_credentials'}
+      <div class="field">
+        <label class="field-label" for="cr-turl-{uid}">Token endpoint</label>
+        <input id="cr-turl-{uid}" class="input mono" bind:value={tokenUrl} spellcheck="false" placeholder="https://auth.example.com/oauth/token" />
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label class="field-label" for="cr-cid-{uid}">Client ID</label>
+          <input id="cr-cid-{uid}" class="input mono" bind:value={clientId} spellcheck="false" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="cr-cauth-{uid}">Client authentication</label>
+          <select id="cr-cauth-{uid}" class="select" bind:value={clientAuth}>
+            <option value="">HTTP basic (default)</option>
+            <option value="post">In the request body</option>
+          </select>
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label class="field-label" for="cr-scopes-{uid}">Scopes <span class="subtle">(optional)</span></label>
+          <input id="cr-scopes-{uid}" class="input mono" bind:value={oauthScopes} spellcheck="false" placeholder="read write" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="cr-aud-{uid}">Audience <span class="subtle">(optional)</span></label>
+          <input id="cr-aud-{uid}" class="input mono" bind:value={audience} spellcheck="false" />
+        </div>
+      </div>
     {/if}
-    <div class="field">
-      <label class="field-label" for="cr-hosts-{uid}">Allowed hosts{isHttpKind(kind) ? '' : ' (optional)'}</label>
-      <textarea id="cr-hosts-{uid}" class="input mono" rows="2" bind:value={hosts} spellcheck="false" placeholder="api.github.com&#10;*.example.com"></textarea>
-      <span class="field-hint">One per line. Exact hosts or *.example.com; add :port for a non-default port.</span>
-    </div>
-    {#if isHttpKind(kind)}
+    {#if kind !== 'login'}
+      <div class="field">
+        <label class="field-label" for="cr-hosts-{uid}">Allowed hosts{isHttpKind(kind) ? '' : ' (optional)'}</label>
+        <textarea id="cr-hosts-{uid}" class="input mono" rows="2" bind:value={hosts} spellcheck="false" placeholder="api.github.com&#10;*.example.com"></textarea>
+        <span class="field-hint">One per line. Exact hosts or *.example.com; add :port for a non-default port.{isMintedKind(kind) ? ' Brokered requests with the minted token may only go here.' : ''}</span>
+      </div>
+    {/if}
+    {#if brokerable}
       <fieldset class="field plain">
         <legend class="field-label">Allowed methods</legend>
         <div class="methods">

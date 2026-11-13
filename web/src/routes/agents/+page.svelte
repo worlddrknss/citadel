@@ -14,6 +14,7 @@
   import { toast } from '#lib/stores/toast.svelte.ts';
   import { relTime, fullTime } from '../time';
   import { agentMenu } from './actions';
+  import AddLoginModal from './AddLoginModal.svelte';
   import { agentsApi, AGENT_NAME_RE, STATUS_LABEL, STATUS_TONE, type Agent, type AgentSettings } from './api';
 
   let agents = $state<Agent[]>([]);
@@ -37,6 +38,8 @@
     }
   }
   onMount(load);
+
+  let addLoginOpen = $state(false);
 
   // ---- new agent -----------------------------------------------------------
   let createOpen = $state(false);
@@ -86,6 +89,7 @@
 >
   {#snippet actions()}
     {#if canCreate}
+      <button type="button" class="btn btn-secondary" onclick={() => (addLoginOpen = true)}><Icon name="key" size={16} />Add login</button>
       <button type="button" class="btn btn-primary" onclick={openCreate}><Icon name="plus" size={16} />New agent</button>
     {/if}
   {/snippet}
@@ -135,6 +139,8 @@
     </EmptyState>
   {/snippet}
 </DataTable>
+
+<AddLoginModal bind:open={addLoginOpen} />
 
 <Modal bind:open={createOpen} title="New agent" description="An agent authenticates with its own tokens or workload identity, never with console sessions or access keys." size="sm">
   <form id="agent-form" class="form" onsubmit={create} novalidate>
