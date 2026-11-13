@@ -289,13 +289,20 @@ func (s *Server) workloadRotationJob(ctx context.Context) error {
 	if cur.KID != "" {
 		days := s.workloadIssuerSettings(ctx).RotationDays
 		if !now.Before(cur.ActivatedAt.Add(time.Duration(days) * 24 * time.Hour)) {
+			jctx, aerr := s.beginJobAudit(s.deploymentCtx(ctx), store.AuditEvent{Action: "citadel.RotateWorkloadSigningKey", KeyID: cur.KID,
+				AuditOrigin: store.AuditOrigin{Actor: "system:workload-key-rotation", ActorType: store.AuditActorSystem}})
+			if aerr != nil {
+				return aerr
+			}
 			next, err := s.rotateWorkloadKey(ctx, cur.KID)
 			switch {
 			case errors.Is(err, store.ErrWorkloadRotationConflict):
+				s.finishAudit(jctx, store.AuditResultError, "RotationConflict")
 			case err != nil:
+				s.finishAudit(jctx, store.AuditResultError, "InternalError")
 				return err
 			default:
-				s.recordAudit(s.deploymentCtx(ctx), store.AuditEvent{Action: "citadel.RotateWorkloadSigningKey", KeyID: next.KID, Result: "ok",
+				s.recordAudit(jctx, store.AuditEvent{Action: "citadel.RotateWorkloadSigningKey", KeyID: next.KID, Result: "ok",
 					AuditOrigin: store.AuditOrigin{Actor: "system:workload-key-rotation", ActorType: store.AuditActorSystem, Resource: next.KMSKeyID}})
 			}
 		}

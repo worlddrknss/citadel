@@ -48,13 +48,17 @@ func (s *Server) runKMSJobsOnce(ctx context.Context, now time.Time) {
 		if ctx.Err() != nil {
 			return
 		}
-		actx := store.WithCallerAccount(ctx, ref.AccountID)
+		actx, aerr := s.beginJobAudit(store.WithCallerAccount(ctx, ref.AccountID), store.AuditEvent{Action: "kms.RotateKey", KeyID: ref.KeyID, AuditOrigin: kmsJobOrigin(ref.AccountID)})
+		if aerr != nil {
+			continue // not attempted; the next run retries
+		}
 		_, err := s.store.RotateKeyMaterial(actx, ref.KeyID, store.RotationKindAutomatic, now)
 		switch {
 		case err == nil:
 			s.recordAudit(actx, store.AuditEvent{Action: "kms.RotateKey", KeyID: ref.KeyID, Result: "ok", AuditOrigin: kmsJobOrigin(ref.AccountID)})
 		case errors.Is(err, store.ErrRotationNotDue):
 			// Another replica got there first, or the schedule changed.
+			s.finishAudit(actx, store.AuditResultError, "RotationNotDue")
 		default:
 			slog.Error("kms job: rotate key", "key_id", ref.KeyID, "err", err)
 			s.recordAudit(actx, store.AuditEvent{Action: "kms.RotateKey", KeyID: ref.KeyID, Result: "error", ErrorType: "InternalError", AuditOrigin: kmsJobOrigin(ref.AccountID)})
@@ -69,7 +73,10 @@ func (s *Server) runKMSJobsOnce(ctx context.Context, now time.Time) {
 		if ctx.Err() != nil {
 			return
 		}
-		actx := store.WithCallerAccount(ctx, ref.AccountID)
+		actx, aerr := s.beginJobAudit(store.WithCallerAccount(ctx, ref.AccountID), store.AuditEvent{Action: "kms.DeleteKey", KeyID: ref.KeyID, AuditOrigin: kmsJobOrigin(ref.AccountID)})
+		if aerr != nil {
+			continue // not attempted; the next run retries
+		}
 		// Like AWS, deletion proceeds even when secrets or parameters still
 		// reference the key; record how many so the loss is traceable.
 		errType := ""
@@ -100,6 +107,10 @@ func kmsJobOrigin(accountID string) store.AuditOrigin {
 // runKMSRewrap re-wraps stored material onto the current wrapping key and
 // audits the outcome.
 func (s *Server) runKMSRewrap(ctx context.Context, origin store.AuditOrigin) (store.RewrapReport, error) {
+	ctx, aerr := s.ensureAudit(ctx, store.AuditEvent{Action: "citadel.RewrapKeyMaterial", AuditOrigin: origin})
+	if aerr != nil {
+		return store.RewrapReport{}, aerr
+	}
 	report, err := s.store.RewrapAll(ctx)
 	result, errType := "ok", ""
 	if err != nil {

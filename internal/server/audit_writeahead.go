@@ -252,6 +252,9 @@ func awsWriteAhead(target string) bool {
 var nativeNonMutating = map[string]bool{
 	"/v1/kms/encrypt": true, "/v1/kms/decrypt": true, "/v1/kms/sign": true, "/v1/kms/verify": true,
 	"/v1/admin/sso/providers/test": true, "/v1/audit/stream/test": true,
+	// Verification walks the chain; an attempt event would extend the chain
+	// it is verifying. Its result is audited (fail-closed) as before.
+	"/v1/audit/verify": true,
 }
 
 // nativeWriteAhead reports whether a /v1 request needs a write-ahead attempt.
@@ -315,4 +318,15 @@ var bodyResourceKeys = []string{
 	"SecretId", "KeyId", "CertificateArn", "CertificateAuthorityArn", "AliasName", "Name", "GrantId",
 	"providerArn", "arn", "certificateArn", "keyId", "aliasName", "roleName", "username", "clientId",
 	"accessKeyId", "accountId", "name", "id",
+}
+
+// ensureAudit is beginJobAudit unless ctx already carries an attempt (work
+// shared by a request handler and a job).
+func (s *Server) ensureAudit(ctx context.Context, ev store.AuditEvent) (context.Context, error) {
+	if info := auditInfoFrom(ctx); info != nil {
+		if _, ok := info.attemptState(); ok {
+			return ctx, nil
+		}
+	}
+	return s.beginJobAudit(ctx, ev)
 }

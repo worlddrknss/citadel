@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/store"
@@ -36,12 +37,41 @@ func (s *Server) purgeExpiredSecretsJob(ctx context.Context) error {
 // purgeExpiredSecrets runs one purge round and returns how many secrets it
 // removed.
 func (s *Server) purgeExpiredSecrets(ctx context.Context, now time.Time) int {
+	// Write-ahead: one attempt per account with secrets due, before the
+	// purge. If any attempt cannot be written, nothing is purged this run.
+	due, err := s.store.SecretsDueForPurge(ctx, now)
+	if err != nil {
+		log.Printf("secrets purge: %v", err)
+		return 0
+	}
+	if len(due) == 0 {
+		return 0
+	}
+	scopes := make(map[string]context.Context, len(due))
+	for acct, n := range due {
+		actx, aerr := s.beginJobAudit(store.WithCallerAccount(ctx, acct), store.AuditEvent{
+			Action: "secretsmanager.PurgeSecret",
+			AuditOrigin: store.AuditOrigin{Actor: "system:secrets-purge", ActorType: store.AuditActorSystem,
+				Resource: strconv.Itoa(n) + " secret(s) past their deletion date"},
+		})
+		if aerr != nil {
+			log.Printf("secrets purge: skipped this run, the audit log is unavailable")
+			for _, c := range scopes {
+				s.finishAudit(c, store.AuditResultError, "AuditUnavailable")
+			}
+			return 0
+		}
+		scopes[acct] = actx
+	}
 	purged, err := s.store.PurgeExpiredSecrets(ctx, now)
 	if err != nil {
 		log.Printf("secrets purge: %v (purged %d before the error)", err, len(purged))
 	}
 	for _, p := range purged {
-		actx := store.WithCallerAccount(ctx, p.AccountID)
+		actx, ok := scopes[p.AccountID]
+		if !ok {
+			actx = store.WithCallerAccount(ctx, p.AccountID)
+		}
 		s.recordAudit(actx, store.AuditEvent{
 			Action: "secretsmanager.PurgeSecret",
 			KeyID:  p.KMSKeyID,
@@ -52,6 +82,9 @@ func (s *Server) purgeExpiredSecrets(ctx context.Context, now time.Time) int {
 				Resource:  p.Name,
 			},
 		})
+	}
+	for _, c := range scopes {
+		s.finishAudit(c, store.AuditResultSuccess, "") // accounts whose secrets were restored meanwhile
 	}
 	if len(purged) > 0 {
 		log.Printf("secrets purge: permanently deleted %d secret(s) past their deletion date", len(purged))

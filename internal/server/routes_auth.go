@@ -189,6 +189,10 @@ func (s *Server) handleV1Bootstrap(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusInternalServerError, "bootstrap_failed", "could not complete setup")
 		return
 	}
+	if err := s.beginAuditAttempt(r.Context(), store.AuditEvent{Action: "citadel.Bootstrap", AuditOrigin: s.userAuditOrigin(r, username, "")}); err != nil {
+		writeNativeError(w, http.StatusInternalServerError, "audit_unavailable", "the audit log could not be written; setup was not started")
+		return
+	}
 	accountID, err := s.store.Bootstrap(r.Context(), store.BootstrapRequest{
 		OrganizationName: org, AccountName: accountName, Username: username, DisplayName: username, PasswordHash: hash,
 		BootstrapTokenHash: tokenHash,

@@ -43,6 +43,7 @@ type Store interface {
 	KMSLifecycleStore
 	MFAStore
 	SecretRotationStore
+	WriteAheadStore
 }
 
 // KeyStore persists KMS keys, aliases, key policies and grants.

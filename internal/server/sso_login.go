@@ -255,6 +255,15 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		ssoErrorRedirect(w, r, ssoErrNoRole)
 		return
 	}
+	// Write-ahead: provisioning and the session are changes.
+	attemptCtx := r.Context()
+	if p.AccountID != "" {
+		attemptCtx = store.WithCallerAccount(attemptCtx, p.AccountID)
+	}
+	if err := s.beginAuditAttempt(attemptCtx, store.AuditEvent{Action: "citadel.LoginSSO", KeyID: p.ID, AuditOrigin: s.userAuditOrigin(r, truncate(subjectActor, 200), p.AccountID)}); err != nil {
+		ssoErrorRedirect(w, r, ssoErrProvider)
+		return
+	}
 	username, err := s.ssoProvisionUser(r.Context(), p, ident)
 	if err != nil {
 		slog.Error("sso: provision", "provider", p.ID, "error", err)
