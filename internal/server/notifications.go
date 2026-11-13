@@ -42,6 +42,7 @@ import (
 // raise it with s.notify.
 const (
 	EventAgentApprovalRequested = "agent.approval_requested"
+	EventAgentAccessDecided     = "agent.access_decided"
 	EventAgentSuspended         = "agent.suspended"
 	EventAgentAnomaly           = "agent.anomaly"
 	EventSecurityKillSwitch     = "security.kill_switch"
@@ -61,6 +62,7 @@ type notificationEventSpec struct {
 
 var notificationEvents = []notificationEventSpec{
 	{EventAgentApprovalRequested, "Agent approval requested", "An agent asked for access that needs a human's approval.", "warning"},
+	{EventAgentAccessDecided, "Agent access decided", "Someone approved or denied an agent's access request.", "info"},
 	{EventAgentSuspended, "Agent suspended", "An agent was suspended, by a person or automatically.", "warning"},
 	{EventAgentAnomaly, "Agent anomaly", "An agent behaved unusually: a new host, off-hours use, a rate spike or repeated denials.", "warning"},
 	{EventSecurityKillSwitch, "Kill switch used", "Every agent in the account was suspended with the kill switch.", "critical"},

@@ -24,8 +24,11 @@ import (
 // Checks, in order: the agent is active and the account's kill switch is
 // off; the credential exists and the agent has a grant for it (both report
 // no_grant, so an agent cannot discover credentials it was not given); the
-// action is granted; notBefore/notAfter; the time-of-day window; the
-// backing secret exists and is not scheduled for deletion; the rate limit.
+// action is granted; notBefore/notAfter; the time-of-day window; leases and
+// approvals (agent_access.go: a lease from an approved request can stand in
+// for a missing grant or action, and a requiresApproval grant needs one);
+// the backing secret exists and is not scheduled for deletion; the rate
+// limit; finally the lease is used.
 
 // AgentDecision is the outcome of an access check.
 type AgentDecision struct {
@@ -35,6 +38,13 @@ type AgentDecision struct {
 	Reason string
 	// RetryAfter is set for rate_limited.
 	RetryAfter time.Duration
+	// RequestID is the pending access request for approval_required (2.3);
+	// "" when the agent has too many pending requests.
+	RequestID string
+	// LeaseID and LeaseExpiresAt name the lease an allowed use was made
+	// under ("" when none).
+	LeaseID        string
+	LeaseExpiresAt time.Time
 }
 
 // Denial reasons for evaluateAgentAccess. The agent sees them, so none
@@ -108,9 +118,6 @@ func (s *Server) evaluateAgentAccess(ctx context.Context, agent store.Agent, cre
 			break
 		}
 	}
-	if !found {
-		return grant, cred, ref, deny(agentDenyNoGrant)
-	}
 	cred, err = s.store.GetAgentCredential(ctx, cur.AccountID, credentialName)
 	if err != nil {
 		if errors.Is(err, store.ErrAgentCredentialNotFound) {
@@ -119,22 +126,40 @@ func (s *Server) evaluateAgentAccess(ctx context.Context, agent store.Agent, cre
 		log.Printf("agent policy: credential read failed: %v", err)
 		return grant, cred, ref, deny(agentDenyInternal)
 	}
-	if !grant.HasAction(action) {
-		return grant, cred, ref, deny(agentDenyActionNotGranted)
+	// Without a grant for the action, only a lease from an approved access
+	// request can allow it (2.3).
+	grantReason := ""
+	switch {
+	case !found:
+		grantReason = agentDenyNoGrant
+	case !grant.HasAction(action):
+		grantReason = agentDenyActionNotGranted
+	default:
+		if reason := agentGrantTimeCheck(grant, now); reason != "" {
+			return grant, cred, ref, deny(reason)
+		}
 	}
-	if reason := agentGrantTimeCheck(grant, now); reason != "" {
-		return grant, cred, ref, deny(reason)
+	hasGrant := grantReason == ""
+	if !hasGrant {
+		grant = store.AgentGrant{AccountID: cur.AccountID, AgentID: cur.AgentID, Credential: credentialName}
+	}
+	decision, useLease := s.agentLeaseGate(ctx, cur, credentialName, grant, hasGrant, grantReason, action, now)
+	if !decision.Allowed {
+		return grant, cred, ref, decision
 	}
 	ref, err = s.agentSecretRef(ctx, cur.AccountID, cred.SecretName)
 	if err != nil {
 		return grant, cred, ref, deny(agentDenyCredentialUnavailable)
 	}
-	if action == store.AgentActionUse || action == store.AgentActionReveal {
+	if hasGrant && (action == store.AgentActionUse || action == store.AgentActionReveal) {
 		if ok, wait := s.consumeAgentGrantUse(ctx, grant); !ok {
 			return grant, cred, ref, AgentDecision{Reason: agentDenyRateLimited, RetryAfter: wait}
 		}
 	}
-	return grant, cred, ref, AgentDecision{Allowed: true}
+	if useLease != nil {
+		decision = useLease()
+	}
+	return grant, cred, ref, decision
 }
 
 // agentGrantTimeCheck applies notBefore, notAfter and the time-of-day
