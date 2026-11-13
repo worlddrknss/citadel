@@ -55,6 +55,11 @@ type Server struct {
 	audit auditRuntime
 	obs   observabilityRuntime
 
+	// testLEIssue / testLEComplete replace the Let's Encrypt issuance steps
+	// (tests).
+	testLEIssue    leIssueFunc
+	testLEComplete leCompleteFunc
+
 	// sharedLimitOverrides replaces shared rate limits by name (tests).
 	sharedLimitOverrides map[string]sharedLimit
 }
@@ -219,6 +224,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/certificates/letsencrypt/request", s.handleV1RequestLECert)
 	mux.HandleFunc("POST /v1/certificates/letsencrypt/dns/begin", s.handleV1BeginLEDNSOrder)
 	mux.HandleFunc("POST /v1/certificates/letsencrypt/dns/complete", s.handleV1CompleteLEDNSOrder)
+	mux.HandleFunc("GET /v1/certificates/letsencrypt/orders", s.handleV1GetLEOrder)
 	mux.HandleFunc("GET /v1/audit", s.handleV1ListAudit)
 	s.registerAuditRoutes(mux)
 	mux.HandleFunc("GET /v1/change-requests", s.handleV1ListChangeRequests)

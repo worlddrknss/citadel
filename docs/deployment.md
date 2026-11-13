@@ -89,6 +89,16 @@ Either way:
   `/.well-known/acme-challenge/` from any HTTP-to-HTTPS redirect at the
   ingress, or make sure the redirect keeps the path (Let's Encrypt follows
   redirects to HTTPS).
+- Let's Encrypt orders run in the background on the replica that accepted
+  the request (up to 3 minutes; requests themselves stay well under the
+  30-second write timeout). `POST /v1/certificates/letsencrypt/request` and
+  `POST /v1/certificates/letsencrypt/dns/complete` answer `202` with an
+  `orderId`, and `GET /v1/certificates/letsencrypt/orders?id=` reports
+  `status` (`pending`, `processing`, `issued`, `failed`), the current
+  `progress` step, `error` and `certId`; the console polls it. HTTP-01
+  challenge responses live in that replica's memory, so with several replicas
+  either use DNS-01 or route `/.well-known/acme-challenge/` to a single
+  replica while issuing.
 
 ## Trusted proxies and client addresses
 

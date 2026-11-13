@@ -52,6 +52,62 @@ test('the full re-check button is hidden from users who are not platform admins'
 // 2.0.3 console changes against the mocked API: CA path length, workload
 // client name conflicts, parameter name rules.
 
+test("Let's Encrypt HTTP-01 issuance runs in the background with progress", async ({ page }) => {
+  const polls: string[] = [];
+  await page.route('**/v1/certificates/letsencrypt/request', (route) =>
+    route.fulfill({ status: 202, json: { requested: true, orderId: 'ord-1', status: 'processing', domains: 'www.acme.test' } })
+  );
+  await page.route('**/v1/certificates/letsencrypt/orders**', (route) => {
+    polls.push(route.request().url());
+    const step = polls.length;
+    const json =
+      step < 3
+        ? { orderId: 'ord-1', kind: 'http-01', status: 'processing', domains: 'www.acme.test', progress: 'Validating www.acme.test (HTTP-01)' }
+        : { orderId: 'ord-1', kind: 'http-01', status: 'issued', domains: 'www.acme.test', certId: 'cert-www-1' };
+    return route.fulfill({ json });
+  });
+  await open(page, '/certificates?tab=letsencrypt');
+  await page.getByLabel('Domains').fill('www.acme.test');
+  await page.getByRole('button', { name: 'Request certificate' }).click();
+  const progress = page.getByTestId('le-progress');
+  await expect(progress).toBeVisible();
+  await expect(page.getByTestId('le-progress-step')).toHaveText('Validating www.acme.test (HTTP-01)…');
+  await expect(page.getByText('Issued a certificate for www.acme.test')).toBeVisible({ timeout: 15_000 });
+  await expect(progress).toBeHidden();
+  expect(polls.every((u) => u.includes('id=ord-1'))).toBe(true);
+});
+
+test("Let's Encrypt DNS-01: a failed validation shows the error and can be retried", async ({ page }) => {
+  let completes = 0;
+  await page.route('**/v1/certificates/letsencrypt/dns/begin', (route) =>
+    route.fulfill({ json: { orderId: 'dns-1', records: [{ domain: 'acme.test', name: '_acme-challenge.acme.test', value: 'txt-value-1' }] } })
+  );
+  await page.route('**/v1/certificates/letsencrypt/dns/complete', (route) => {
+    completes++;
+    return route.fulfill({ status: 202, json: { orderId: 'dns-1', kind: 'dns-01', status: 'processing', domains: 'acme.test', progress: 'Starting validation' } });
+  });
+  await page.route('**/v1/certificates/letsencrypt/orders**', (route) =>
+    route.fulfill({
+      json:
+        completes === 1
+          ? { orderId: 'dns-1', kind: 'dns-01', status: 'failed', domains: 'acme.test', error: 'Validation failed: no TXT record found at _acme-challenge.acme.test' }
+          : { orderId: 'dns-1', kind: 'dns-01', status: 'issued', domains: 'acme.test', certId: 'cert-www-1' }
+    })
+  );
+  await open(page, '/certificates?tab=letsencrypt');
+  await page.getByRole('button', { name: 'DNS-01 · manual' }).click();
+  await page.getByLabel('Domains').fill('acme.test');
+  await page.getByRole('button', { name: 'Get DNS records' }).click();
+  await expect(page.getByText('txt-value-1')).toBeVisible();
+  await page.getByRole('button', { name: 'Validate and issue' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'no TXT record found' })).toBeVisible();
+  // The records stay up for a retry.
+  await expect(page.getByText('txt-value-1')).toBeVisible();
+  await page.getByRole('button', { name: 'Validate and issue' }).click();
+  await expect(page.getByText('Issued a certificate for acme.test')).toBeVisible();
+  expect(completes).toBe(2);
+});
+
 test('the CA tree and drawer show each CA path length', async ({ page }) => {
   await open(page, '/certificates');
   const tree = page.getByRole('region', { name: 'CA hierarchy' });

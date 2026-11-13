@@ -38,16 +38,35 @@ type ACMELECertificate struct {
 	UpdatedAt time.Time
 }
 
-// ACMELEOrder is an in-flight ACME order awaiting manual DNS-01 validation. It
-// persists the order URL (and owning account) between the "begin" request that
-// returns the TXT records to publish and the "complete" request that finalizes
-// issuance once the operator has added them at their DNS provider.
+// ACMELEOrder is a Let's Encrypt order. Issuance runs in the background (it
+// can take minutes), so the order row carries its progress for the console
+// to poll: Status is pending (DNS-01: waiting for the operator to publish
+// the TXT records), processing, issued (CertID set) or failed (Error set).
+// For DNS-01 it also persists the order URL between the "begin" request that
+// returns the TXT records and the "complete" request.
 type ACMELEOrder struct {
 	OrderID      string
 	OrderURL     string
 	DirectoryURL string
 	Domains      string
 	Status       string
-	CreatedAt    time.Time
-	ExpiresAt    time.Time
+	// Kind is http-01 or dns-01.
+	Kind      string
+	Progress  string
+	Error     string
+	CertID    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	ExpiresAt time.Time
 }
+
+// Let's Encrypt order statuses and kinds.
+const (
+	ACMELEOrderPending    = "pending"
+	ACMELEOrderProcessing = "processing"
+	ACMELEOrderIssued     = "issued"
+	ACMELEOrderFailed     = "failed"
+
+	ACMELEOrderHTTP01 = "http-01"
+	ACMELEOrderDNS01  = "dns-01"
+)

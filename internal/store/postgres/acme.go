@@ -5,25 +5,29 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lib/pq"
 	"github.com/worlddrknss/citadel/internal/cryptoutil"
 	"github.com/worlddrknss/citadel/internal/store"
 )
 
-// CreateACMELEOrder persists a pending manual DNS-01 order scoped to the caller.
+// CreateACMELEOrder persists an order scoped to the caller.
 func (s *Store) CreateACMELEOrder(ctx context.Context, order store.ACMELEOrder) error {
 	if order.OrderID == "" {
 		order.OrderID = cryptoutil.RandomHex(12)
 	}
 	if order.Status == "" {
-		order.Status = "pending"
+		order.Status = store.ACMELEOrderPending
+	}
+	if order.Kind == "" {
+		order.Kind = store.ACMELEOrderDNS01
 	}
 	const q = `
 INSERT INTO acme_le_orders (
-	order_id, order_url, directory_url, domains, status, account_id, created_at, expires_at
-) VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW() + INTERVAL '7 days')
+	order_id, order_url, directory_url, domains, status, kind, progress, account_id, created_at, updated_at, expires_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW(), NOW() + INTERVAL '7 days')
 `
 	if _, err := s.db.ExecContext(ctx, q,
-		order.OrderID, order.OrderURL, order.DirectoryURL, order.Domains, order.Status,
+		order.OrderID, order.OrderURL, order.DirectoryURL, order.Domains, order.Status, order.Kind, order.Progress,
 		s.accountForContext(ctx),
 	); err != nil {
 		return fmt.Errorf("insert acme order: %w", err)
@@ -31,16 +35,17 @@ INSERT INTO acme_le_orders (
 	return nil
 }
 
-// GetACMELEOrder loads a pending order owned by the caller's account.
+// GetACMELEOrder loads an order owned by the caller's account.
 func (s *Store) GetACMELEOrder(ctx context.Context, orderID string) (store.ACMELEOrder, error) {
 	const q = `
-SELECT order_id, order_url, directory_url, domains, status, created_at, expires_at
+SELECT order_id, order_url, directory_url, domains, status, kind, progress, error, cert_id, created_at, updated_at, expires_at
 FROM acme_le_orders
 WHERE order_id = $1 AND account_id = $2
 `
 	var o store.ACMELEOrder
 	err := s.db.QueryRowContext(ctx, q, orderID, s.accountForContext(ctx)).Scan(
-		&o.OrderID, &o.OrderURL, &o.DirectoryURL, &o.Domains, &o.Status, &o.CreatedAt, &o.ExpiresAt,
+		&o.OrderID, &o.OrderURL, &o.DirectoryURL, &o.Domains, &o.Status, &o.Kind, &o.Progress, &o.Error, &o.CertID,
+		&o.CreatedAt, &o.UpdatedAt, &o.ExpiresAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -48,16 +53,46 @@ WHERE order_id = $1 AND account_id = $2
 		}
 		return store.ACMELEOrder{}, fmt.Errorf("query acme order: %w", err)
 	}
+	o.CreatedAt, o.UpdatedAt, o.ExpiresAt = o.CreatedAt.UTC(), o.UpdatedAt.UTC(), o.ExpiresAt.UTC()
 	return o, nil
 }
 
-// DeleteACMELEOrder removes a pending order owned by the caller's account.
+// DeleteACMELEOrder removes an order owned by the caller's account.
 func (s *Store) DeleteACMELEOrder(ctx context.Context, orderID string) error {
 	const q = `DELETE FROM acme_le_orders WHERE order_id = $1 AND account_id = $2`
 	if _, err := s.db.ExecContext(ctx, q, orderID, s.accountForContext(ctx)); err != nil {
 		return fmt.Errorf("delete acme order: %w", err)
 	}
 	return nil
+}
+
+// UpdateACMELEOrder stores an order's progress fields.
+func (s *Store) UpdateACMELEOrder(ctx context.Context, o store.ACMELEOrder) error {
+	const q = `
+UPDATE acme_le_orders SET status = $3, progress = $4, error = $5, cert_id = $6,
+	order_url = CASE WHEN $7 = '' THEN order_url ELSE $7 END, updated_at = NOW()
+WHERE order_id = $1 AND account_id = $2`
+	res, err := s.db.ExecContext(ctx, q, o.OrderID, s.accountForContext(ctx), o.Status, o.Progress, o.Error, o.CertID, o.OrderURL)
+	if err != nil {
+		return fmt.Errorf("update acme order: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("acme order not found")
+	}
+	return nil
+}
+
+// TransitionACMELEOrder moves an order to status if it is in one of from.
+func (s *Store) TransitionACMELEOrder(ctx context.Context, orderID string, from []string, status, progress string) (bool, error) {
+	const q = `
+UPDATE acme_le_orders SET status = $3, progress = $4, error = '', updated_at = NOW()
+WHERE order_id = $1 AND account_id = $2 AND status = ANY($5)`
+	res, err := s.db.ExecContext(ctx, q, orderID, s.accountForContext(ctx), status, progress, pq.Array(from))
+	if err != nil {
+		return false, fmt.Errorf("transition acme order: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
 }
 
 // GetACMELEAccount loads the ACME account for a directory URL. It returns

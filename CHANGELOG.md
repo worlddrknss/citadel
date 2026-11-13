@@ -26,6 +26,17 @@ All notable changes to Citadel are documented here. The format follows
 
 ### Fixed
 
+- Let's Encrypt orders can take up to about 3 minutes, but the request (and
+  the console) gave up after 30 seconds. Issuance is now asynchronous:
+  `POST /v1/certificates/letsencrypt/request` and
+  `POST /v1/certificates/letsencrypt/dns/complete` start the work and answer
+  `202` with an `orderId`; a background task bounded by a 3-minute timeout
+  (and cancelled on shutdown) completes it, and the new
+  `GET /v1/certificates/letsencrypt/orders?id=` reports its status, current
+  step, error and certificate. The console shows progress while it polls,
+  shows failures, and keeps the DNS-01 records up for a retry. Starting a
+  DNS-01 order is bounded at 20 seconds. Order rows gain progress columns
+  (migration 0904); existing DNS-01 orders keep working.
 - Rate limits on sign-in, first-run setup, SSO and the workload token
   endpoint were per replica, so each added replica multiplied them. With
   PostgreSQL they are now also enforced deployment-wide through shared

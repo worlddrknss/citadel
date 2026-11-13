@@ -165,4 +165,11 @@ type ACMEStore interface {
 	CreateACMELEOrder(ctx context.Context, order ACMELEOrder) error
 	GetACMELEOrder(ctx context.Context, orderID string) (ACMELEOrder, error)
 	DeleteACMELEOrder(ctx context.Context, orderID string) error
+	// UpdateACMELEOrder stores an order's status, progress, error, certificate
+	// and order URL.
+	UpdateACMELEOrder(ctx context.Context, order ACMELEOrder) error
+	// TransitionACMELEOrder moves an order to status (with progress) only
+	// if its status is one of from, and reports whether it did; it lets one
+	// request, on any replica, start the background work for an order.
+	TransitionACMELEOrder(ctx context.Context, orderID string, from []string, status, progress string) (bool, error)
 }

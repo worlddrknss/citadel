@@ -89,6 +89,38 @@ func (j *jobRunner) Wait() {
 	j.wg.Wait()
 }
 
+// Go runs fn once in the background, for work that outlives the request
+// that started it (a Let's Encrypt order). fn's context keeps base's values
+// (the caller's account and audit identity) but not its cancellation; it is
+// cancelled after timeout or when the runner's Start context is cancelled
+// (shutdown), and Wait waits for it. A panic is logged. On a nil runner
+// (servers built without New, in tests) fn still runs, bounded by timeout.
+func (j *jobRunner) Go(name string, base context.Context, timeout time.Duration, fn func(context.Context)) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(base), timeout)
+	if j != nil {
+		j.mu.Lock()
+		if j.started {
+			stop := context.AfterFunc(j.ctx, cancel)
+			prev := cancel
+			cancel = func() { stop(); prev() }
+		}
+		j.wg.Add(1)
+		j.mu.Unlock()
+	}
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("background task %s panicked: %v\n%s", name, rec, debug.Stack())
+			}
+		}()
+		defer cancel()
+		if j != nil {
+			defer j.wg.Done()
+		}
+		fn(ctx)
+	}()
+}
+
 func (j *jobRunner) launchLocked(jb *job) {
 	ctx := j.ctx
 	j.wg.Add(1)

@@ -39,3 +39,11 @@ func (s *Store) GetACMELEOrder(_ context.Context, _ string) (store.ACMELEOrder, 
 func (s *Store) DeleteACMELEOrder(_ context.Context, _ string) error {
 	return store.ErrUnsupported
 }
+
+func (s *Store) UpdateACMELEOrder(_ context.Context, _ store.ACMELEOrder) error {
+	return store.ErrUnsupported
+}
+
+func (s *Store) TransitionACMELEOrder(_ context.Context, _ string, _ []string, _, _ string) (bool, error) {
+	return false, store.ErrUnsupported
+}

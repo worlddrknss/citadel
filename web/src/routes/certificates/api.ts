@@ -3,7 +3,7 @@
 // redesign report; the server rejects unknown JSON fields, so optional new
 // fields are only sent when they carry a value.
 
-import { req, api, type Certificate, type CertificateDetail } from '#lib/api.ts';
+import { req, api, type Certificate, type CertificateDetail, type LEOrder } from '#lib/api.ts';
 
 /**
  * A row of GET /v1/certificates. The extra fields are part of the extended
@@ -148,3 +148,63 @@ export interface EabKey {
 }
 
 export type { Certificate, CertificateDetail };
+
+/** How often the console polls a running Let's Encrypt order. */
+export const LE_POLL_INTERVAL_MS = 2_000;
+/**
+ * When the console stops polling. The server gives an order 3 minutes and
+ * then reports it failed; this leaves room for that last update.
+ */
+export const LE_POLL_LIMIT_MS = 4 * 60_000;
+
+export interface WaitOptions {
+  intervalMs?: number;
+  limitMs?: number;
+  signal?: AbortSignal;
+  /** Injectable for tests. */
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
+
+/**
+ * Polls a Let's Encrypt order until it is issued or failed, calling onUpdate
+ * with each state (to show progress). Transient polling errors are retried;
+ * it gives up after limitMs with a failed state, and stops quietly (returning
+ * null) when signal aborts. A pending DNS-01 order is returned as is.
+ */
+export async function waitForLEOrder(
+  get: (orderId: string) => Promise<LEOrder>,
+  orderId: string,
+  onUpdate: (o: LEOrder) => void,
+  opts: WaitOptions = {}
+): Promise<LEOrder | null> {
+  const interval = opts.intervalMs ?? LE_POLL_INTERVAL_MS;
+  const limit = opts.limitMs ?? LE_POLL_LIMIT_MS;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = opts.now ?? Date.now;
+  const start = now();
+  let failures = 0;
+  for (;;) {
+    if (opts.signal?.aborted) return null;
+    try {
+      const o = await get(orderId);
+      failures = 0;
+      if (opts.signal?.aborted) return null;
+      onUpdate(o);
+      if (o.status !== 'processing') return o;
+    } catch (err) {
+      // A replica restarting or a network blip: keep trying for a while.
+      if (++failures >= 5) throw err;
+    }
+    if (now() - start >= limit) {
+      return {
+        orderId,
+        kind: 'http-01',
+        status: 'failed',
+        domains: '',
+        error: "Let's Encrypt is taking longer than expected. The certificate will appear in the list if it is issued; otherwise request it again."
+      };
+    }
+    await sleep(interval);
+  }
+}

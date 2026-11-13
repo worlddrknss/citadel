@@ -3,7 +3,9 @@
 <script lang="ts">
   import Icon from '#lib/components/Icon.svelte';
   import CopyButton from '#lib/components/CopyButton.svelte';
-  import { api, errorMessage } from '#lib/api.ts';
+  import { onDestroy } from 'svelte';
+  import { api, errorMessage, type LEOrder } from '#lib/api.ts';
+  import { waitForLEOrder } from './api';
   import { toast } from '#lib/stores/toast.svelte.ts';
   import { confirm } from '#lib/stores/confirm.svelte.ts';
   import Seg from './Seg.svelte';
@@ -85,9 +87,52 @@
     return '';
   });
 
-  // DNS-01 order in progress
+  // DNS-01 order waiting for its TXT records
   let order = $state<{ orderId: string; records: { domain: string; name: string; value: string }[] } | null>(null);
   let completing = $state(false);
+
+  // The order Let's Encrypt is working on (issuance runs on the server and
+  // can take a few minutes; the console polls it).
+  let running = $state<LEOrder | null>(null);
+  let startedAt = $state(0);
+  let elapsed = $state(0);
+  let poll: AbortController | null = null;
+  let ticker: ReturnType<typeof setInterval> | undefined;
+
+  onDestroy(() => {
+    poll?.abort();
+    clearInterval(ticker);
+  });
+
+  /** Follows orderId until it finishes; returns the final state or null when abandoned. */
+  async function follow(first: LEOrder): Promise<LEOrder | null> {
+    poll?.abort();
+    poll = new AbortController();
+    running = first;
+    startedAt = Date.now();
+    elapsed = 0;
+    clearInterval(ticker);
+    ticker = setInterval(() => (elapsed = Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    try {
+      return await waitForLEOrder(api.letsEncryptOrder, first.orderId, (o) => (running = o), { signal: poll.signal });
+    } finally {
+      clearInterval(ticker);
+      running = null;
+    }
+  }
+
+  function finished(final: LEOrder | null, fallbackDomain: string): boolean {
+    if (!final) return false;
+    if (final.status === 'issued') {
+      toast.success(`Issued a certificate for ${final.domains.split(',')[0] || fallbackDomain}`);
+      domains = '';
+      reqTouched = false;
+      onissued(final.certId);
+      return true;
+    }
+    reqError = final.error || 'The request failed.';
+    return false;
+  }
 
   async function request(e: SubmitEvent) {
     e.preventDefault();
@@ -98,10 +143,9 @@
     try {
       if (method === 'http') {
         const r = await api.requestLetsEncryptCert(domainList.join(','));
-        toast.success(`Issued a certificate for ${domainList[0]}`);
-        domains = '';
-        reqTouched = false;
-        onissued(r.certId);
+        requesting = false;
+        const final = await follow({ orderId: r.orderId, kind: 'http-01', status: r.status, domains: r.domains, progress: 'Starting' });
+        finished(final, domainList[0]);
       } else {
         order = await api.beginLetsEncryptDns(domainList.join(','));
       }
@@ -117,18 +161,18 @@
     completing = true;
     reqError = '';
     try {
-      const r = await api.completeLetsEncryptDns(order.orderId);
-      toast.success(`Issued a certificate for ${r.domains || domainList[0]}`);
-      order = null;
-      domains = '';
-      reqTouched = false;
-      onissued(r.certId);
+      const started = await api.completeLetsEncryptDns(order.orderId);
+      const final = started.status === 'processing' ? await follow(started) : started;
+      if (finished(final, domainList[0])) order = null;
+      else if (final && final.status === 'failed' && !final.error) reqError = 'Validation failed. Check the TXT records have propagated, then try again.';
     } catch (err) {
       reqError = errorMessage(err, 'Validation failed. Check the TXT records have propagated, then try again.');
     } finally {
       completing = false;
     }
   }
+
+  const elapsedLabel = $derived(elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${String(elapsed % 60).padStart(2, '0')}s`);
 
   async function cancelOrder() {
     const ok = await confirm({
@@ -152,6 +196,21 @@
     <div class="card-pad">
       {#if !canRequest}
         <p class="muted small">Editors and admins can request certificates. You have read-only access.</p>
+      {:else if running}
+        <div class="stack-sm le-progress" role="status" aria-live="polite" data-testid="le-progress">
+          <div class="prog-head">
+            <span class="spinner" aria-hidden="true"></span>
+            <strong>Requesting a certificate for <span class="mono">{running.domains.split(',').join(', ')}</span></strong>
+          </div>
+          <div class="bar" aria-hidden="true"><span></span></div>
+          <p class="small">
+            <span data-testid="le-progress-step">{running.progress || 'Working'}…</span>
+            <span class="subtle num">· {elapsedLabel}</span>
+          </p>
+          <p class="subtle small">
+            Let's Encrypt usually answers within a minute but can take up to three. You can leave this page; the certificate appears in the list when it is issued.
+          </p>
+        </div>
       {:else if order}
         <div class="stack-sm">
           <div class="callout callout-info" role="status">
@@ -289,6 +348,54 @@
 </div>
 
 <style>
+  .prog-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .spinner {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent, currentColor);
+    border-radius: 50%;
+    animation: le-spin 0.9s linear infinite;
+  }
+  .bar {
+    position: relative;
+    height: 4px;
+    overflow: hidden;
+    border-radius: 2px;
+    background: var(--surface-hover);
+  }
+  .bar span {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 35%;
+    border-radius: 2px;
+    background: var(--accent, currentColor);
+    animation: le-slide 1.6s ease-in-out infinite;
+  }
+  @keyframes le-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes le-slide {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(300%);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .spinner,
+    .bar span {
+      animation: none;
+    }
+  }
   .grid {
     display: grid;
     grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
