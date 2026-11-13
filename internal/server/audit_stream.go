@@ -213,6 +213,14 @@ func auditCEF(rec store.AuditRecord) string {
 		add("cs6Label", "correlationId")
 		add("cs6", rec.CorrelationID)
 	}
+	if rec.AgentID != "" {
+		add("flexString1Label", "agentId")
+		add("flexString1", rec.AgentID)
+	}
+	if rec.TaskID != "" {
+		add("flexString2Label", "taskId")
+		add("flexString2", rec.TaskID)
+	}
 	return fmt.Sprintf("CEF:0|Citadel|Citadel|1|%s|%s|%s|%s",
 		cefHeaderEscape(rec.Action), cefHeaderEscape(rec.Action), severity, strings.Join(ext, " "))
 }

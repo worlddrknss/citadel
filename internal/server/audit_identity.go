@@ -34,6 +34,10 @@ type auditPrincipal struct {
 	displayName string
 	accessKeyID string
 	accountID   string
+	// agentID, agentOwner and taskID are set for agent principals.
+	agentID    string
+	agentOwner string
+	taskID     string
 }
 
 // auditRequestInfo is per-request audit state, installed by withAuditContext.
@@ -137,6 +141,9 @@ func principalForAWSCaller(s *Server, c awsCaller) *auditPrincipal {
 
 func (p *auditPrincipal) apply(o *store.AuditOrigin) {
 	o.Actor, o.ActorType, o.ActorDisplayName, o.AccessKeyID = p.actor, p.actorType, p.displayName, p.accessKeyID
+	if p.agentID != "" {
+		o.AgentID, o.AgentOwner, o.TaskID = p.agentID, p.agentOwner, p.taskID
+	}
 	if o.AccountID == "" {
 		o.AccountID = p.accountID
 	}
@@ -184,7 +191,7 @@ func resourceFromQuery(r *http.Request) string {
 	return resourceFromValues(r.URL.Query(), queryResourceKeys)
 }
 
-var queryResourceKeys = []string{"providerArn", "arn", "keyId", "aliasName", "roleName", "username", "accessKeyId", "accountId", "name", "id"}
+var queryResourceKeys = []string{"providerArn", "arn", "keyId", "aliasName", "roleName", "username", "accessKeyId", "accountId", "agentId", "name", "id"}
 
 // resourceFromValues names a resource from request parameters: the secrets
 // hierarchy path when a project is given, else the first of keys present.

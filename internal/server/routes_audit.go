@@ -70,6 +70,10 @@ type auditEventJSON struct {
 	// CorrelationID links a write-ahead attempt (result pending) to its
 	// outcome events.
 	CorrelationID string `json:"correlationId,omitempty"`
+	// AgentID, AgentOwner and TaskID attribute the event to an AI agent.
+	AgentID    string `json:"agentId,omitempty"`
+	AgentOwner string `json:"agentOwner,omitempty"`
+	TaskID     string `json:"taskId,omitempty"`
 }
 
 func toAuditEventJSON(rec store.AuditRecord) auditEventJSON {
@@ -92,6 +96,9 @@ func toAuditEventJSON(rec store.AuditRecord) auditEventJSON {
 		Hash:             rec.EventHash,
 		HashValid:        rec.HashValid,
 		CorrelationID:    rec.CorrelationID,
+		AgentID:          rec.AgentID,
+		AgentOwner:       rec.AgentOwner,
+		TaskID:           rec.TaskID,
 	}
 }
 
@@ -141,6 +148,12 @@ func parseAuditFilters(r *http.Request) (store.AuditQuery, string) {
 			return out, "correlation must be a correlation ID"
 		}
 		out.Correlation = v
+	}
+	if v := strings.TrimSpace(q.Get("agent")); v != "" {
+		if !store.IsAgentID(v) {
+			return out, "agent must be an agent ID"
+		}
+		out.Agent = v
 	}
 	return out, ""
 }
@@ -339,13 +352,14 @@ func csvSafe(v string) string {
 	return v
 }
 
-var auditCSVColumns = []string{"id", "createdAt", "actor", "actorType", "actorDisplayName", "accessKeyId", "action", "resource", "keyId", "result", "errorType", "sourceIp", "userAgent", "chainSeq", "prevHash", "hash", "correlationId"}
+var auditCSVColumns = []string{"id", "createdAt", "actor", "actorType", "actorDisplayName", "accessKeyId", "action", "resource", "keyId", "result", "errorType", "sourceIp", "userAgent", "chainSeq", "prevHash", "hash", "correlationId", "agentId", "agentOwner", "taskId"}
 
 func auditCSVRow(e auditEventJSON) []string {
 	row := []string{
 		strconv.FormatInt(e.ID, 10), e.CreatedAt, e.Actor, e.ActorType, e.ActorDisplayName, e.AccessKeyID,
 		e.Action, e.Resource, e.KeyID, e.Result, e.ErrorType, e.SourceIP, e.UserAgent,
 		strconv.FormatInt(e.ChainSeq, 10), e.PrevHash, e.Hash, e.CorrelationID,
+		e.AgentID, e.AgentOwner, e.TaskID,
 	}
 	for i := range row {
 		row[i] = csvSafe(row[i])

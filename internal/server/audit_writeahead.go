@@ -317,7 +317,7 @@ func resourceFromBody(r *http.Request) string {
 var bodyResourceKeys = []string{
 	"SecretId", "KeyId", "CertificateArn", "CertificateAuthorityArn", "AliasName", "Name", "GrantId",
 	"providerArn", "arn", "certificateArn", "keyId", "aliasName", "roleName", "username", "clientId",
-	"accessKeyId", "accountId", "name", "id",
+	"accessKeyId", "accountId", "agentId", "name", "id",
 }
 
 // ensureAudit is beginJobAudit unless ctx already carries an attempt (work
