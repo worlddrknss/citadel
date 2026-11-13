@@ -460,7 +460,7 @@
                         <span class="detail-actions">
                           <button type="button" class="btn btn-ghost btn-sm" onclick={() => copyJson(e)}><Icon name="copy" size={14} />Copy JSON</button>
                           {#if e.actor}<button type="button" class="btn btn-ghost btn-sm" onclick={() => setFilter({ actor: e.actor })}><Icon name="filter" size={14} />Filter by actor</button>{/if}
-                          {#if e.correlationId}<button type="button" class="btn btn-ghost btn-sm" onclick={() => setFilter({ correlation: e.correlationId ?? null })}><Icon name="link" size={14} />{kind === 'pending' ? 'Show outcome' : 'Show attempt'}</button>{/if}
+                          {#if e.correlationId}<button type="button" class="btn btn-ghost btn-sm" onclick={() => setFilter({ correlation: e.correlationId ?? null, result: null })}><Icon name="link" size={14} />{kind === 'pending' ? 'Show outcome' : 'Show attempt'}</button>{/if}
                         </span>
                       </div>
                       {#if kind === 'pending'}
