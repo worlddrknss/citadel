@@ -6,6 +6,12 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-11-13
+
+Audit log retention: a deployment default and per-account windows, batched
+pruning that keeps the hash chain verifiable through signed anchors, and a
+preview of what a window would remove. Retention is off unless configured.
+
 ### Added
 
 - Audit retention (2.5): `KMS_AUDIT_RETENTION_DAYS` sets a deployment
