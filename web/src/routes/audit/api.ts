@@ -17,6 +17,8 @@ export interface AuditFilters {
   resource?: string;
   /** Exact correlation ID: a write-ahead attempt and its outcomes. */
   correlation?: string;
+  /** Exact agent ID: events made by or about one AI agent. */
+  agent?: string;
 }
 
 export interface AuditRow {
@@ -46,6 +48,10 @@ export interface AuditRow {
    * to its outcome events.
    */
   correlationId?: string;
+  /** The AI agent the event concerns, its owner and the agent's task ID. */
+  agentId?: string;
+  agentOwner?: string;
+  taskId?: string;
 }
 
 export interface AuditPage {
@@ -111,6 +117,7 @@ function matches(e: AuditRow, f: AuditFilters): boolean {
   if (!has(`${e.resource ?? ''} ${e.keyId ?? ''}`, f.resource)) return false;
   if (f.result && resultKind(e) !== f.result) return false;
   if (f.correlation && e.correlationId !== f.correlation) return false;
+  if (f.agent && e.agentId !== f.agent) return false;
   return true;
 }
 

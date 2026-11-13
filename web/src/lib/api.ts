@@ -313,6 +313,13 @@ export interface AuditEvent {
   errorType?: string;
   actor: string;
   createdAt: string;
+  actorType?: string;
+  actorDisplayName?: string;
+  resource?: string;
+  /** Set on events made by or about an AI agent. */
+  agentId?: string;
+  agentOwner?: string;
+  taskId?: string;
 }
 
 export interface ItemVersion {

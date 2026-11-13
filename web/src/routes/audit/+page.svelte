@@ -39,6 +39,7 @@
   const result = $derived(param('result') as ResultFilter);
   const resource = $derived(param('resource'));
   const correlation = $derived(param('correlation'));
+  const agent = $derived(param('agent'));
   const pageNum = $derived(Math.max(1, Number(param('page', '1')) || 1));
   const openId = $derived(param('event'));
 
@@ -60,7 +61,7 @@
       // Round to the minute so the derived value is stable between renders.
       if (p.ms) from = new Date(Math.floor((Date.now() - p.ms) / 60_000) * 60_000).toISOString();
     }
-    return { from, to, actor, action, result: RESULTS.some((r) => r.id === result) ? result : '', resource, correlation: /^[0-9a-f]{1,64}$/.test(correlation) ? correlation : undefined };
+    return { from, to, actor, action, result: RESULTS.some((r) => r.id === result) ? result : '', resource, correlation: /^[0-9a-f]{1,64}$/.test(correlation) ? correlation : undefined, agent: /^agt_[a-z2-7]{20}$/.test(agent) ? agent : undefined };
   });
 
   const rangeLabel = $derived.by(() => {
@@ -102,7 +103,7 @@
 
   const rangeStart = $derived(data && data.total ? data.offset + 1 : 0);
   const rangeEnd = $derived(data ? data.offset + data.events.length : 0);
-  const hasFilters = $derived(!!(actor || action || result || resource || correlation));
+  const hasFilters = $derived(!!(actor || action || result || resource || correlation || agent));
 
   // ---- chain verification -------------------------------------------------
   let chain = $state<ChainStatus | null>(null);
@@ -170,7 +171,8 @@
   // The event exactly as the API and the JSON export name its fields.
   const EVENT_FIELDS: (keyof AuditRow)[] = [
     'id', 'chainSeq', 'createdAt', 'actor', 'actorType', 'actorDisplayName', 'accessKeyId', 'action', 'resource',
-    'keyId', 'result', 'errorType', 'sourceIp', 'userAgent', 'prevHash', 'hash', 'hashValid', 'correlationId'
+    'keyId', 'result', 'errorType', 'sourceIp', 'userAgent', 'prevHash', 'hash', 'hashValid', 'correlationId',
+    'agentId', 'agentOwner', 'taskId'
   ];
   function eventJson(e: AuditRow): string {
     const out: Record<string, unknown> = {};
@@ -376,8 +378,9 @@
     {#if action}<span class="badge chip mono">action ~ {action}<button type="button" class="chip-x" aria-label="Remove filter: action" onclick={() => setFilter({ action: null })}><Icon name="x" size={10} /></button></span>{/if}
     {#if result}<span class="badge chip">Result is {RESULTS.find((r) => r.id === result)?.label}<button type="button" class="chip-x" aria-label="Remove filter: result" onclick={() => setFilter({ result: null })}><Icon name="x" size={10} /></button></span>{/if}
     {#if resource}<span class="badge chip mono">resource ~ {resource}<button type="button" class="chip-x" aria-label="Remove filter: resource" onclick={() => setFilter({ resource: null })}><Icon name="x" size={10} /></button></span>{/if}
+    {#if agent}<span class="badge chip mono">agent = {agent}<button type="button" class="chip-x" aria-label="Remove filter: agent" onclick={() => setFilter({ agent: null })}><Icon name="x" size={10} /></button></span>{/if}
     {#if correlation}<span class="badge chip mono">correlation = {correlation.slice(0, 12)}…<button type="button" class="chip-x" aria-label="Remove filter: correlation" onclick={() => setFilter({ correlation: null })}><Icon name="x" size={10} /></button></span>{/if}
-    <button type="button" class="btn btn-ghost btn-sm" onclick={() => setFilter({ actor: null, action: null, result: null, resource: null, correlation: null })}>Clear all</button>
+    <button type="button" class="btn btn-ghost btn-sm" onclick={() => setFilter({ actor: null, action: null, result: null, resource: null, correlation: null, agent: null })}>Clear all</button>
   </div>
 {/if}
 
@@ -395,7 +398,7 @@
     <div class="state">
       {#if hasFilters || range !== 'all'}
         <EmptyState icon="filter" title="No matching events" description="Nothing in this range matches the filters. Widen the date range or clear filters.">
-          <button type="button" class="btn btn-secondary" onclick={() => setFilter({ actor: null, action: null, result: null, resource: null, correlation: null, range: 'all', from: null, to: null })}>Show all events</button>
+          <button type="button" class="btn btn-secondary" onclick={() => setFilter({ actor: null, action: null, result: null, resource: null, correlation: null, agent: null, range: 'all', from: null, to: null })}>Show all events</button>
         </EmptyState>
       {:else}
         <EmptyState icon="activity" title="No audit events yet" description="API calls and console actions are recorded here as they happen." />

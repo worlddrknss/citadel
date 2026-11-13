@@ -289,6 +289,66 @@ const ssoProviders = [
   }
 ];
 
+
+// AI agents (/v1/agents...).
+export const AGENT_ID = 'agt_abcdefghijklmnopqrst';
+export const AGENT_TOKEN = 'cagt_agt_abcdefghijklmnopqrst_mocksecretmocksecretmocksecretmocksecretmocksecre';
+const agentList = [
+  {
+    agentId: AGENT_ID, name: 'claude-code', description: 'Coding agent for the payments repo', owner: 'alice', status: 'active',
+    labels: { team: 'payments' }, createdAt: ago(20 * DAY), createdBy: 'alice', updatedAt: ago(2 * DAY), lastUsedAt: ago(3_600_000),
+    grantCount: 2, activeTokenCount: 1, bindingCount: 1, canManage: true
+  },
+  {
+    agentId: 'agt_zyxwvutsrqponmlkjihg', name: 'triage-bot', description: '', owner: 'bob', status: 'suspended', labels: {},
+    createdAt: ago(9 * DAY), createdBy: 'bob', updatedAt: ago(DAY), statusChangedAt: ago(DAY), statusChangedBy: 'alice', statusReason: 'investigating',
+    grantCount: 0, activeTokenCount: 0, bindingCount: 0, canManage: true
+  }
+];
+const agentCredentials = [
+  {
+    name: 'stripe-api', secretName: 'payments/dev/STRIPE_KEY', project: 'payments', env: 'dev', key: 'STRIPE_KEY', kind: 'http_header',
+    description: 'Stripe test API', allowedHosts: ['api.stripe.com'], allowedMethods: ['GET', 'POST'], allowedPathPrefixes: ['/v1/'],
+    headerName: 'Authorization', headerPrefix: 'Bearer ', allowHttp: false, allowedCidrs: [], createdAt: ago(10 * DAY), updatedAt: ago(10 * DAY),
+    grants: [{ grantId: 'agr_aaaaaaaaaaaaaaaa', agentId: AGENT_ID, agentName: 'claude-code', actions: ['use'] }]
+  },
+  {
+    name: 'db-password', secretName: 'payments/dev/db/DB_PASSWORD', project: 'payments', env: 'dev', path: 'db', key: 'DB_PASSWORD', kind: 'raw',
+    description: '', allowedHosts: [], allowedMethods: [], allowedPathPrefixes: [], allowHttp: false, allowedCidrs: [], createdAt: ago(5 * DAY), updatedAt: ago(5 * DAY),
+    grants: [{ grantId: 'agr_bbbbbbbbbbbbbbbb', agentId: AGENT_ID, agentName: 'claude-code', actions: ['reveal'] }]
+  }
+];
+const agentGrants = [
+  {
+    grantId: 'agr_aaaaaaaaaaaaaaaa', agentId: AGENT_ID, agentName: 'claude-code', credential: 'stripe-api', actions: ['use'],
+    window: { start: '09:00', end: '18:00', days: ['mon', 'tue', 'wed', 'thu', 'fri'], timezone: 'Europe/Dublin' }, maxUsesPerHour: 60,
+    requiresApproval: null, leaseTtlSeconds: null, createdAt: ago(10 * DAY), updatedAt: ago(10 * DAY), usableNow: true
+  },
+  {
+    grantId: 'agr_bbbbbbbbbbbbbbbb', agentId: AGENT_ID, agentName: 'claude-code', credential: 'db-password', actions: ['reveal'],
+    window: null, maxUsesPerHour: 0, notAfter: ago(DAY), requiresApproval: null, leaseTtlSeconds: null, createdAt: ago(5 * DAY), updatedAt: ago(5 * DAY),
+    usableNow: false, reason: 'grant_expired'
+  }
+];
+function agentDetail(id: string) {
+  const agent = agentList.find((a) => a.agentId === id) ?? agentList[0];
+  const mine = agent.agentId === AGENT_ID;
+  return {
+    agent,
+    tokens: mine
+      ? [
+          { tokenId: 'atk_aaaaaaaaaaaaaaaa', name: 'laptop', prefix: `cagt_${AGENT_ID}_abcdefgh`, status: 'active', createdAt: ago(10 * DAY), createdBy: 'alice', expiresAt: ahead(80 * DAY), lastUsedAt: ago(3_600_000) },
+          { tokenId: 'atk_bbbbbbbbbbbbbbbb', name: 'old', prefix: `cagt_${AGENT_ID}_zzzzzzzz`, status: 'revoked', createdAt: ago(40 * DAY), revokedAt: ago(10 * DAY), revokedBy: 'alice' }
+        ]
+      : [],
+    bindings: mine
+      ? [{ bindingId: 'abd_aaaaaaaaaaaaaaaa', issuer: 'https://token.actions.githubusercontent.com', subject: 'repo:acme/payments:ref:refs/heads/main', audience: 'citadel', description: 'CI on main', createdAt: ago(8 * DAY) }]
+      : [],
+    grants: mine ? agentGrants : []
+  };
+}
+const agentSettings = { agentsSuspended: false };
+
 type Json = Record<string, unknown> | unknown[];
 type Handler = (q: URLSearchParams, body: Record<string, unknown>) => Json | undefined;
 
@@ -463,7 +523,14 @@ const GET: Record<string, Handler> = {
   }),
   '/v1/iam/roles': () => ({ roles }),
   '/v1/workload-identity/issuer': () => issuerInfo,
-  '/v1/workload-identity/clients': () => ({ clients: wiClients })
+  '/v1/workload-identity/clients': () => ({ clients: wiClients }),
+  '/v1/agents': () => ({ agents: agentList, settings: agentSettings, canCreate: true }),
+  '/v1/agents/detail': (q) => agentDetail(q.get('agentId') ?? ''),
+  '/v1/agents/credentials': (q) => ({
+    credentials: q.get('key') ? agentCredentials.filter((c) => c.key === q.get('key')) : agentCredentials,
+    canEdit: true
+  }),
+  '/v1/agents/settings': () => agentSettings
 };
 
 // GET /v1/workload-identity/issuer (and the settings/rotate responses).
@@ -590,7 +657,24 @@ const WRITE: Record<string, Handler> = {
   'POST /v1/workload-identity/issuer/rotate': () => issuerInfo,
   'POST /v1/workload-identity/clients': () => ({ clientId: 'wic-0123456789ab' }),
   'POST /v1/workload-identity/clients/update': (_, b) => ({ clientId: b.clientId, updated: true }),
-  'DELETE /v1/workload-identity/clients': () => ({ deleted: true })
+  'DELETE /v1/workload-identity/clients': () => ({ deleted: true }),
+  'POST /v1/agents': (_, b) => ({ ...agentList[0], agentId: 'agt_newnewnewnewnewnewne', name: b.name, description: b.description ?? '', grantCount: 0, activeTokenCount: 0, bindingCount: 0 }),
+  'POST /v1/agents/update': (_, b) => ({ ...agentList[0], ...b }),
+  'DELETE /v1/agents': () => ({ deleted: true }),
+  'POST /v1/agents/suspend': (_, b) => ({ ...(agentList.find((a) => a.agentId === b.agentId) ?? agentList[0]), status: 'suspended' }),
+  'POST /v1/agents/resume': (_, b) => ({ ...(agentList.find((a) => a.agentId === b.agentId) ?? agentList[0]), status: 'active' }),
+  'POST /v1/agents/revoke': (_, b) => ({ ...(agentList.find((a) => a.agentId === b.agentId) ?? agentList[0]), status: 'revoked' }),
+  'POST /v1/agents/tokens': (_, b) => ({ token: AGENT_TOKEN, tokenInfo: { tokenId: 'atk_cccccccccccccccc', name: b.name, prefix: `cagt_${AGENT_ID}_mocksecr`, status: 'active', createdAt: new Date().toISOString() } }),
+  'POST /v1/agents/tokens/revoke': () => ({ revoked: true }),
+  'POST /v1/agents/bindings': (_, b) => ({ bindingId: 'abd_bbbbbbbbbbbbbbbb', ...b, createdAt: new Date().toISOString() }),
+  'DELETE /v1/agents/bindings': () => ({ deleted: true }),
+  'POST /v1/agents/grants': (_, b) => ({ ...agentGrants[0], ...b }),
+  'DELETE /v1/agents/grants': () => ({ deleted: true }),
+  'POST /v1/agents/credentials': (_, b) => ({ ...agentCredentials[0], ...b, grants: [] }),
+  'POST /v1/agents/credentials/update': (_, b) => ({ ...agentCredentials[0], ...b }),
+  'DELETE /v1/agents/credentials': () => ({ deleted: true }),
+  'POST /v1/agents/settings': (_, b) =>
+    b.agentsSuspended ? { agentsSuspended: true, suspendedAt: new Date().toISOString(), suspendedBy: me.username, reason: b.reason } : { agentsSuspended: false }
 };
 
 /** A small OpenAPI document in the docs/openapi.yaml subset, for /api-reference. */
