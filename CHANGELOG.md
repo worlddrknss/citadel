@@ -6,6 +6,12 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-13
+
+Browser agents and provider-scoped credentials: website logins with TOTP codes,
+short-lived AWS STS, GitHub App and OAuth2 tokens minted on use, anomaly alerts,
+and documentation built into the console at /app/docs.
+
 ### Added
 
 - In-console documentation at `/app/docs`: the repository's `docs/*.md`
