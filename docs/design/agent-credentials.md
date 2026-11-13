@@ -153,6 +153,34 @@ Desktop, Cursor and VS Code (`docs/agents-mcp.md`).
     JWT RS256 signing).
   - `oauth2_client_credentials`: fetch and cache an access token from a token
     endpoint; inject it into brokered requests.
+- **Minting library (`internal/providertoken`):** the minters above, plus
+  TOTP and a `Static` wrapper, share one interface,
+  `Mint(ctx, Params) (Token{Value, ExpiresAt, Kind, Metadata}, error)`, so the
+  broker treats stored and minted credentials alike. `Metadata` is never
+  secret (assumed role ARN, granted repositories and permissions, token
+  type); `Token` redacts `Value` under `%v` and `slog`. Outbound HTTP uses the
+  injected (SSRF-guarded) client, never follows redirects, requires https,
+  and runs under a timeout; provider errors are reduced to the HTTP status
+  and a validated error code. Notes and small deviations:
+  - TOTP: SHA1 seeds are refused **always**, not only in FIPS mode
+    (`ErrSHA1Unsupported`), because Citadel always runs with
+    `fips140=only` and HMAC-SHA-1 panics there. A missing otpauth
+    `algorithm` (the format's default) and a bare base32 seed without an
+    explicit algorithm both mean SHA1. Seeds shorter than 112 bits are
+    refused for the same reason (FIPS minimum HMAC key length), so some
+    80-bit seeds cannot be used even with SHA-256.
+  - `aws_sts`: the value handed out is the AWS CLI `credential_process` JSON
+    document. A grant may set a session policy only when the credential has
+    none configured (policies cannot be intersected client side). Citadel's
+    own STS accepts AssumeRole from this client but ignores `Policy` and
+    `ExternalId`. `SignAWSRequest` signs brokered calls server-side (SigV4
+    signing lives in `internal/sigv4.SignRequest`).
+  - `github_app`: with no repositories or permissions in the grant or the
+    credential's defaults, GitHub issues an installation-wide token; the
+    broker should require a restriction where policy demands one.
+  - `oauth2_client_credentials`: tokens are cached per (scopes, audience,
+    resource) until 60 s before `expires_in`, with concurrent requests
+    sharing one fetch; a response without `expires_in` is not cached.
 - **Anomaly alerts:** per-agent baselines (hosts, hours, rate); alert through
   the notification channels on new host, off-hours use, rate spikes, repeated
   denials; optional auto-suspend.
