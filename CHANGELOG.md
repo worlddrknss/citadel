@@ -79,11 +79,26 @@ All notable changes to Citadel are documented here. The format follows
   `citadel.LoginMFA` (success and failure) and `citadel.MFARecoveryCodeUsed`.
 - Migration `1000_console_mfa` (new tables and one constant-default column;
   instant on large databases).
+- Secrets Manager `DeleteResourcePolicy`, and `SortOrder` (`asc`/`desc`, by
+  name) on `ListSecrets`. `SortBy` other than `name` is rejected.
+- SSM `UnlabelParameterVersion` on the AWS API.
+- ACM `RequestCertificate` honours `IdempotencyToken`: the same token and
+  parameters within an hour return the same certificate ARN (stored per
+  account, migration 1110). `ImportCertificate` accepts one as a Citadel
+  extension.
+- ACM PCA subordinate CAs over the AWS API, following AWS's flow:
+  `CreateCertificateAuthority` with `SUBORDINATE` creates a CA in
+  `PENDING_CERTIFICATE`, `GetCertificateAuthorityCsr` returns its CSR,
+  `IssueCertificate` on the parent with a `SubordinateCACertificate_PathLenN/V1`
+  template signs it, and `ImportCertificateAuthorityCertificate` activates it.
 
 ### Changed
 
 - Turning on two-step verification signs the user out of their other
   sessions.
+- `RotateSecret` with a Lambda ARN (or none) and `RotateImmediately` no longer
+  creates an `AWSPENDING` copy of the current value, and `CancelRotateSecret`
+  no longer removes `AWSPENDING` (both now match AWS).
 
 ### Security
 
@@ -93,12 +108,6 @@ All notable changes to Citadel are documented here. The format follows
   override is possible; the plugin uses it only to merge Svelte config at
   build time.
 ||||||| parent of 78292cb (docs: two-step verification (TOTP), requireMFA, MFA rate limits; changelog)
-
-### Changed
-
-- `RotateSecret` with a Lambda ARN (or none) and `RotateImmediately` no longer
-  creates an `AWSPENDING` copy of the current value, and `CancelRotateSecret`
-  no longer removes `AWSPENDING` (both now match AWS).
 
 ## [2.0.3]
 

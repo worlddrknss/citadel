@@ -88,11 +88,11 @@ returns `InvalidAction`)
 | PutSecretValue / UpdateSecret | ✅ | `VersionStages` on PutSecretValue isn't honoured: new versions become `AWSCURRENT`. |
 | ListSecretVersionIds | ✅ | |
 | UpdateSecretVersionStage | ✅ | |
-| ListSecrets | 🟡 | Filters: `name`, `description`, `tag-key`, `tag-value`, `all`, and `!` negation (prefix match, case-insensitive). Supports `IncludePlannedDeletion` and store-level pagination. `SortOrder` is ignored: results are ordered by name. `primary-region` and `owning-service` are rejected. |
+| ListSecrets | 🟡 | Filters: `name`, `description`, `tag-key`, `tag-value`, `all`, and `!` negation (prefix match, case-insensitive). Supports `IncludePlannedDeletion` and store-level pagination. Results are ordered by name: `SortOrder` `asc` (default) or `desc` reverses it, `SortBy` may only be `name` (other values are rejected with `InvalidParameterException`, as Citadel does not order by date). A `NextToken` is only valid with the `SortOrder` that produced it. `primary-region` and `owning-service` are rejected. |
 | DeleteSecret / RestoreSecret | ✅ | Recovery window of 7 to 30 days, or `ForceDeleteWithoutRecovery`. |
 | TagResource / UntagResource | ✅ | |
 | GetResourcePolicy / PutResourcePolicy / ValidateResourcePolicy | 🟡 | Policies are evaluated by Citadel's IAM subset. `BlockPublicPolicy` is ignored. |
-| DeleteResourcePolicy | ❌ | |
+| DeleteResourcePolicy | ✅ | Removes the secret's policy; it falls back to the default account policy. Returns `ARN` and `Name`. |
 | RotateSecret / CancelRotateSecret | 🟡 | `RotationRules` `AutomaticallyAfterDays`, `ScheduleExpression` (`rate()` and `cron()`) and `Duration`, with AWS's window semantics. Lambda functions can't run: a `RotationLambdaARN` of the form `arn:citadel:rotator:<region>:<account>:<type>[/<config-id>]` selects a built-in rotator (`random`, `postgresql`, `webhook`) that runs the four rotation steps with `AWSPENDING`/`AWSCURRENT`/`AWSPREVIOUS`, in the background, with `VersionId` as its token; a real Lambda ARN is recorded but nothing runs (schedule only). An unfinished rotation returns `InvalidRequestException` and is reattempted. Built-in rotators are refused (`AccessDeniedException`) in environments that require approval. `CancelRotateSecret` keeps an unfinished `AWSPENDING` version, as AWS does. See [rotation.md](rotation.md). |
 | GetRandomPassword | ✅ | Uses `crypto/rand` with AWS character classes and defaults (32 characters, `RequireEachIncludedType`). |
 | Replication (ReplicateSecretToRegions etc.), StopReplicationToReplica | ❌ | |
@@ -120,8 +120,9 @@ returns `InvalidAction`)
 | DeleteParameter / DeleteParameters | ✅ | Up to 10 names. |
 | GetParameterHistory | ✅ | `MaxResults`/`NextToken`. |
 | LabelParameterVersion | ✅ | Labels that break AWS's naming rules go in `InvalidLabels`. |
+| UnlabelParameterVersion | ✅ | `ParameterVersion` is required. Labels the version doesn't carry go in `InvalidLabels`; detached ones in `RemovedLabels`. |
 | AddTagsToResource / RemoveTagsFromResource / ListTagsForResource | 🟡 | Only `ResourceType` `Parameter` is supported. |
-| UnlabelParameterVersion, parameter policies, advanced-tier sharing | ❌ | |
+| Parameter policies, advanced-tier sharing | ❌ | |
 
 **Error codes:** `ParameterNotFound`, `ParameterAlreadyExists`,
 `ParameterVersionNotFound`, `ParameterPatternMismatchException`,
@@ -148,12 +149,33 @@ overwritten through the console's edit, and deleted.
 
 ## ACM and ACM PCA
 
-These are served on the same endpoint and are owned by the PKI work stream.
-They are not covered by this matrix.
+These are served on the same endpoint (AWS JSON 1.1, `X-Amz-Target`
+`CertificateManager.*` and `ACMPrivateCA.*`). This section lists the
+behaviours the aws-sdk-go-v2 harness covers; it is not a full matrix.
+
+| Action | Status | Notes |
+|---|---|---|
+| ACM RequestCertificate `IdempotencyToken` | ✅ | 1 to 32 word characters. The same token with the same `DomainName`, `SubjectAlternativeNames`, `CertificateAuthorityArn` and `KeyAlgorithm` within one hour returns the first request's ARN without issuing again. Reusing a token with different parameters returns `InvalidParameterException` (ACM documents no dedicated error for this). Tokens are per account and kept in the store, so they hold across replicas. A failed request frees its token. |
+| ACM ImportCertificate `IdempotencyToken` | 🟡 | Citadel extension: AWS's ImportCertificate has no token, so SDKs can't send it. Same rules as RequestCertificate; the parameters compared are the certificate, its chain and `CertificateArn`. |
+| ACM PCA CreateCertificateAuthority (`SUBORDINATE`) | ✅ | As in AWS, the CA is created in `PENDING_CERTIFICATE` with a new key. `GetCertificateAuthorityCertificate` returns `InvalidStateException` until a certificate is imported. |
+| ACM PCA GetCertificateAuthorityCsr | ✅ | Returns the PEM CSR of a CA created as `SUBORDINATE` through this API (`InvalidStateException` for other CAs). |
+| ACM PCA IssueCertificate with `SubordinateCACertificate_PathLen{0,1,2,3}/V1` | ✅ | Signs a CA certificate with that path length. The path length must fit below the issuing CA's constraint. These certificates can't be renewed through the console's leaf renewal. |
+| ACM PCA ImportCertificateAuthorityCertificate | 🟡 | Activates a `PENDING_CERTIFICATE` CA. The certificate must be a CA certificate for the CA's key and must chain through `CertificateChain` to a self-signed root. When a Citadel CA in the same account signed it, that CA becomes the parent, and chains returned later run up to the root. An externally signed CA is linked to no parent, so later chains stop at the subordinate CA. Re-importing on an `ACTIVE` CA (renewing a CA certificate) isn't supported. |
+
+aws-sdk-go-v2 `service/acmpca` v1.57 and later uses the Smithy RPCv2 CBOR
+protocol by default, which Citadel doesn't serve. Select AWS JSON 1.1 on the
+client:
+
+```go
+acmpca.NewFromConfig(cfg, func(o *acmpca.Options) {
+	o.Protocol = awsjson.New11(schemas.ACMPrivateCA) // smithy-go transport/http/protocol/awsjson, acmpca/schemas
+})
+```
 
 ## Known gaps and follow-ups
 
 - The memory store doesn't scope SSM parameters by account; the Postgres store
   does.
 - Grant timestamps and grant tokens aren't evaluated yet (KMS work stream).
-- `DeleteResourcePolicy` and `UnlabelParameterVersion` are not implemented.
+- ACM PCA over Smithy RPCv2 CBOR (the default of recent aws-sdk-go-v2
+  `acmpca` releases) isn't served; clients must select AWS JSON 1.1.
