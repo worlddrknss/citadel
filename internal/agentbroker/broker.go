@@ -623,7 +623,7 @@ type Result struct {
 // Options configure Do.
 type Options struct {
 	// Client sends the requests. It must not follow redirects itself and
-	// should be SSRF-guarded (see server.newGuardedHTTPClient).
+	// should be SSRF-guarded (see server.newAgentBrokerHTTPClient).
 	Client *http.Client
 	// IsBlocked reports whether a client error came from the SSRF guard.
 	IsBlocked func(error) bool

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -78,14 +79,23 @@ func TestGuardedHTTPClient(t *testing.T) {
 	}))
 	defer site.Close()
 
-	_, err := newGuardedHTTPClient(nil, 5*time.Second).Get(site.URL)
+	_, err := newAgentBrokerHTTPClient(nil, 5*time.Second).Get(site.URL)
 	if err == nil || !isOutboundBlocked(err) {
 		t.Fatalf("guarded client reached loopback: err=%v", err)
 	}
 	if hits != 0 {
 		t.Fatalf("loopback server was hit %d times", hits)
 	}
-	c := newGuardedHTTPClient([]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}, 5*time.Second)
+	// The general client (notifications) refuses loopback too, with
+	// errSSRFBlocked; only the broker's also refuses private ranges.
+	if _, err := newGuardedHTTPClient(nil, 5*time.Second).Get(site.URL); err == nil || !errors.Is(err, errSSRFBlocked) {
+		t.Fatalf("general client reached loopback: err=%v", err)
+	}
+	private := netip.MustParseAddr("10.1.2.3")
+	if !(outboundPolicy{}).permits(private) || (outboundPolicy{blockPrivate: true}).permits(private) {
+		t.Fatal("private-range policies differ from what the clients document")
+	}
+	c := newAgentBrokerHTTPClient([]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}, 5*time.Second)
 	resp, err := c.Get(site.URL + "/redirect")
 	if err != nil {
 		t.Fatalf("allowed loopback: %v", err)

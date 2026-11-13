@@ -56,7 +56,6 @@ All notable changes to Citadel are documented here. The format follows
   task ID, credential, method, host, path (no query), status and bytes;
   never values. New metrics `citadel_agent_http_*`, `citadel_agent_reveals_total`
   and `citadel_mcp_*` with bounded labels.
-
 - `internal/providertoken` (groundwork for 2.4, no routes or UI yet): minters
   for provider-scoped agent credentials behind one `Minter` interface:
   AWS STS AssumeRole (real AWS or Citadel's own STS; session policy,
@@ -101,7 +100,7 @@ All notable changes to Citadel are documented here. The format follows
 
 ### Changed
 
-- ACME http-01 validation, rotation, SIEM streaming and the agent broker
+- ACME http-01 validation, rotation, SIEM streaming, notifications and the agent broker
   share one dial-time outbound address check. SIEM delivery now also refuses
   cloud metadata addresses.
 

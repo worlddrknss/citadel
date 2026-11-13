@@ -88,7 +88,7 @@ type agentBrokerRuntime struct {
 	// access replaces the agents core (tests).
 	access agentAccess
 	// client builds the HTTP client for a credential (tests replace it to
-	// trust a test CA); nil uses newGuardedHTTPClient.
+	// trust a test CA); nil uses newAgentBrokerHTTPClient.
 	client func(allowed []netip.Prefix) *http.Client
 	limits agentbroker.Limits
 
@@ -165,7 +165,7 @@ func (rt *agentBrokerRuntime) httpClient(allowed []netip.Prefix) *http.Client {
 	if rt.client != nil {
 		return rt.client(allowed)
 	}
-	return newGuardedHTTPClient(allowed, agentbroker.DefaultTimeout)
+	return newAgentBrokerHTTPClient(allowed, agentbroker.DefaultTimeout)
 }
 
 // metrics registers the broker's metrics on first use. Labels are bounded

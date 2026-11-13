@@ -440,7 +440,7 @@ func TestAgentHTTPSizeCapAndTLS(t *testing.T) {
 	pool := x509.NewCertPool()
 	pool.AddCert(tlsUp.Certificate())
 	e.s.agentBrokerRT().client = func(allowed []netip.Prefix) *http.Client {
-		c := newGuardedHTTPClient(allowed, 10*time.Second)
+		c := newAgentBrokerHTTPClient(allowed, 10*time.Second)
 		c.Transport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 		return c
 	}
