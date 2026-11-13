@@ -127,7 +127,11 @@ paths:
           Retry-After). Unknown users, wrong passwords and accounts the user does
           not belong to all return the same 401. When authentication is disabled
           (insecure dev mode with no users) it returns `authOff: true` and sets no
-          cookie.
+          cookie. For a user with two-step verification it sets no cookie and
+          returns `{mfaRequired: true, mfaToken}` instead: finish with
+          `loginMfa`. When the organization requires two-step verification and
+          the user has none, the session is restricted to enrolment and the
+          response has `mfaEnrollmentRequired: true`.
         x-citadel-role: public
         x-citadel-audit: [citadel.Login, citadel.LoginFailed]
         security: []
@@ -139,6 +143,50 @@ paths:
                 $ref: "#/components/schemas/LoginRequest"
         responses:
           "200":
+            description: Signed in (the session cookie is set), or a second factor is needed
+            content:
+              application/json:
+                schema:
+                  oneOf:
+                    - $ref: "#/components/schemas/Me"
+                    - $ref: "#/components/schemas/MfaChallenge"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "429":
+            $ref: "#/components/responses/TooManyRequests"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/login/mfa:
+      post:
+        operationId: loginMfa
+        tags: [Session]
+        summary: Complete a sign-in with a second factor
+        description: |
+          Second step of a password sign-in for a user with two-step verification.
+          Send the `mfaToken` that `login` returned (HMAC-signed, valid for 5
+          minutes, single-use) with either a 6-digit TOTP `code` or a
+          `recoveryCode`. A code is accepted for the current 30-second step and one
+          either side, and each step works once per user; a recovery code works
+          once. On success the session cookie is set. Attempts are rate limited per
+          user and per client address, and repeated failures lock the user out
+          (429 with Retry-After). An expired, tampered or already used token gets
+          401 `mfa_token_invalid`; a wrong or reused code gets 401 `invalid_code`.
+          Requires the `X-Citadel-Request: 1` header.
+        x-citadel-role: public
+        x-citadel-audit: [citadel.LoginMFA, citadel.MFARecoveryCodeUsed]
+        security: []
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginMfaRequest"
+        responses:
+          "200":
             description: Signed in; the session cookie is set
             content:
               application/json:
@@ -148,8 +196,6 @@ paths:
             $ref: "#/components/responses/BadRequest"
           "401":
             $ref: "#/components/responses/Unauthorized"
-          "403":
-            $ref: "#/components/responses/Forbidden"
           "429":
             $ref: "#/components/responses/TooManyRequests"
           "500":
@@ -520,6 +566,196 @@ paths:
             $ref: "#/components/responses/Forbidden"
           "500":
             $ref: "#/components/responses/InternalError"
+    /v1/account/mfa:
+      get:
+        operationId: getMfaStatus
+        tags: [Account]
+        summary: Describe the caller's two-step verification
+        description: |
+          Whether TOTP two-step verification is on (or an enrolment is pending),
+          how many recovery codes are left and whether the organization requires
+          it. The secret is never returned. Console sessions only, including the
+          restricted session of a user who must enrol.
+        x-citadel-role: session
+        responses:
+          "200":
+            description: The status
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/MfaStatus"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/account/mfa/enroll/start:
+      post:
+        operationId: startMfaEnrollment
+        tags: [Account]
+        summary: Start setting up two-step verification
+        description: |
+          Creates a new 160-bit TOTP secret (replacing any pending one) and returns
+          it with the otpauth:// URI to show as a QR code. Codes use HMAC-SHA-256
+          (`algorithm=SHA256`; FIPS 140-only mode refuses SHA-1), so the
+          authenticator app must support SHA-256. This is the only response that
+          contains the secret. 409 `mfa_enabled` when already on. Console sessions
+          only, including the restricted session of a user who must enrol.
+        x-citadel-role: session
+        x-citadel-audit: citadel.MFAEnrollStart
+        responses:
+          "200":
+            description: The pending enrolment
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/MfaEnrollment"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "500":
+            $ref: "#/components/responses/InternalError"
+          "503":
+            description: No deployment secret is configured to seal the secret
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/Error"
+    /v1/account/mfa/enroll/confirm:
+      post:
+        operationId: confirmMfaEnrollment
+        tags: [Account]
+        summary: Turn on two-step verification with a code
+        description: |
+          Verifies a code from the pending enrolment, turns two-step verification
+          on and returns ten single-use recovery codes, shown only here. Ends the
+          caller's other sessions. From a restricted session (organization
+          requires MFA) the session is replaced by a full one (new cookie) and the
+          response includes `me`. 400 `invalid_code`; 409 `no_pending_enrollment`.
+        x-citadel-role: session
+        x-citadel-audit: citadel.MFAEnroll
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaCodeRequest"
+        responses:
+          "200":
+            description: Turned on
+            content:
+              application/json:
+                schema:
+                  type: object
+                  required: [enabled, recoveryCodes]
+                  properties:
+                    enabled:
+                      type: boolean
+                    recoveryCodes:
+                      type: array
+                      items:
+                        type: string
+                    me:
+                      $ref: "#/components/schemas/Me"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "429":
+            $ref: "#/components/responses/TooManyRequests"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/account/mfa/disable:
+      post:
+        operationId: disableMfa
+        tags: [Account]
+        summary: Turn off two-step verification
+        description: |
+          Needs the current password and a valid code (or a recovery code); 403
+          `invalid_credentials` otherwise. Refused with 409 `mfa_required` while
+          the organization requires two-step verification. Rate limited like
+          sign-in codes.
+        x-citadel-role: session
+        x-citadel-audit: citadel.MFADisable
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaReauthRequest"
+        responses:
+          "200":
+            description: Turned off
+            content:
+              application/json:
+                schema:
+                  type: object
+                  required: [disabled]
+                  properties:
+                    disabled:
+                      type: boolean
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "429":
+            $ref: "#/components/responses/TooManyRequests"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/account/mfa/recovery-codes:
+      post:
+        operationId: regenerateMfaRecoveryCodes
+        tags: [Account]
+        summary: Replace the caller's recovery codes
+        description: |
+          Needs the current password and a valid code (or a recovery code).
+          Returns ten new single-use recovery codes, shown only here; the old ones
+          stop working.
+        x-citadel-role: session
+        x-citadel-audit: citadel.MFARecoveryCodesRegenerate
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaReauthRequest"
+        responses:
+          "200":
+            description: The new recovery codes
+            content:
+              application/json:
+                schema:
+                  type: object
+                  required: [recoveryCodes]
+                  properties:
+                    recoveryCodes:
+                      type: array
+                      items:
+                        type: string
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "429":
+            $ref: "#/components/responses/TooManyRequests"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "500":
+            $ref: "#/components/responses/InternalError"
     /v1/account/password:
       post:
         operationId: changePassword
@@ -781,6 +1017,55 @@ paths:
             $ref: "#/components/responses/Forbidden"
           "404":
             $ref: "#/components/responses/NotFound"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/admin/users/mfa/reset:
+      post:
+        operationId: resetUserMfa
+        tags: [Admin]
+        summary: Reset a user's two-step verification
+        description: |
+          Removes the user's TOTP enrolment and recovery codes (lost device) and
+          signs them out everywhere. `confirm` must repeat the username. Platform
+          admins may reset anyone; account admins only users who belong to their
+          account alone and are not platform admins. Not for yourself (use the
+          self-service endpoints). 404 `not_enrolled` when the user has none.
+        x-citadel-role: admin
+        x-citadel-audit: citadel.MFAReset
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [username, confirm]
+                properties:
+                  username:
+                    type: string
+                  confirm:
+                    type: string
+                    description: The username again
+        responses:
+          "200":
+            description: Reset
+            content:
+              application/json:
+                schema:
+                  type: object
+                  required: [reset, sessionsRevoked]
+                  properties:
+                    reset:
+                      type: boolean
+                    sessionsRevoked:
+                      type: integer
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
           "500":
             $ref: "#/components/responses/InternalError"
     /v1/admin/accounts:
@@ -5495,6 +5780,102 @@ components:
         authOff:
           type: boolean
           description: Set by login only, when authentication is disabled (insecure dev mode)
+        mfaEnrollmentRequired:
+          type: boolean
+          description: |
+            The session is restricted: the organization requires two-step
+            verification and the user must enrol before anything else works
+    MfaChallenge:
+      type: object
+      required: [mfaRequired, mfaToken]
+      properties:
+        mfaRequired:
+          type: boolean
+          const: true
+        mfaToken:
+          type: string
+          description: Pending-login token for loginMfa (5 minutes, single-use)
+    LoginMfaRequest:
+      type: object
+      required: [mfaToken]
+      properties:
+        mfaToken:
+          type: string
+          maxLength: 1024
+        code:
+          type: string
+          description: 6-digit TOTP code
+          maxLength: 16
+        recoveryCode:
+          type: string
+          description: A recovery code (dashes and case are ignored)
+          maxLength: 64
+    MfaStatus:
+      type: object
+      required: [enabled, pending, recoveryCodesLeft, required, algorithm, digits, period]
+      properties:
+        enabled:
+          type: boolean
+        pending:
+          type: boolean
+          description: An enrolment was started but not confirmed
+        enabledAt:
+          type: string
+          format: date-time
+        recoveryCodesLeft:
+          type: integer
+        required:
+          type: boolean
+          description: The organization requires two-step verification
+        algorithm:
+          type: string
+          enum: [SHA256]
+        digits:
+          type: integer
+        period:
+          type: integer
+    MfaEnrollment:
+      type: object
+      required: [secret, otpauthUri, issuer, account, algorithm, digits, period]
+      properties:
+        secret:
+          type: string
+          description: Base32 TOTP secret (returned only here)
+        otpauthUri:
+          type: string
+          description: otpauth://totp/... URI for a QR code; render it locally
+        issuer:
+          type: string
+        account:
+          type: string
+        algorithm:
+          type: string
+          enum: [SHA256]
+        digits:
+          type: integer
+        period:
+          type: integer
+    MfaCodeRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          maxLength: 16
+    MfaReauthRequest:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+          maxLength: 1024
+        code:
+          type: string
+          description: 6-digit TOTP code (or send recoveryCode)
+          maxLength: 16
+        recoveryCode:
+          type: string
+          maxLength: 64
     LoginRequest:
       type: object
       required: [accountId, username, password]
@@ -5672,6 +6053,9 @@ components:
             $ref: "#/components/schemas/Membership"
         platformAdmin:
           type: boolean
+        mfaEnabled:
+          type: boolean
+          description: The user has two-step verification on
     UpsertUserRequest:
       type: object
       required: [username]
@@ -5739,6 +6123,11 @@ components:
           type: integer
           minimum: 1
           maximum: 720
+        requireMFA:
+          type: boolean
+          description: |
+            Password sign-ins without two-step verification get a session that
+            can only enrol. Single sign-on and access keys are exempt.
         updatedAt:
           type: string
           format: date-time
