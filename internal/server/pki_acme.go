@@ -320,55 +320,19 @@ func parseCIDROrAddr(raw string) (netip.Prefix, error) {
 	return netip.PrefixFrom(a, a.BitLen()), nil
 }
 
-// ssrfBlockedPrefixes are addresses http-01 validation must not reach unless
-// an account explicitly allows them: cloud metadata services and other
-// host-local endpoints.
-var ssrfBlockedPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("169.254.169.254/32"), // AWS, GCP, Azure, OpenStack metadata (also covered by link-local)
-	netip.MustParsePrefix("100.100.100.200/32"), // Alibaba Cloud metadata
-	netip.MustParsePrefix("192.0.0.192/32"),     // Oracle Cloud metadata
-	netip.MustParsePrefix("168.63.129.16/32"),   // Azure wire server
-	netip.MustParsePrefix("fd00:ec2::254/128"),  // AWS IPv6 metadata
-	netip.MustParsePrefix("0.0.0.0/8"),
-	netip.MustParsePrefix("255.255.255.255/32"),
-}
-
-// ssrfBlocked reports whether addr is loopback, link-local, unspecified,
-// multicast or a known metadata address.
-func ssrfBlocked(addr netip.Addr) bool {
-	addr = addr.Unmap()
-	if addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() ||
-		addr.IsInterfaceLocalMulticast() || addr.IsMulticast() || addr.IsUnspecified() {
-		return true
-	}
-	for _, p := range ssrfBlockedPrefixes {
-		if p.Contains(addr) {
-			return true
-		}
-	}
-	return false
-}
-
 var errSSRFBlocked = errors.New("validation target address is not allowed")
 
 // ssrfDialControl rejects connections to blocked addresses at dial time, so
-// DNS answers and redirects cannot steer validation to them.
+// DNS answers and redirects cannot steer validation to them. Private ranges
+// are allowed: ACME clients often live there.
 func ssrfDialControl(allowed []string) func(ctx context.Context, network, address string, c syscall.RawConn) error {
-	return func(_ context.Context, _ string, address string, _ syscall.RawConn) error {
-		host, _, err := net.SplitHostPort(address)
-		if err != nil {
-			return errSSRFBlocked
+	var prefixes []netip.Prefix
+	for _, c := range allowed {
+		if p, err := parseCIDROrAddr(c); err == nil {
+			prefixes = append(prefixes, p)
 		}
-		addr, err := netip.ParseAddr(host)
-		if err != nil {
-			return errSSRFBlocked
-		}
-		addr = addr.Unmap()
-		if ssrfBlocked(addr) && !prefixesContain(allowed, addr) {
-			return errSSRFBlocked
-		}
-		return nil
 	}
+	return outboundPolicy{allowed: prefixes}.control(errSSRFBlocked)
 }
 
 // ssrfHTTPClient is acme.DefaultHTTP01Client with the dial-time guard.
