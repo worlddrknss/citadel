@@ -44,6 +44,7 @@ type Store interface {
 	MFAStore
 	SecretRotationStore
 	WriteAheadStore
+	PKIParityStore
 }
 
 // KeyStore persists KMS keys, aliases, key policies and grants.
@@ -87,6 +88,7 @@ type SecretStore interface {
 	TagSecret(ctx context.Context, secretID string, tags []SecretTag) error
 	UntagSecret(ctx context.Context, secretID string, tagKeys []string) error
 	GetSecretResourcePolicy(ctx context.Context, secretID string) (string, error)
+	// PutSecretResourcePolicy stores a policy; an empty document removes it.
 	PutSecretResourcePolicy(ctx context.Context, secretID, policyDocument string) error
 	RotateSecret(ctx context.Context, secretID, rotationLambdaARN string, automaticallyAfterDays int, rotateImmediately bool, clientRequestToken string) (SecretRotationResult, error)
 	CancelRotateSecret(ctx context.Context, secretID string) (SecretMetadataRecord, error)
