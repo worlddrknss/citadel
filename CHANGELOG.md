@@ -91,6 +91,16 @@ All notable changes to Citadel are documented here. The format follows
   `PENDING_CERTIFICATE`, `GetCertificateAuthorityCsr` returns its CSR,
   `IssueCertificate` on the parent with a `SubordinateCACertificate_PathLenN/V1`
   template signs it, and `ImportCertificateAuthorityCertificate` activates it.
+- Certificates imported through ACM `ImportCertificate` appear in the console
+  certificates list and drawer (source `acm-imported`). They are read-only
+  (no renew or revoke); admins can delete them, also through the new
+  `DELETE /v1/certificates/acm?arn=...` (audited as
+  `citadel.DeleteImportedCertificate`).
+- `GET /v1/certificates/detail` returns `chain`: every certificate from this
+  one to the root (leaf, intermediates, root), each with subject, issuer,
+  serial, validity and PEM. The chain is built from the stored issuer chain
+  and the account's CAs, and stops where Citadel doesn't hold the next
+  issuer. The drawer's Chain tab lists each certificate with a PEM download.
 
 ### Changed
 
