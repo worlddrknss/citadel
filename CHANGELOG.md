@@ -26,6 +26,13 @@ All notable changes to Citadel are documented here. The format follows
 
 ### Fixed
 
+- Rate limits on sign-in, first-run setup, SSO and the workload token
+  endpoint were per replica, so each added replica multiplied them. With
+  PostgreSQL they are now also enforced deployment-wide through shared
+  fixed-window counters (one UPSERT per request, per-key rows, an `UNLOGGED`
+  table purged by a job, failing open if the database is unavailable). The
+  memory store keeps the in-memory limits. See "Rate limits" in
+  docs/configuration.md.
 - A generated bootstrap token (no `KMS_BOOTSTRAP_TOKEN`) worked only on the
   replica that printed it. The first replica to start now stores its SHA-256
   in the database and logs the token; the others log that one was already

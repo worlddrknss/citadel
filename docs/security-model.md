@@ -147,6 +147,15 @@ multicast addresses and doesn't follow redirects.
 
 ## Known limitations
 
-- Rate limits are per replica, not shared across replicas.
+- With PostgreSQL, rate limits on sign-in, first-run setup, SSO and the
+  workload token endpoint are shared across replicas (see "Rate limits" in
+  [configuration.md](configuration.md)); the failed sign-in lockout and
+  other limits (ACME, audit export) remain per replica. Shared counters fail
+  open if the database is unavailable.
+- Let's Encrypt HTTP-01 challenge responses are held in memory by the
+  replica running the order. Behind several replicas, the CA's validation
+  request can reach a replica that doesn't have the response; use manual
+  DNS-01, or route `/.well-known/acme-challenge/` to one replica while
+  issuing.
 - Rotation for Secrets Manager secrets records the schedule but runs no
   rotation function; Citadel shows when rotation is due.

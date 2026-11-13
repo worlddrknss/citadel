@@ -9,7 +9,9 @@
 // Both are local to one process. Behind several replicas each replica limits
 // independently, so the effective limit is multiplied by the replica count;
 // that is acceptable for brute-force throttling, which only needs to make
-// guessing impractically slow.
+// guessing impractically slow. With PostgreSQL the server adds shared,
+// deployment-wide counters on top for its sensitive endpoints (see
+// internal/server/ratelimit_shared.go).
 package ratelimit
 
 import (

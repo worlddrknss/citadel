@@ -264,7 +264,8 @@ type workloadTokenRequest struct {
 // issuer error (always *workloadid.Error).
 func (s *Server) issueWorkloadToken(r *http.Request, body []byte, parse func([]byte) (workloadTokenRequest, *workloadid.Error)) (*workloadid.Token, *workloadid.Error) {
 	st := s.identity()
-	if ok, _ := st.tokenIP.Reserve(s.clientIP(r)); !ok {
+	ip := s.clientIP(r)
+	if ok, _ := st.tokenIP.Reserve(ip); !ok {
 		return nil, &workloadid.Error{Status: http.StatusTooManyRequests, Code: "rate_limited", Description: "too many token requests; slow down"}
 	}
 	iss, err := s.workloadIssuer()
@@ -277,6 +278,10 @@ func (s *Server) issueWorkloadToken(r *http.Request, body []byte, parse func([]b
 	}
 	if ok, _ := st.tokenCli.Reserve(req.clientID); !ok {
 		return nil, &workloadid.Error{Status: http.StatusTooManyRequests, Code: "rate_limited", Description: "too many token requests for this client; slow down"}
+	}
+	// Deployment-wide limits (PostgreSQL): both counters in one round trip.
+	if ok, _ := s.sharedAllow(r.Context(), sharedLimitCheck{sharedLimitTokenIP, ip}, sharedLimitCheck{sharedLimitTokenClient, req.clientID}); !ok {
+		return nil, &workloadid.Error{Status: http.StatusTooManyRequests, Code: "rate_limited", Description: "too many token requests; slow down"}
 	}
 	info := &workloadReqInfo{actor: "anonymous", actorType: store.AuditActorAnonymous}
 	ctx := context.WithValue(r.Context(), workloadReqKey{}, info)

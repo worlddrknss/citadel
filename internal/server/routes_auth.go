@@ -138,7 +138,11 @@ func validDisplayText(s string, max int) bool {
 // serialized in the store so concurrent attempts cannot both succeed.
 func (s *Server) handleV1Bootstrap(w http.ResponseWriter, r *http.Request) {
 	ip := s.clientIP(r)
-	if ok, wait := s.auth().bootstrapIP.Reserve(ip); !ok {
+	ok, wait := s.auth().bootstrapIP.Reserve(ip)
+	if ok {
+		ok, wait = s.sharedAllow(r.Context(), sharedLimitCheck{sharedLimitBootstrapIP, ip})
+	}
+	if !ok {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 		writeNativeError(w, http.StatusTooManyRequests, "rate_limited", "too many attempts; try again later")
 		return

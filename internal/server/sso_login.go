@@ -170,7 +170,12 @@ func (s *Server) enabledSSOProvider(ctx context.Context, id string) (store.SSOPr
 
 func (s *Server) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if ok, _ := s.identity().ssoIP.Reserve(s.clientIP(r)); !ok {
+	ip := s.clientIP(r)
+	ok, _ := s.identity().ssoIP.Reserve(ip)
+	if ok {
+		ok, _ = s.sharedAllow(r.Context(), sharedLimitCheck{sharedLimitSSOIP, ip})
+	}
+	if !ok {
 		ssoErrorRedirect(w, r, ssoErrProvider)
 		return
 	}
