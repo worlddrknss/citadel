@@ -13,6 +13,10 @@ import (
 type memRetention struct {
 	settings map[string]store.AuditRetentionSetting
 	anchors  map[string]store.AuditAnchor
+
+	holder     string
+	leaseUntil time.Time
+	run        store.AuditPruneRun
 }
 
 // retention returns the lazily created bookkeeping. Callers hold s.mu.
@@ -196,6 +200,36 @@ func (s *Store) PruneAuditEvents(_ context.Context, accountID string, cutoff tim
 	r.anchors[accountID] = anchor
 	res.Pruned, res.Anchor = int64(n), anchor
 	return res, nil
+}
+
+func (s *Store) ClaimAuditPruneRun(_ context.Context, holder string, now time.Time, lease time.Duration) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.retention()
+	if r.holder != "" && r.holder != holder && now.Before(r.leaseUntil) {
+		return false, nil
+	}
+	r.holder, r.leaseUntil = holder, now.Add(lease)
+	r.run.StartedAt = now.UTC()
+	return true, nil
+}
+
+func (s *Store) FinishAuditPruneRun(_ context.Context, holder string, run store.AuditPruneRun) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.retention()
+	if r.holder != holder {
+		return nil
+	}
+	r.leaseUntil = time.Time{}
+	r.run = run
+	return nil
+}
+
+func (s *Store) GetAuditPruneRun(_ context.Context) (store.AuditPruneRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.retention().run, nil
 }
 
 // TamperAuditAnchorForTest rewrites an account's stored anchor in place.

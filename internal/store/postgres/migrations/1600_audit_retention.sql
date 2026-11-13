@@ -28,3 +28,15 @@ CREATE TABLE IF NOT EXISTS audit_chain_anchors (
 	updated_at TIMESTAMPTZ NOT NULL,
 	mac TEXT NOT NULL
 );
+
+-- One row: the deployment-wide prune run lease (so one replica at a time
+-- runs the retention job) and what the last run did.
+CREATE TABLE IF NOT EXISTS audit_retention_runs (
+	id SMALLINT PRIMARY KEY CHECK (id = 1),
+	holder TEXT NOT NULL DEFAULT '',
+	lease_until TIMESTAMPTZ NOT NULL DEFAULT 'epoch',
+	last_started_at TIMESTAMPTZ,
+	last_finished_at TIMESTAMPTZ,
+	last_pruned_events BIGINT NOT NULL DEFAULT 0,
+	last_error TEXT NOT NULL DEFAULT ''
+);

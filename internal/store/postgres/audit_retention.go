@@ -330,3 +330,42 @@ ON CONFLICT (account_id) DO UPDATE SET chain_seq = EXCLUDED.chain_seq, event_id 
 	res.Pruned, res.Anchor = int64(n), next
 	return res, nil
 }
+
+func (s *Store) ClaimAuditPruneRun(ctx context.Context, holder string, now time.Time, lease time.Duration) (bool, error) {
+	var got string
+	err := s.db.QueryRowContext(ctx, `
+INSERT INTO audit_retention_runs (id, holder, lease_until, last_started_at) VALUES (1, $1, $2, $3)
+ON CONFLICT (id) DO UPDATE SET holder = EXCLUDED.holder, lease_until = EXCLUDED.lease_until, last_started_at = EXCLUDED.last_started_at
+WHERE audit_retention_runs.lease_until <= $3 OR audit_retention_runs.holder = $1
+RETURNING holder`, holder, now.Add(lease).UTC(), now.UTC()).Scan(&got)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil && got == holder, err
+}
+
+func (s *Store) FinishAuditPruneRun(ctx context.Context, holder string, run store.AuditPruneRun) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE audit_retention_runs SET lease_until = 'epoch', last_started_at = $2, last_finished_at = $3,
+	last_pruned_events = $4, last_error = $5
+WHERE id = 1 AND holder = $1`, holder, run.StartedAt.UTC(), run.FinishedAt.UTC(), run.PrunedEvents, run.Error)
+	return err
+}
+
+func (s *Store) GetAuditPruneRun(ctx context.Context) (store.AuditPruneRun, error) {
+	var run store.AuditPruneRun
+	var started, finished sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+SELECT last_started_at, last_finished_at, last_pruned_events, last_error FROM audit_retention_runs WHERE id = 1`).
+		Scan(&started, &finished, &run.PrunedEvents, &run.Error)
+	if errors.Is(err, sql.ErrNoRows) {
+		return run, nil
+	}
+	if started.Valid {
+		run.StartedAt = started.Time.UTC()
+	}
+	if finished.Valid {
+		run.FinishedAt = finished.Time.UTC()
+	}
+	return run, err
+}

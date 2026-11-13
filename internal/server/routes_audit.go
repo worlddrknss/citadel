@@ -225,6 +225,9 @@ type auditChainStatusJSON struct {
 	LegacyLinkBreaks    *int64 `json:"legacyLinkBreaks,omitempty"`
 	FirstLegacyBreakSeq *int64 `json:"firstLegacyBreakSeq,omitempty"`
 	FirstLegacyBreakID  *int64 `json:"firstLegacyBreakId,omitempty"`
+	// Anchor is where the chain starts after retention pruning: events up
+	// to and including it were deleted on purpose (see docs/audit.md).
+	Anchor *auditAnchorJSON `json:"anchor,omitempty"`
 }
 
 func toChainStatusJSON(v store.AuditVerification) auditChainStatusJSON {
@@ -259,13 +262,16 @@ func (s *Server) handleV1AuditVerifyStatus(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	v, err := s.store.GetAuditVerification(ctx, s.auditAccount(ctx))
+	account := s.auditAccount(ctx)
+	v, err := s.store.GetAuditVerification(ctx, account)
 	if err != nil {
 		log.Printf("audit verification read failed: %v", err)
 		writeNativeError(w, http.StatusInternalServerError, "verify_failed", "failed to read the verification status")
 		return
 	}
-	writeNativeJSON(w, http.StatusOK, toChainStatusJSON(v))
+	out := toChainStatusJSON(v)
+	out.Anchor = s.auditAnchorFor(ctx, account)
+	writeNativeJSON(w, http.StatusOK, out)
 }
 
 // POST /v1/audit/verify[?full=true] — viewer (full re-walk: platform
@@ -300,7 +306,9 @@ func (s *Server) handleV1AuditVerify(w http.ResponseWriter, r *http.Request) {
 		log.Printf("audit chain verified; %d of %d pre-2.0 events don't link to the event before them (first at seq %d), consistent with Citadel 1.x's unlocked appends", v.LegacyLinkBreaks, v.LegacyEvents, v.FirstLegacyBreakSeq)
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.VerifyAuditChain", Result: "ok", AuditOrigin: s.auditOrigin(r)})
-	writeNativeJSON(w, http.StatusOK, toChainStatusJSON(v))
+	out := toChainStatusJSON(v)
+	out.Anchor = s.auditAnchorFor(ctx, account)
+	writeNativeJSON(w, http.StatusOK, out)
 }
 
 // allowExport is a sliding one-minute window per (account, user).

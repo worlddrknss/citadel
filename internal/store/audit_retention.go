@@ -160,6 +160,24 @@ type AuditRetentionStore interface {
 	// above) and advances the anchor. Safe to call from several replicas at
 	// once: only one prunes an account at a time, the others get Stop "busy".
 	PruneAuditEvents(ctx context.Context, accountID string, cutoff time.Time, limit int) (AuditPruneResult, error)
+
+	// ClaimAuditPruneRun takes the deployment-wide retention run lease for
+	// holder until now+lease, unless another holder's lease is still
+	// running. It reports whether holder got it.
+	ClaimAuditPruneRun(ctx context.Context, holder string, now time.Time, lease time.Duration) (bool, error)
+	// FinishAuditPruneRun releases holder's lease and records the run.
+	FinishAuditPruneRun(ctx context.Context, holder string, run AuditPruneRun) error
+	// GetAuditPruneRun returns the last recorded run (zero when none).
+	GetAuditPruneRun(ctx context.Context) (AuditPruneRun, error)
+}
+
+// AuditPruneRun is what the last retention run did, deployment-wide.
+type AuditPruneRun struct {
+	StartedAt    time.Time
+	FinishedAt   time.Time
+	PrunedEvents int64
+	// Error is a short, client-safe summary ("" when the run succeeded).
+	Error string
 }
 
 // AuditPruneCandidate is one event a prune batch considers, with the facts

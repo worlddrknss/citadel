@@ -353,6 +353,41 @@ func AuditRetention(t *testing.T, st store.Store, tamper AuditTamper) {
 		}
 	})
 
+	t.Run("RunLease", func(t *testing.T) {
+		ctx := context.Background()
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		a, b := "replica-a-"+cryptoutil.RandomHex(4), "replica-b-"+cryptoutil.RandomHex(4)
+		if ok, err := st.ClaimAuditPruneRun(ctx, a, now, time.Minute); err != nil || !ok {
+			t.Fatalf("a claim = %v %v", ok, err)
+		}
+		if ok, err := st.ClaimAuditPruneRun(ctx, b, now.Add(time.Second), time.Minute); err != nil || ok {
+			t.Fatalf("b claim while a holds = %v %v", ok, err)
+		}
+		run := store.AuditPruneRun{StartedAt: now, FinishedAt: now.Add(time.Second), PrunedEvents: 42}
+		if err := st.FinishAuditPruneRun(ctx, a, run); err != nil {
+			t.Fatal(err)
+		}
+		got, err := st.GetAuditPruneRun(ctx)
+		if err != nil || got.PrunedEvents != 42 || !got.FinishedAt.Equal(run.FinishedAt) {
+			t.Fatalf("run = %+v %v", got, err)
+		}
+		// Released: b may run now; and an expired lease is taken over.
+		if ok, err := st.ClaimAuditPruneRun(ctx, b, now.Add(2*time.Second), time.Minute); err != nil || !ok {
+			t.Fatalf("b claim after release = %v %v", ok, err)
+		}
+		if ok, err := st.ClaimAuditPruneRun(ctx, a, now.Add(2*time.Minute), time.Minute); err != nil || !ok {
+			t.Fatalf("a claim after b's lease expired = %v %v", ok, err)
+		}
+		// b's late finish doesn't clobber a's lease.
+		if err := st.FinishAuditPruneRun(ctx, b, store.AuditPruneRun{PrunedEvents: 1}); err != nil {
+			t.Fatal(err)
+		}
+		if ok, _ := st.ClaimAuditPruneRun(ctx, b, now.Add(2*time.Minute+time.Second), time.Minute); ok {
+			t.Fatal("b took a's running lease")
+		}
+		_ = st.FinishAuditPruneRun(ctx, a, store.AuditPruneRun{})
+	})
+
 	t.Run("AuditAccounts", func(t *testing.T) {
 		acct, ctx := newAccount()
 		record(t, ctx, 1, store.AuditEvent{})

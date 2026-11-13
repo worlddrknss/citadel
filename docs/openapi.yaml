@@ -5921,6 +5921,98 @@ paths:
             $ref: "#/components/responses/Forbidden"
           "500":
             $ref: "#/components/responses/InternalError"
+    /v1/audit/retention:
+      get:
+        operationId: getAuditRetention
+        tags: [Audit]
+        summary: Get the audit retention policy
+        description: |
+          The retention in force for the caller's account (its own override, or
+          the deployment default KMS_AUDIT_RETENTION_DAYS; 0 keeps events
+          forever), the account's event count and oldest event, and the chain
+          anchor left by pruning. Platform admins also get the audit table's
+          size on disk (deployment-wide) and the last retention run.
+        x-citadel-role: viewer
+        responses:
+          "200":
+            description: The retention policy
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AuditRetention"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "500":
+            $ref: "#/components/responses/InternalError"
+      post:
+        operationId: putAuditRetention
+        tags: [Audit]
+        summary: Set the account's audit retention
+        description: |
+          `retentionDays` is 0 (keep forever) or 7 to 3650 days; `null` returns
+          the account to the deployment default. The change is audited with the
+          old and new values. Events older than the retention are pruned by the
+          hourly retention job, oldest first, in batches; the chain anchor keeps
+          verification intact (see docs/audit.md).
+        x-citadel-role: admin
+        x-citadel-audit: citadel.PutAuditRetention
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditRetentionRequest"
+        responses:
+          "200":
+            description: The saved policy
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AuditRetention"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/audit/retention/preview:
+      get:
+        operationId: previewAuditRetention
+        tags: [Audit]
+        summary: Preview the effect of an audit retention
+        description: |
+          How many of the account's events are older than the cut-off a
+          retention of `days` would use now. Pruning may remove fewer: it never
+          removes the newest event, events awaiting SIEM delivery, write-ahead
+          attempts whose outcome is inside the window, or events that don't
+          verify.
+        x-citadel-role: admin
+        parameters:
+          - name: days
+            in: query
+            required: true
+            description: 0 (keep forever) or 7 to 3650
+            schema:
+              type: integer
+        responses:
+          "200":
+            description: The preview
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/AuditRetentionPreview"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "500":
+            $ref: "#/components/responses/InternalError"
     /v1/audit/export:
       get:
         operationId: exportAuditEvents
@@ -10815,6 +10907,128 @@ components:
         firstLegacyBreakId:
           type: integer
           format: int64
+        anchor:
+          $ref: "#/components/schemas/AuditChainAnchor"
+    AuditChainAnchor:
+      type: object
+      description: |
+        Where the chain starts after retention pruning: the last pruned event's
+        position, ID and hash. Every event up to it was deleted on purpose;
+        the anchor is authenticated with the audit HMAC key.
+      required: [chainSeq, eventId, hash, prunedBefore, prunedEvents, updatedAt]
+      properties:
+        chainSeq:
+          type: integer
+          format: int64
+        eventId:
+          type: integer
+          format: int64
+        hash:
+          type: string
+        prunedBefore:
+          type: string
+          format: date-time
+          description: Timestamp of the last pruned event; everything older is gone
+        prunedEvents:
+          type: integer
+          format: int64
+          description: Events pruned from the account so far
+        updatedAt:
+          type: string
+          format: date-time
+    AuditRetention:
+      type: object
+      required: [retentionDays, source, accountDays, deploymentDays, minDays, maxDays, streamHeld, events]
+      properties:
+        retentionDays:
+          type: integer
+          description: The retention in force, in days; 0 keeps events forever
+        source:
+          type: string
+          enum: [account, deployment]
+        accountDays:
+          description: The account's override; null uses the deployment default
+          oneOf:
+            - type: integer
+            - type: "null"
+        deploymentDays:
+          type: integer
+          description: KMS_AUDIT_RETENTION_DAYS (0 keeps events forever)
+        minDays:
+          type: integer
+        maxDays:
+          type: integer
+        updatedBy:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
+        streamHeld:
+          type: boolean
+          description: SIEM streaming is on, so events are pruned only once delivered
+        events:
+          type: integer
+          format: int64
+          description: The account's stored events
+        oldestEvent:
+          type: string
+          format: date-time
+        anchor:
+          $ref: "#/components/schemas/AuditChainAnchor"
+        storage:
+          type: object
+          description: Platform admins only. Deployment-wide.
+          properties:
+            tableBytes:
+              type: integer
+              format: int64
+              description: The audit table's size on disk with indexes (-1 when unknown)
+            tableRowsEstimate:
+              type: integer
+              format: int64
+        lastRun:
+          type: object
+          description: Platform admins only. The last retention run, deployment-wide.
+          properties:
+            startedAt:
+              type: string
+              format: date-time
+            finishedAt:
+              type: string
+              format: date-time
+            prunedEvents:
+              type: integer
+              format: int64
+            error:
+              type: string
+    AuditRetentionRequest:
+      type: object
+      required: [retentionDays]
+      properties:
+        retentionDays:
+          description: 0 (keep forever), 7 to 3650 days, or null for the deployment default
+          oneOf:
+            - type: integer
+            - type: "null"
+    AuditRetentionPreview:
+      type: object
+      required: [retentionDays, prunableEvents, events]
+      properties:
+        retentionDays:
+          type: integer
+        cutoff:
+          type: string
+          format: date-time
+          description: Events older than this would be pruned (absent for 0)
+        prunableEvents:
+          type: integer
+          format: int64
+        events:
+          type: integer
+          format: int64
+        oldestEvent:
+          type: string
+          format: date-time
     AuditStream:
       type: object
       required: [enabled, url, format, hasToken]

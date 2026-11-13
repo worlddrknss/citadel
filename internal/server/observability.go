@@ -30,7 +30,12 @@ type observabilityRuntime struct {
 	info     *metrics.GaugeVec
 	// auditQueue is the depth of the write-ahead outcome retry queue.
 	auditQueue *metrics.GaugeVec
-	draining   atomic.Bool
+	// Audit retention (audit_retention.go).
+	auditPruned       *metrics.CounterVec
+	auditPruneRuns    *metrics.CounterVec
+	auditPruneLastRun *metrics.GaugeVec
+	auditPruneLastN   *metrics.GaugeVec
+	draining          atomic.Bool
 }
 
 func (s *Server) obsRuntime() *observabilityRuntime {
@@ -43,6 +48,10 @@ func (s *Server) obsRuntime() *observabilityRuntime {
 		o.info = o.reg.NewGaugeVec("citadel_build_info", "Always 1; labels describe the running build.", "app", "fips")
 		o.info.Set(1, AppName, strconv.FormatBool(fips140.Enabled()))
 		o.auditQueue = o.reg.NewGaugeVec("citadel_audit_outcome_queue_depth", "Audit outcome events waiting to be retried after a failed write (their write-ahead attempts are recorded).")
+		o.auditPruned = o.reg.NewCounterVec("citadel_audit_pruned_events_total", "Audit events deleted by the retention job on this replica.")
+		o.auditPruneRuns = o.reg.NewCounterVec("citadel_audit_retention_runs_total", "Audit retention job runs on this replica by result (ok, error, skipped: another replica held the run lease).", "result")
+		o.auditPruneLastRun = o.reg.NewGaugeVec("citadel_audit_retention_last_run_timestamp_seconds", "When this replica last finished an audit retention run (Unix time).")
+		o.auditPruneLastN = o.reg.NewGaugeVec("citadel_audit_retention_last_run_pruned_events", "Audit events the last retention run on this replica deleted.")
 	})
 	return o
 }
