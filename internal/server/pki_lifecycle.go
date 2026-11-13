@@ -111,7 +111,7 @@ func (s *Server) pkiDeleteCA(ctx context.Context, rec store.PCACertificateAuthor
 	}
 	if n > 0 {
 		return rec, pkiConflict("InvalidStateException",
-			"certificate authority has %d certificate%s that %s still valid; revoke %s first", n, plural(n), isAre(n), themIt(n))
+			"certificate authority has %d certificate%s that %s still valid; revoke %s first", n, pluralS(n), isAre(n), themIt(n))
 	}
 	until := now.Add(time.Duration(days) * 24 * time.Hour)
 	ca, err := s.store.TransitionCertificateAuthority(ctx, rec.CAID, caDeletableStates, store.CAStateDeleted, &until)
@@ -136,7 +136,7 @@ func (s *Server) pkiRestoreCA(ctx context.Context, rec store.PCACertificateAutho
 	return ca, err
 }
 
-func plural(n int) string {
+func pluralS(n int) string {
 	if n == 1 {
 		return ""
 	}

@@ -423,6 +423,12 @@ func (s *Server) handleV1LoginMFA(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusInternalServerError, "login_failed", "could not complete sign-in")
 		return
 	}
+	// Write-ahead audit: consuming a recovery code or TOTP step, spending the
+	// token and creating the session are changes (audit_writeahead.go).
+	if err := s.beginAuditAttempt(r.Context(), store.AuditEvent{Action: "citadel.LoginMFA", KeyID: claims.AccountID, AuditOrigin: origin}); err != nil {
+		writeNativeError(w, http.StatusInternalServerError, "audit_unavailable", "the audit log could not be written; sign-in was not completed")
+		return
+	}
 	usedRecovery, ok, err := s.checkSecondFactor(r.Context(), e, req.Code, req.RecoveryCode)
 	if err != nil {
 		log.Printf("login MFA: verify failed: %v", err)

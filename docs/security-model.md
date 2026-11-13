@@ -160,9 +160,9 @@ Where the attempt is written, per path:
 | AWS JSON APIs (KMS, Secrets Manager, SSM, ACM, ACM PCA) | after SigV4 verification, before dispatch | the `X-Amz-Target`, e.g. `TrentService.CreateKey` |
 | Native `/v1` API (console, bearer tokens) | when the session is resolved, for POST/PUT/PATCH/DELETE | the route, e.g. `POST /v1/secrets`; the outcome carries the handler's action name |
 | STS `AssumeRole`, `AssumeRoleWithWebIdentity` | after the trust check, before credentials are minted | `sts.AssumeRole...` |
-| Console login, SSO login, bootstrap, logout | after credentials are verified, before the session or account is created (or deleted) | `citadel.Login`, ... |
+| Console login (password and two-step verification), SSO login, bootstrap, logout | after credentials are verified, before the session or account is created (or deleted) | `citadel.Login`, ... |
 | ACME server | before issuing, revoking, or binding an EAB key | `citadel.ACME...` |
-| Background jobs | per key for KMS rotation and deletion, per CA for the CA purge, per certificate for Let's Encrypt auto-renewal; before the workload signing-key rotation and the re-wrap; for the secrets purge (per account) and certificate expiry sweeps only when there is work, so idle runs write nothing | the job's action |
+| Background jobs | per key for KMS rotation and deletion, per secret for scheduled secret rotation (a rotation started by a request is covered by that request's attempt), per CA for the CA purge, per certificate for Let's Encrypt auto-renewal; before the workload signing-key rotation and the re-wrap; for the secrets purge (per account) and certificate expiry sweeps only when there is work, so idle runs write nothing | the job's action |
 
 The resource on an attempt comes from the query string, else from the
 identifying field of a JSON body (`SecretId`, `KeyId`, `name`, `arn`...).
