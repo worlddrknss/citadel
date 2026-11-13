@@ -393,11 +393,20 @@ func (s *Server) handleV1LoginMFA(w http.ResponseWriter, r *http.Request) {
 	claims, ok := s.parseMFAToken(strings.TrimSpace(req.MFAToken), now)
 	if !ok {
 		// Count bad tokens against the address so they cannot be probed.
-		if wait, limited := s.mfaThrottled(r.Context(), ip, "\x00invalid-token"); limited {
+		m := s.mfa()
+		wait, limited := time.Duration(0), false
+		if blocked, d := m.failIP.Blocked(ip); blocked {
+			wait, limited = d, true
+		} else if ok, d := m.ip.Reserve(ip); !ok {
+			wait, limited = d, true
+		} else if ok, d := s.sharedAllow(r.Context(), sharedLimitCheck{sharedLimitMFAIP, ip}); !ok {
+			wait, limited = d, true
+		}
+		if limited {
 			writeMFAThrottled(w, wait)
 			return
 		}
-		s.mfa().failIP.Fail(ip)
+		m.failIP.Fail(ip)
 		writeNativeError(w, http.StatusUnauthorized, "mfa_token_invalid", "the sign-in has expired; enter your password again")
 		return
 	}
