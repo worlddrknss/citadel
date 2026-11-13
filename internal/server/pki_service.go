@@ -517,9 +517,10 @@ func awsTemplateName(t string) string {
 }
 
 // consoleTemplate is the template name the console shows for a stored AWS
-// template name: server, client, or "" when none was recorded.
+// template name: server, client, or "" when none was recorded or the
+// certificate is a subordinate CA certificate.
 func consoleTemplate(name string) string {
-	if name == "" {
+	if name == "" || isSubordinateCATemplate(name) {
 		return ""
 	}
 	return templateFromAWSName(name)

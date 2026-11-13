@@ -531,6 +531,9 @@ func (s *Server) handleV1RenewCert(w http.ResponseWriter, r *http.Request) {
 		if prev.Status == "REVOKED" {
 			return nil, pkiConflict("InvalidStateException", "a revoked certificate cannot be renewed")
 		}
+		if isSubordinateCATemplate(prev.Template) {
+			return nil, pkiConflict("InvalidStateException", "subordinate CA certificates are not renewed as leaf certificates; issue a new one with the subordinate CA template")
+		}
 		csrPEMBytes, err := base64.StdEncoding.DecodeString(prev.CSRB64)
 		if err != nil || len(csrPEMBytes) == 0 {
 			return nil, pkiConflict("InvalidStateException", "no stored CSR is available to renew this certificate")
