@@ -19,7 +19,9 @@
     "kms",
     "nextjs",
     "edge",
-    "parameter-store"
+    "parameter-store",
+    "mcp",
+    "ai-agents"
   ],
   "type": "module",
   "sideEffects": false,
@@ -29,6 +31,9 @@
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
   "types": "./dist/esm/index.d.ts",
+  "bin": {
+    "citadel": "dist/esm/cli.js"
+  },
   "exports": {
     ".": {
       "edge-light": {
