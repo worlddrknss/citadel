@@ -147,6 +147,8 @@ var bootstrapOpenPaths = map[string]bool{
 	"/v1/server/info":    true,
 	"/v1/auth/providers": true,
 	"/v1/login":          true,
+	// Describes the API; holds no data.
+	"/v1/openapi.yaml": true,
 }
 
 // withBootstrapGate closes the /v1 API while the server is in bootstrap mode
