@@ -34,7 +34,7 @@ var (
 	agentRoleARNRe   = regexp.MustCompile(`^arn:[a-z0-9-]+:iam::[0-9]{12}:role/[\w+=,.@/-]{1,512}$`)
 	agentAWSScopeRe  = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
 	agentAWSNameRe   = regexp.MustCompile(`^[\w+=,.@-]{2,64}$`)
-	agentExternalRe  = regexp.MustCompile(`^[\w+=,.@:/-]{2,1224}$`)
+	agentExternalRe  = regexp.MustCompile(`^[\w+=,.@:/-]+$`)
 	agentGHAppIDRe   = regexp.MustCompile(`^[A-Za-z0-9.]{1,64}$`)
 	agentGHRepoRe    = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
 	agentGHPermRe    = regexp.MustCompile(`^[a-z_]{1,64}$`)
@@ -163,7 +163,7 @@ func validateAWSSTSConfig(in *store.AgentAWSSTSConfig, c *store.AgentCredential)
 		}
 	}
 	out.ExternalID = strings.TrimSpace(out.ExternalID)
-	if out.ExternalID != "" && !agentExternalRe.MatchString(out.ExternalID) {
+	if out.ExternalID != "" && (len(out.ExternalID) < 2 || len(out.ExternalID) > 1224 || !agentExternalRe.MatchString(out.ExternalID)) {
 		return "awsSts.externalId must be 2-1224 letters, digits or +=,.@:/-_"
 	}
 	out.SessionName = strings.TrimSpace(out.SessionName)
