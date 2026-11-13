@@ -47,11 +47,10 @@ const (
 	DefaultMaxRedirects    = 3
 	DefaultTimeout         = 30 * time.Second
 
-	maxHeaders         = 64
-	maxHeaderBytes     = 32 << 10
-	maxURLLength       = 8192
-	defaultHeaderName  = "Authorization"
-	defaultHeaderValue = "Bearer "
+	maxHeaders        = 64
+	maxHeaderBytes    = 32 << 10
+	maxURLLength      = 8192
+	defaultHeaderName = "Authorization"
 )
 
 // Methods the broker sends at all. A profile's allowedMethods narrows them.
@@ -76,8 +75,8 @@ type Profile struct {
 	// matches whole segments: "/repos" matches "/repos" and "/repos/x" but
 	// not "/reposx"; "/repos/" matches only below it.
 	AllowedPathPrefixes []string
-	// HeaderName and HeaderPrefix shape http_header injection (default
-	// "Authorization: Bearer <secret>").
+	// HeaderName (default Authorization) and HeaderPrefix (for example
+	// "Bearer ") shape http_header injection: "<name>: <prefix><secret>".
 	HeaderName   string
 	HeaderPrefix string
 	// QueryParam is the http_query parameter name.
@@ -488,12 +487,7 @@ func headerName(p Profile) string {
 	return defaultHeaderName
 }
 
-func headerPrefix(p Profile) string {
-	if strings.TrimSpace(p.HeaderName) == "" && p.HeaderPrefix == "" {
-		return defaultHeaderValue
-	}
-	return p.HeaderPrefix
-}
+func headerPrefix(p Profile) string { return p.HeaderPrefix }
 
 // agentHeaders validates the agent's headers and drops the stripped ones.
 func agentHeaders(in map[string]string, p Profile) (http.Header, error) {

@@ -163,7 +163,7 @@ base64 encoded.
 
 | Kind | On the wire |
 | --- | --- |
-| `http_header` | `<headerName>: <headerPrefix><value>`; by default `Authorization: Bearer <value>`. |
+| `http_header` | `<headerName>: <headerPrefix><value>`. `headerName` defaults to `Authorization`; for a bearer token set `headerPrefix` to `Bearer ` (with the space). |
 | `http_basic` | `Authorization: Basic ...` from the stored JSON `{"username": "...", "password": "..."}`. |
 | `http_query` | The query parameter `<queryParam>=<value>`, replacing any the agent sent. |
 

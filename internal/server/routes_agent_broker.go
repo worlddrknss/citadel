@@ -291,6 +291,12 @@ func (s *Server) brokerHTTP(ctx context.Context, r *http.Request, c *agentCaller
 	}
 	ev.method, ev.host, ev.path, ev.reqBytes = pr.Method, pr.Target.Host, pr.Target.AuditPath(), len(pr.Body)
 
+	// Contacting the upstream may change state there: record the attempt
+	// first (a no-op when the request already began one).
+	if err := s.beginAuditAttempt(ctx, store.AuditEvent{Action: actionAgentHTTP, KeyID: req.Credential, AuditOrigin: withResource(acc.auditOrigin(r, c), ev.resource())}); err != nil {
+		rt.reqs.Inc(via, store.AuditResultError, "audit_unavailable")
+		return nil, &agentFailure{Status: http.StatusInternalServerError, Code: "audit_unavailable", Reason: "audit_unavailable", Message: "the audit log could not be written; nothing was sent"}
+	}
 	secret, err := s.mintAgentCredential(ctx, c, use)
 	if err != nil {
 		log.Printf("agent broker: credential value unavailable: %v", err)

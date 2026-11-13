@@ -176,7 +176,7 @@ func newBrokerEnv(t *testing.T) *brokerEnv {
 		creds: map[string]fakeCredential{
 			"upstream": {
 				info:    agentCredentialInfo{Name: "upstream", Kind: agentbroker.KindHTTPHeader, Description: "test API", AllowedHosts: []string{e.host}},
-				profile: agentbroker.Profile{Kind: agentbroker.KindHTTPHeader, AllowedHosts: []string{e.host}, AllowHTTP: true, AllowedCIDRs: loopback},
+				profile: agentbroker.Profile{Kind: agentbroker.KindHTTPHeader, HeaderPrefix: "Bearer ", AllowedHosts: []string{e.host}, AllowHTTP: true, AllowedCIDRs: loopback},
 				secret:  brokerSecret,
 			},
 			"no-cidr": {
@@ -433,7 +433,7 @@ func TestAgentHTTPSizeCapAndTLS(t *testing.T) {
 	host := strings.TrimPrefix(tlsUp.URL, "https://")
 	e.fake.creds["tls"] = fakeCredential{
 		info:    agentCredentialInfo{Name: "tls", Kind: agentbroker.KindHTTPHeader, AllowedHosts: []string{host}},
-		profile: agentbroker.Profile{Kind: agentbroker.KindHTTPHeader, AllowedHosts: []string{host}, AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}},
+		profile: agentbroker.Profile{Kind: agentbroker.KindHTTPHeader, HeaderPrefix: "Bearer ", AllowedHosts: []string{host}, AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}},
 		secret:  brokerSecret,
 	}
 	e.fake.grants["agt_alpha"]["tls"] = []string{"use"}
