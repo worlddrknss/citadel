@@ -45,6 +45,8 @@ type agentCredentialInfo struct {
 	// Status is "available", or why the grant can't be used right now
 	// (not_yet_valid, grant_expired, outside_window, ...).
 	Status string `json:"status"`
+	// URLPatterns are the pages a login credential may be used on (2.4).
+	URLPatterns []string `json:"urlPatterns,omitempty"`
 }
 
 // agentUse is the outcome of an access check for one action on one

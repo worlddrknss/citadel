@@ -120,13 +120,15 @@ func (c *Client) RevokeAgentToken(ctx context.Context, agentID, tokenID string) 
 // AgentCredentialInput makes a secret usable by agents (a usage profile).
 // Name the secret with Secret (name or ARN) or Project, Env, Path and Key.
 type AgentCredentialInput struct {
-	Name                string   `json:"name"`
-	Secret              string   `json:"secret,omitempty"`
-	Project             string   `json:"project,omitempty"`
-	Env                 string   `json:"env,omitempty"`
-	Path                string   `json:"path,omitempty"`
-	Key                 string   `json:"key,omitempty"`
-	Kind                string   `json:"kind"` // http_header, http_basic, http_query, login or raw
+	Name    string `json:"name"`
+	Secret  string `json:"secret,omitempty"`
+	Project string `json:"project,omitempty"`
+	Env     string `json:"env,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Key     string `json:"key,omitempty"`
+	// Kind is http_header, http_basic, http_query, login, raw, aws_sts,
+	// github_app or oauth2_client_credentials.
+	Kind                string   `json:"kind"`
 	Description         string   `json:"description,omitempty"`
 	AllowedHosts        []string `json:"allowedHosts,omitempty"`
 	AllowedMethods      []string `json:"allowedMethods,omitempty"`
@@ -136,6 +138,12 @@ type AgentCredentialInput struct {
 	QueryParam          string   `json:"queryParam,omitempty"`
 	AllowHTTP           bool     `json:"allowHttp,omitempty"`
 	AllowedCIDRs        []string `json:"allowedCidrs,omitempty"`
+
+	// The kind's settings (2.4): set the one matching Kind.
+	Login     *AgentLoginConfig     `json:"login,omitempty"`
+	AWSSTS    *AgentAWSSTSConfig    `json:"awsSts,omitempty"`
+	GitHubApp *AgentGitHubAppConfig `json:"githubApp,omitempty"`
+	OAuth2    *AgentOAuth2Config    `json:"oauth2,omitempty"`
 }
 
 // CreateAgentCredential stores a usage profile.
@@ -166,6 +174,9 @@ type AgentGrantInput struct {
 	// RequiresApproval, opens a lease of that length on first use (2.3).
 	RequiresApproval bool `json:"requiresApproval,omitempty"`
 	LeaseTTLSeconds  int  `json:"leaseTtlSeconds,omitempty"`
+
+	// Scope narrows a minted credential's tokens (2.4).
+	Scope *AgentGrantScope `json:"scope,omitempty"`
 }
 
 // PutAgentGrant creates or replaces the agent's grant for the credential and
@@ -222,6 +233,8 @@ type UsableCredential struct {
 	RequiresApproval bool   `json:"requiresApproval"`
 	Usable           bool   `json:"usable"`
 	Reason           string `json:"reason,omitempty"`
+	// URLPatterns are the pages a login credential may be used on (2.4).
+	URLPatterns []string `json:"urlPatterns,omitempty"`
 }
 
 // AgentCredentials lists the credentials the calling agent has grants for.

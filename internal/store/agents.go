@@ -43,6 +43,7 @@ const (
 	AgentCredentialHTTPQuery  = "http_query"
 	AgentCredentialLogin      = "login"
 	AgentCredentialRaw        = "raw"
+	// Minted kinds (2.4) are in agent_minted.go.
 )
 
 // Grant actions.
@@ -148,6 +149,10 @@ type AgentCredential struct {
 	CreatedBy           string
 	UpdatedAt           time.Time
 	UpdatedBy           string
+
+	// Config holds the kind-specific settings (login URL patterns, how a
+	// minted credential is minted; 2.4).
+	Config AgentCredentialConfig
 }
 
 // AgentGrant binds an agent to a credential.
@@ -178,6 +183,10 @@ type AgentGrant struct {
 	CreatedBy        string
 	UpdatedAt        time.Time
 	UpdatedBy        string
+
+	// Scope narrows minted tokens (2.4); zero means the credential's
+	// defaults.
+	Scope AgentGrantScope
 }
 
 // HasAction reports whether the grant allows action.

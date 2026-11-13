@@ -19,6 +19,7 @@
   import { fullTime, relTime } from '../../time';
   import { agentMenu } from '../actions';
   import GrantModal from './GrantModal.svelte';
+  import Anomalies from './Anomalies.svelte';
   import AccessDecisionModal from '../AccessDecisionModal.svelte';
   import {
     ACCESS_STATUS,
@@ -460,6 +461,7 @@
         <pre class="code mono small">curl -H "Authorization: Bearer $CITADEL_AGENT_TOKEN" \
   {typeof location !== 'undefined' ? location.origin : ''}/v1/agent/credentials</pre>
       </div>
+      <Anomalies {agentId} view="settings" {manage} />
     </section>
   {:else if tab === 'tokens'}
     {#if agent.requireFederation}
@@ -624,6 +626,7 @@
     {#if eventsError}
       <div class="callout callout-danger err" role="alert"><Icon name="alert-circle" size={16} /><span>{eventsError}</span><button type="button" class="btn btn-ghost btn-sm push" onclick={loadEvents}>Retry</button></div>
     {/if}
+    <Anomalies {agentId} view="list" {manage} />
     <DataTable caption="Agent activity" rows={events} columns={eventCols} key={(e) => String(e.id)} loading={eventsLoading} sortBy="time" sortDir="desc" pageSize={50}>
       {#snippet toolbar()}
         <a class="btn btn-ghost btn-sm" href="{base}/audit?agent={encodeURIComponent(agentId)}"><Icon name="list" size={14} />Open in audit log</a>

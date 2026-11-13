@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/store"
@@ -311,15 +312,16 @@ func (s *Store) DeleteAgentBinding(ctx context.Context, accountID, agentID, bind
 }
 
 const agentCredentialCols = `account_id, name, secret_name, kind, description, allowed_hosts, allowed_methods, allowed_path_prefixes,
-	header_name, header_prefix, query_param, allow_http, allowed_cidrs, created_at, created_by, updated_at, updated_by`
+	header_name, header_prefix, query_param, allow_http, allowed_cidrs, created_at, created_by, updated_at, updated_by, config`
 
 func scanAgentCredential(row rowScanner) (store.AgentCredential, error) {
 	var (
 		c                            store.AgentCredential
 		hosts, methods, paths, cidrs string
+		config                       string
 	)
 	err := row.Scan(&c.AccountID, &c.Name, &c.SecretName, &c.Kind, &c.Description, &hosts, &methods, &paths,
-		&c.HeaderName, &c.HeaderPrefix, &c.QueryParam, &c.AllowHTTP, &cidrs, &c.CreatedAt, &c.CreatedBy, &c.UpdatedAt, &c.UpdatedBy)
+		&c.HeaderName, &c.HeaderPrefix, &c.QueryParam, &c.AllowHTTP, &cidrs, &c.CreatedAt, &c.CreatedBy, &c.UpdatedAt, &c.UpdatedBy, &config)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.AgentCredential{}, store.ErrAgentCredentialNotFound
 	}
@@ -327,15 +329,18 @@ func scanAgentCredential(row rowScanner) (store.AgentCredential, error) {
 		return store.AgentCredential{}, err
 	}
 	c.AllowedHosts, c.AllowedMethods, c.AllowedPathPrefixes, c.AllowedCIDRs = agentStrings(hosts), agentStrings(methods), agentStrings(paths), agentStrings(cidrs)
+	if err := json.Unmarshal([]byte(config), &c.Config); err != nil {
+		return store.AgentCredential{}, fmt.Errorf("agent credential config: %w", err)
+	}
 	c.CreatedAt, c.UpdatedAt = c.CreatedAt.UTC(), c.UpdatedAt.UTC()
 	return c, nil
 }
 
 func (s *Store) CreateAgentCredential(ctx context.Context, c store.AgentCredential) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO agent_credentials (`+agentCredentialCols+`)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
 		c.AccountID, c.Name, c.SecretName, c.Kind, c.Description, agentJSON(c.AllowedHosts), agentJSON(c.AllowedMethods), agentJSON(c.AllowedPathPrefixes),
-		c.HeaderName, c.HeaderPrefix, c.QueryParam, c.AllowHTTP, agentJSON(c.AllowedCIDRs), c.CreatedAt.UTC(), c.CreatedBy, c.UpdatedAt.UTC(), c.UpdatedBy)
+		c.HeaderName, c.HeaderPrefix, c.QueryParam, c.AllowHTTP, agentJSON(c.AllowedCIDRs), c.CreatedAt.UTC(), c.CreatedBy, c.UpdatedAt.UTC(), c.UpdatedBy, agentJSON(c.Config))
 	if idnUniqueViolation(err) {
 		return store.ErrAgentCredentialExists
 	}
@@ -345,10 +350,10 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
 func (s *Store) UpdateAgentCredential(ctx context.Context, c store.AgentCredential) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE agent_credentials SET secret_name = $3, kind = $4, description = $5, allowed_hosts = $6,
 	allowed_methods = $7, allowed_path_prefixes = $8, header_name = $9, header_prefix = $10, query_param = $11, allow_http = $12,
-	allowed_cidrs = $13, updated_at = $14, updated_by = $15
+	allowed_cidrs = $13, updated_at = $14, updated_by = $15, config = $16
 WHERE account_id = $1 AND name = $2`,
 		c.AccountID, c.Name, c.SecretName, c.Kind, c.Description, agentJSON(c.AllowedHosts), agentJSON(c.AllowedMethods), agentJSON(c.AllowedPathPrefixes),
-		c.HeaderName, c.HeaderPrefix, c.QueryParam, c.AllowHTTP, agentJSON(c.AllowedCIDRs), c.UpdatedAt.UTC(), c.UpdatedBy)
+		c.HeaderName, c.HeaderPrefix, c.QueryParam, c.AllowHTTP, agentJSON(c.AllowedCIDRs), c.UpdatedAt.UTC(), c.UpdatedBy, agentJSON(c.Config))
 	if err != nil {
 		return err
 	}
@@ -394,7 +399,7 @@ func (s *Store) DeleteAgentCredential(ctx context.Context, accountID, name strin
 }
 
 const agentGrantCols = `grant_id, account_id, agent_id, credential, actions, not_before, not_after, window_start, window_end, window_days,
-	timezone, max_uses_per_hour, requires_approval, lease_ttl_seconds, created_at, created_by, updated_at, updated_by`
+	timezone, max_uses_per_hour, requires_approval, lease_ttl_seconds, created_at, created_by, updated_at, updated_by, scope`
 
 func scanAgentGrant(row rowScanner) (store.AgentGrant, error) {
 	var (
@@ -403,9 +408,10 @@ func scanAgentGrant(row rowScanner) (store.AgentGrant, error) {
 		nbf, naf      sql.NullTime
 		approval      sql.NullBool
 		lease         sql.NullInt64
+		scope         string
 	)
 	err := row.Scan(&g.GrantID, &g.AccountID, &g.AgentID, &g.Credential, &actions, &nbf, &naf, &g.WindowStart, &g.WindowEnd, &days,
-		&g.Timezone, &g.MaxUsesPerHour, &approval, &lease, &g.CreatedAt, &g.CreatedBy, &g.UpdatedAt, &g.UpdatedBy)
+		&g.Timezone, &g.MaxUsesPerHour, &approval, &lease, &g.CreatedAt, &g.CreatedBy, &g.UpdatedAt, &g.UpdatedBy, &scope)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.AgentGrant{}, store.ErrAgentGrantNotFound
 	}
@@ -422,6 +428,9 @@ func scanAgentGrant(row rowScanner) (store.AgentGrant, error) {
 		v := int(lease.Int64)
 		g.LeaseTTLSeconds = &v
 	}
+	if err := json.Unmarshal([]byte(scope), &g.Scope); err != nil {
+		return store.AgentGrant{}, fmt.Errorf("agent grant scope: %w", err)
+	}
 	g.CreatedAt, g.UpdatedAt = g.CreatedAt.UTC(), g.UpdatedAt.UTC()
 	return g, nil
 }
@@ -435,16 +444,16 @@ func (s *Store) PutAgentGrant(ctx context.Context, g store.AgentGrant) (store.Ag
 		lease = *g.LeaseTTLSeconds
 	}
 	out, err := scanAgentGrant(s.db.QueryRowContext(ctx, `INSERT INTO agent_grants (`+agentGrantCols+`)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 ON CONFLICT (account_id, agent_id, credential) DO UPDATE SET actions = EXCLUDED.actions, not_before = EXCLUDED.not_before,
 	not_after = EXCLUDED.not_after, window_start = EXCLUDED.window_start, window_end = EXCLUDED.window_end,
 	window_days = EXCLUDED.window_days, timezone = EXCLUDED.timezone, max_uses_per_hour = EXCLUDED.max_uses_per_hour,
 	requires_approval = EXCLUDED.requires_approval, lease_ttl_seconds = EXCLUDED.lease_ttl_seconds,
-	updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by
+	updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by, scope = EXCLUDED.scope
 RETURNING `+agentGrantCols,
 		g.GrantID, g.AccountID, g.AgentID, g.Credential, agentJSON(g.Actions), agentNullTime(g.NotBefore), agentNullTime(g.NotAfter),
 		g.WindowStart, g.WindowEnd, agentJSON(g.WindowDays), g.Timezone, g.MaxUsesPerHour, approval, lease,
-		g.CreatedAt.UTC(), g.CreatedBy, g.UpdatedAt.UTC(), g.UpdatedBy))
+		g.CreatedAt.UTC(), g.CreatedBy, g.UpdatedAt.UTC(), g.UpdatedBy, agentJSON(g.Scope)))
 	if idnFKViolation(err) {
 		// Which reference failed: the agent or the credential.
 		if _, gerr := s.GetAgent(ctx, g.AccountID, g.AgentID); gerr != nil {

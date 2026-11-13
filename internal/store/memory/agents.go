@@ -52,12 +52,14 @@ func cloneToken(t store.AgentToken) store.AgentToken {
 func cloneCredential(c store.AgentCredential) store.AgentCredential {
 	c.AllowedHosts, c.AllowedMethods = slices.Clone(c.AllowedHosts), slices.Clone(c.AllowedMethods)
 	c.AllowedPathPrefixes, c.AllowedCIDRs = slices.Clone(c.AllowedPathPrefixes), slices.Clone(c.AllowedCIDRs)
+	c.Config = c.Config.Clone()
 	return c
 }
 
 func cloneGrant(g store.AgentGrant) store.AgentGrant {
 	g.Actions, g.WindowDays = slices.Clone(g.Actions), slices.Clone(g.WindowDays)
 	g.NotBefore, g.NotAfter = cloneTime(g.NotBefore), cloneTime(g.NotAfter)
+	g.Scope = g.Scope.Clone()
 	if g.RequiresApproval != nil {
 		v := *g.RequiresApproval
 		g.RequiresApproval = &v

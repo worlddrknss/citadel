@@ -11,6 +11,7 @@
   import { confirm } from '#lib/stores/confirm.svelte.ts';
   import { toast } from '#lib/stores/toast.svelte.ts';
   import CredentialModal from '../../../agents/CredentialModal.svelte';
+  import LoginFields from './LoginFields.svelte';
   import { agentsApi, KIND_LABELS, type AgentCredential } from '../../../agents/api';
 
   let {
@@ -125,6 +126,26 @@
             <dt>Paths</dt>
             <dd class="mono">{c.allowedPathPrefixes.join(', ')}</dd>
           {/if}
+          {#if c.kind === 'login' && c.login}
+            <dt>Pages</dt>
+            <dd><span class="chips">{#each c.login.urlPatterns as u (u)}<span class="badge mono">{u}</span>{/each}</span></dd>
+          {:else if c.kind === 'aws_sts' && c.awsSts}
+            <dt>Role</dt>
+            <dd class="mono">{c.awsSts.roleArn}</dd>
+            <dt>Injected as</dt>
+            <dd>{c.awsSts.signingService ? `SigV4 signature (${c.awsSts.signingService})` : 'Reveal only (no signing service)'}</dd>
+          {:else if c.kind === 'github_app' && c.githubApp}
+            <dt>App</dt>
+            <dd class="mono">{c.githubApp.appId} · installation {c.githubApp.installationId}</dd>
+            <dt>Restricted to</dt>
+            <dd class="small">
+              {[...(c.githubApp.repositories ?? []), ...Object.entries(c.githubApp.permissions ?? {}).map(([k, v]) => `${k}:${v}`)].join(', ') || 'Set per grant'}
+            </dd>
+          {:else if c.kind === 'oauth2_client_credentials' && c.oauth2}
+            <dt>Token from</dt>
+            <dd class="mono">{c.oauth2.tokenUrl}</dd>
+            {#if c.oauth2.scopes?.length}<dt>Scopes</dt><dd class="mono">{c.oauth2.scopes.join(' ')}</dd>{/if}
+          {/if}
           <dt>Agents</dt>
           <dd>
             {#if c.grants.length}
@@ -141,6 +162,7 @@
             {:else}<span class="subtle">None yet. Grant it from an agent's Grants tab.</span>{/if}
           </dd>
         </dl>
+        {#if c.kind === 'login'}<LoginFields name={c.name} canEdit={canEdit && !deleted} />{/if}
       </article>
     {:else}
       <div class="empty">

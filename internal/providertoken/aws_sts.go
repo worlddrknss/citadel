@@ -69,6 +69,33 @@ func (c AWSCredentials) ProcessJSON() (string, error) {
 	return string(b), nil
 }
 
+// ParseAWSProcessJSON parses a credential_process document (the Value of an
+// aws_sts Token) back into credentials. Errors never include key material.
+func ParseAWSProcessJSON(doc string) (AWSCredentials, error) {
+	var v struct {
+		Version         int    `json:"Version"`
+		AccessKeyID     string `json:"AccessKeyId"`
+		SecretAccessKey string `json:"SecretAccessKey"`
+		SessionToken    string `json:"SessionToken"`
+		Expiration      string `json:"Expiration"`
+	}
+	if err := json.Unmarshal([]byte(doc), &v); err != nil || v.Version != 1 {
+		return AWSCredentials{}, errors.New("providertoken: aws_sts: not a credential_process document")
+	}
+	if v.AccessKeyID == "" || v.SecretAccessKey == "" {
+		return AWSCredentials{}, errors.New("providertoken: aws_sts: credential_process document is missing keys")
+	}
+	c := AWSCredentials{AccessKeyID: v.AccessKeyID, SecretAccessKey: v.SecretAccessKey, SessionToken: v.SessionToken}
+	if v.Expiration != "" {
+		exp, err := time.Parse(time.RFC3339, v.Expiration)
+		if err != nil {
+			return AWSCredentials{}, errors.New("providertoken: aws_sts: credential_process document has an invalid expiration")
+		}
+		c.Expiration = exp.UTC()
+	}
+	return c, nil
+}
+
 // AWSSTSConfig configures AssumeRole against real AWS STS or Citadel's own
 // STS endpoint.
 type AWSSTSConfig struct {

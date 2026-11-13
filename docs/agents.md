@@ -35,8 +35,11 @@ identity, grants, and the kill switch. Connecting MCP clients is in
   | `http_header` | Injected as `<headerName>: <headerPrefix><value>` (default `Authorization: Bearer ...`) |
   | `http_basic` | The secret is JSON `{"username","password"}`, sent as HTTP basic auth |
   | `http_query` | Injected as the query parameter `queryParam` |
-  | `login` | JSON `{"username","password","totpSeed"?,"url"}` for browser agents (2.4) |
+  | `login` | JSON `{"username","password","totpSeed"?}` for browser agents, with the pages it may be used on (`login.urlPatterns`); see [Logins for browser agents](#logins-for-browser-agents) |
   | `raw` | An opaque value, only usable through reveal |
+  | `aws_sts` | Temporary AWS credentials minted with AssumeRole; see [Minted credentials](#minted-credentials) |
+  | `github_app` | A GitHub App installation token, minted on use |
+  | `oauth2_client_credentials` | An OAuth 2.0 access token from a token endpoint, minted on use |
 
   HTTP kinds need `allowedHosts` (exact hosts or `*.example.com`, with an
   optional `:port`); `allowedMethods` default to `GET`; `allowedPathPrefixes`
@@ -176,7 +179,17 @@ base64 encoded.
 | `http_query` | The query parameter `<queryParam>=<value>`, replacing any the agent sent. |
 
 `login` and `raw` credentials can't be brokered (`kind_not_brokerable`); they
-are only usable through reveal.
+are only usable through reveal (and `login` through `get_login` and
+`get_totp_code`).
+
+Minted credentials are injected as the token they mint (see
+[Minted credentials](#minted-credentials)):
+
+| Kind | On the wire |
+| --- | --- |
+| `github_app` | `Authorization: Bearer <installation token>`. |
+| `oauth2_client_credentials` | `Authorization: Bearer <access token>`, or `oauth2.headerName: oauth2.headerPrefix<token>`. |
+| `aws_sts` | The request is signed with AWS Signature Version 4 using the temporary credentials, for `awsSts.signingService` in `awsSts.signingRegion` (default `region`, then `us-east-1`). The agent's `X-Amz-Date`, `X-Amz-Security-Token` and `X-Amz-Content-Sha256` headers are dropped; other `X-Amz-*` headers (such as `X-Amz-Target`) are signed. Without a `signingService` the credential is reveal-only. |
 
 ### What the broker refuses
 
@@ -252,14 +265,163 @@ Authorization: Bearer cagt_...
 ```
 
 returns `{"credential": "deploy-key", "kind": "raw", "value": "..."}`, only
-when the agent's grant explicitly includes `reveal`. For `http_basic` and
-`login` credentials the value is the stored JSON document. The response is
+when the agent's grant explicitly includes `reveal`. For `http_basic`
+credentials the value is the stored JSON document; for `login` credentials
+JSON `{"username", "password"}` (the TOTP seed is never revealed). Minted
+credentials return the short-lived token with `expiresAt`, never the source
+material (for `aws_sts`, an AWS CLI `credential_process` JSON document). The response is
 never cached, and the disclosure is written to the audit log before the
 value is returned: if the audit log can't be written, the value is withheld.
 Prefer brokered use whenever the agent only needs to call an API.
 
 A reveal made under a lease also returns `leaseId` and `leaseExpiresAt`;
 treat the value as valid only until then.
+
+## Logins for browser agents
+
+A `login` credential holds a website login for an agent that drives a
+browser: its secret is JSON `{"username", "password", "totpSeed"?}` and its
+profile lists the pages it may be used on:
+
+```json
+{ "name": "crm-login", "project": "ops", "env": "prod", "key": "CRM_LOGIN", "kind": "login",
+  "login": { "urlPatterns": ["https://crm.example.com/login", "https://*.example.org"] } }
+```
+
+A URL pattern is `https://host[:port][/path]`. The host is exact or a
+`*.example.com` wildcard (which doesn't match `example.com` itself), the
+port must match (443 when none is given), and the path matches by whole
+segments (`/login` allows `/login` and `/login/sso`, not `/loginx`).
+
+- **`POST /v1/agent/login`** (MCP `get_login`) `{"credential", "url"}`
+  returns `{"credential", "username", "password", "urlPattern"}`. It needs a
+  grant with `reveal`, and `url` (the page the agent is about to fill in)
+  must match a pattern (`url_not_allowed` otherwise). Filling the page is the
+  agent browser's job: Citadel never drives a browser.
+- **`POST /v1/agent/totp`** (MCP `get_totp_code`) `{"credential"}` returns
+  `{"credential", "code", "expiresAt", "secondsRemaining", "digits",
+  "period", "algorithm"}`. It needs a grant with `totp`. The seed never
+  leaves Citadel.
+
+Both are audited (`citadel.AgentGetLogin` with the page's host and path,
+never its query; `citadel.AgentTOTP`) before the value is returned, and
+answered with `Cache-Control: no-store`.
+
+**TOTP seeds.** `totpSeed` is an `otpauth://totp/...` URI (as in the QR code
+a site shows) or a bare base32 seed, for which the profile's
+`login.totpAlgorithm` (`SHA256` or `SHA512`), `totpDigits` (6–8) and
+`totpPeriod` (seconds) apply. Codes follow RFC 6238.
+
+> **SHA-1 seeds are refused.** Citadel runs Go's FIPS 140-3 module, in
+> which HMAC-SHA-1 is not an approved algorithm, so it can't compute codes
+> for SHA-1 seeds. That is the otpauth default (a URI without `algorithm=`)
+> and what most sites use. Re-enrol the site's authenticator with SHA-256 or
+> SHA-512 if it offers that. Citadel refuses SHA-1 seeds when you store them
+> (`totp_sha1_unsupported`) and explains why if one was stored directly
+> (`get_totp_code` answers `409 totp_sha1_unsupported`). Seeds shorter than
+> 112 bits are refused for the same reason.
+
+**In the console**, the secret's **Agent access** tab shows a login's fields:
+username, password and TOTP seed. The seed is write-only (you can replace or
+remove it, never read it back), and editors who may reveal values see a live
+preview of the current code. **Add login** on the Agents page creates the
+secret and its login credential in one step.
+
+The console endpoints are `GET /v1/agents/credentials/login?name=[&code=true]`
+(username, whether a password and seed are set, and with `code=true` the
+current code; audited as `citadel.ReadAgentLogin`) and
+`POST /v1/agents/credentials/login` `{"name", "username"?, "password"?,
+"totpSeed"?, "clearTotpSeed"?}` (a new version of the secret; audited as
+`citadel.PutAgentLogin`).
+
+## Minted credentials
+
+Instead of handing out a long-lived secret, a credential can be **minted on
+use**: the secret holds the long-lived source material, the profile says how
+to mint a short-lived token from it, and agents only ever use or receive the
+token.
+
+| Kind | Secret (source material) | Profile (`kind`'s member) |
+| --- | --- | --- |
+| `aws_sts` | JSON `{"accessKeyId", "secretAccessKey", "sessionToken"?}` | `awsSts`: `roleArn` (required), `endpoint` (default AWS's global STS; Citadel's own STS works too), `region`, `externalId`, `sessionName`, `sessionPolicy`, `durationSeconds` (900–43200, default 3600), `signingService`, `signingRegion` |
+| `github_app` | The App's PEM private key (or JSON `{"privateKey"}`) | `githubApp`: `appId`, `installationId` (required), `baseUrl` (GitHub Enterprise Server: `https://HOST/api/v3`), default `repositories` and `permissions` |
+| `oauth2_client_credentials` | The client secret, or JSON `{"clientId", "clientSecret"}` | `oauth2`: `tokenUrl` (required), `clientId`, `clientAuth` (`basic`, the default, or `post`), `scopes`, `audience`, `resource`, `headerName`, `headerPrefix` |
+
+```json
+{ "name": "gh-deploy", "project": "ci", "env": "prod", "key": "GH_APP_KEY", "kind": "github_app",
+  "allowedHosts": ["api.github.com"], "allowedMethods": ["GET", "POST"],
+  "githubApp": { "appId": "123456", "installationId": 7890123,
+                 "repositories": ["api", "web"], "permissions": { "contents": "write", "pull_requests": "write" } } }
+```
+
+- **Brokered use** (`use`): Citadel mints (or reuses) a token and injects it
+  (see [How the credential is injected](#how-the-credential-is-injected)).
+  The usual host, method and path rules apply.
+- **Reveal** (`reveal`): returns the token and its `expiresAt`.
+- **Caching.** Tokens are cached per credential, source secret version and
+  effective grant scope until a minute before they expire, and concurrent
+  requests share one mint. Changing the profile or the secret takes effect
+  at once.
+- **Outbound calls** to STS, GitHub and token endpoints follow the broker's
+  rules: https only (http only with `allowHttp`), no redirects, a timeout,
+  and the resolved address is checked when connecting, so they can't reach
+  loopback, link-local, private or metadata addresses unless the credential's
+  `allowedCidrs` include them.
+- **Errors.** A provider that refuses to issue a token gives
+  `502 token_unavailable`, with its HTTP status and (validated) error code in
+  the message; never the response body.
+
+**Grant scopes.** A grant can narrow what its tokens may do with `scope`:
+
+| Kind | `scope` |
+| --- | --- |
+| `github_app` | `repositories` (a subset of the credential's, when it lists any) and `permissions` (only the credential's permissions, at the same or a lower level). When the credential has no default repositories or permissions, every grant must set one of them: Citadel never mints installation-wide tokens. |
+| `aws_sts` | `sessionPolicy`, an inline session policy, only when the credential has none (AWS can't intersect two). |
+| `oauth2_client_credentials` | `scopes`, a subset of the credential's scopes when it lists any. |
+
+```json
+{ "agentId": "agt_...", "credential": "gh-deploy", "actions": ["use"],
+  "scope": { "repositories": ["api"], "permissions": { "contents": "read" } } }
+```
+
+Changing a credential so that an existing grant's scope no longer fits is
+refused (`409 grants_conflict`). A use made under an approval lease with no
+grant uses the credential's defaults.
+
+## Anomaly alerts
+
+Citadel learns what each agent usually does from its last 14 days of
+activity in the audit log: the hosts it reaches, the hours of the day (UTC)
+it works and how many uses it makes in an hour. Every brokered request,
+reveal, TOTP code and login, and every refusal, is checked against that
+baseline (in memory on each replica, refreshed hourly):
+
+| Kind | When |
+| --- | --- |
+| `new_host` | A host the agent hasn't reached in its baseline. |
+| `off_hours` | Use in an hour of the day the agent hasn't worked in. |
+| `rate_spike` | More than 5 times its usual hourly rate, and more than 20 uses in the last hour. |
+| `repeated_denials` | 10 or more refused requests in 10 minutes. |
+
+`new_host` and `off_hours` wait until the baseline is established (at least
+20 uses over more than two days), so a new agent doesn't alert on everything.
+Each kind is raised at most once per agent per hour (across replicas). An
+anomaly is listed in the agent's **Activity** tab, audited as
+`citadel.AgentAnomaly`, and sent to the notification channels subscribed to
+`agent.anomaly` (see [notifications.md](notifications.md)).
+
+Per agent, on the agent's **Overview** (or
+`POST /v1/agents/anomaly-settings {"agentId", "alertsEnabled", "autoSuspend"}`):
+
+- **Alerts** (on by default): turn the notifications off; anomalies are
+  still recorded.
+- **Auto-suspend** (off by default): suspend the agent on an anomaly. The
+  suspension is like a console one (audited as `citadel.SuspendAgent` with
+  the actor `anomaly-detector`, leases ended, `agent.suspended` sent); resume
+  the agent once you've looked.
+
+`GET /v1/agents/anomalies?agentId=` lists the anomalies, the settings and the
+current baseline.
 
 ## Approvals and leases
 
@@ -414,6 +576,10 @@ Actions: `citadel.CreateAgent`, `UpdateAgent`, `DeleteAgent`, `SuspendAgent`,
 `AgentWhoAmI`, `AgentListCredentials`, and `AgentAuth` (refused requests of
 an identified agent, with the reason as the error type).
 
+Logins, minted credentials and anomalies (2.4): `citadel.AgentTOTP`,
+`AgentGetLogin`, `ReadAgentLogin`, `PutAgentLogin`, `AgentAnomaly` (actor
+`anomaly-detector`) and `PutAgentAnomalySettings`.
+
 Approvals and leases: `citadel.AgentRequestAccess` (a request opened or asked
 again, by the agent or by a `requiresApproval` grant), `AgentGetAccessRequest`,
 `AgentListLeases`, `ApproveAgentAccess` (with the lease, scope and actions),
@@ -427,6 +593,7 @@ revocation or the kill switch).
 | --- | --- |
 | `citadel.AgentHTTP` | Every brokered request, allowed or not: the agent, its owner and task ID (actor fields), the credential (`keyId`), and in `resource` the method, host, path without query string, upstream status, response and request bytes, redirects, `truncated`/`redacted`, and `via=api` or `via=mcp`. Denials carry the reason as the error type. |
 | `citadel.AgentReveal` | Every reveal, allowed or not. |
+| `citadel.AgentTOTP`, `citadel.AgentGetLogin` | Every TOTP code and login, allowed or not (`get_login`: the page's host and path, never its query). |
 | `citadel.AgentListCredentials` | The MCP `list_credentials` tool. |
 | `citadel.MCPInitialize`, `citadel.MCPEndSession` | An MCP session started (with the protocol version and client name) or ended. |
 
@@ -453,7 +620,10 @@ wraps the common calls (`CreateAgent`, `CreateAgentToken`,
 `RevokeAgentLease`, ...) and, configured with `AgentToken` (or
 `CITADEL_AGENT_TOKEN`), the Agent API (`AgentWhoAmI`, `AgentCredentials`,
 `AgentRequestAccess`, `AgentAccessRequest`, `WaitForAgentAccess`,
-`AgentLeases`). Approving and denying are console-only by design, so the SDK
+`AgentLeases`, `AgentTOTPCode`, `AgentGetLogin`, `AgentReveal`). For 2.4 it
+also has `SetAgentLogin`, `GetAgentLogin`, `ListAgentAnomalies` and
+`SetAgentAnomalySettings`, and the credential and grant inputs take the
+`Login`, `AWSSTS`, `GitHubApp`, `OAuth2` and `Scope` settings. Approving and denying are console-only by design, so the SDK
 doesn't do them.
 
 Access request and lease endpoints:

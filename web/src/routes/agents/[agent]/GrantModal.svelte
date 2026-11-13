@@ -8,7 +8,21 @@
   import { errorMessage } from '#lib/api.ts';
   import { confirm } from '#lib/stores/confirm.svelte.ts';
   import { toast } from '#lib/stores/toast.svelte.ts';
-  import { agentsApi, validateGrant, KIND_LABELS, WEEKDAYS, type AgentCredential, type AgentGrant, type GrantAction, type GrantInput } from '../api';
+  import {
+    agentsApi,
+    formatPermissions,
+    parsePermissions,
+    splitList,
+    validateGrant,
+    validateScope,
+    KIND_LABELS,
+    WEEKDAYS,
+    type AgentCredential,
+    type AgentGrant,
+    type GrantAction,
+    type GrantInput,
+    type GrantScope
+  } from '../api';
 
   let {
     open = $bindable(false),
@@ -42,6 +56,11 @@
   let leaseMinutes = $state(0);
   let saving = $state(false);
   let saveError = $state('');
+  // Scope of a minted credential's tokens (2.4).
+  let scopeRepos = $state('');
+  let scopePerms = $state('');
+  let scopePolicy = $state('');
+  let scopeScopes = $state('');
   const uid = Math.random().toString(36).slice(2, 8);
 
   const localTz = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC';
@@ -68,10 +87,25 @@
     maxUses = grant?.maxUsesPerHour ?? 0;
     requiresApproval = !!grant?.requiresApproval;
     leaseMinutes = grant?.leaseTtlSeconds ? Math.round(grant.leaseTtlSeconds / 60) : 0;
+    scopeRepos = (grant?.scope?.repositories ?? []).join('\n');
+    scopePerms = formatPermissions(grant?.scope?.permissions);
+    scopePolicy = grant?.scope?.sessionPolicy ?? '';
+    scopeScopes = (grant?.scope?.scopes ?? []).join(' ');
     saveError = '';
   });
 
-  const kind = $derived(credentials.find((c) => c.name === credential)?.kind);
+  const cred = $derived(credentials.find((c) => c.name === credential));
+  const kind = $derived(cred?.kind);
+  const permsParsed = $derived(parsePermissions(scopePerms));
+  const scope = $derived<GrantScope | undefined>(
+    kind === 'github_app'
+      ? { repositories: splitList(scopeRepos), permissions: permsParsed ?? {} }
+      : kind === 'aws_sts'
+        ? { sessionPolicy: scopePolicy.trim() }
+        : kind === 'oauth2_client_credentials'
+          ? { scopes: splitList(scopeScopes) }
+          : undefined
+  );
   const input = $derived<GrantInput>({
     agentId,
     credential,
@@ -81,9 +115,12 @@
     window: windowOn ? { start, end, days, timezone } : null,
     maxUsesPerHour: Number(maxUses) || 0,
     requiresApproval,
-    leaseTtlSeconds: Math.round((Number(leaseMinutes) || 0) * 60)
+    leaseTtlSeconds: Math.round((Number(leaseMinutes) || 0) * 60),
+    ...(scope ? { scope } : {})
   });
-  const formError = $derived(validateGrant(input, kind));
+  const formError = $derived(
+    validateGrant(input, kind) || (kind === 'github_app' && permsParsed === null ? 'Permissions: one name=read|write|admin per line.' : validateScope(scope, cred))
+  );
 
   function toggle(a: GrantAction, on: boolean) {
     actions = on ? [...new Set([...actions, a])] : actions.filter((x) => x !== a);
@@ -152,6 +189,35 @@
         </label>
       {/if}
     </fieldset>
+
+    {#if kind === 'github_app'}
+      <fieldset class="field plain">
+        <legend class="field-label">Token restricted to</legend>
+        <div class="row2">
+          <div class="field">
+            <label class="field-label" for="gr-repos-{uid}">Repositories</label>
+            <textarea id="gr-repos-{uid}" class="input mono" rows="2" bind:value={scopeRepos} spellcheck="false" placeholder={cred?.githubApp?.repositories?.join('\n') || 'api'}></textarea>
+          </div>
+          <div class="field">
+            <label class="field-label" for="gr-perms-{uid}">Permissions</label>
+            <textarea id="gr-perms-{uid}" class="input mono" rows="2" bind:value={scopePerms} spellcheck="false" placeholder="contents=read"></textarea>
+          </div>
+        </div>
+        <span class="field-hint">Empty means the credential's defaults{cred?.githubApp?.repositories?.length || Object.keys(cred?.githubApp?.permissions ?? {}).length ? '' : ' (it has none, so restrict the token here)'}.</span>
+      </fieldset>
+    {:else if kind === 'aws_sts' && !cred?.awsSts?.sessionPolicy}
+      <div class="field">
+        <label class="field-label" for="gr-pol-{uid}">Session policy <span class="subtle">(optional)</span></label>
+        <textarea id="gr-pol-{uid}" class="input mono" rows="3" bind:value={scopePolicy} spellcheck="false" placeholder={'{"Version":"2012-10-17","Statement":[…]}'}></textarea>
+        <span class="field-hint">Narrows what this agent's temporary AWS credentials may do.</span>
+      </div>
+    {:else if kind === 'oauth2_client_credentials'}
+      <div class="field">
+        <label class="field-label" for="gr-scopes-{uid}">Scopes <span class="subtle">(optional)</span></label>
+        <input id="gr-scopes-{uid}" class="input mono" bind:value={scopeScopes} spellcheck="false" placeholder={cred?.oauth2?.scopes?.join(' ') || 'read'} />
+        <span class="field-hint">A subset of the credential's scopes; empty means all of them.</span>
+      </div>
+    {/if}
 
     <div class="row2">
       <div class="field">

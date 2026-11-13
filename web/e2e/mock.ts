@@ -343,8 +343,33 @@ const agentCredentials = [
     name: 'db-password', secretName: 'payments/dev/db/DB_PASSWORD', project: 'payments', env: 'dev', path: 'db', key: 'DB_PASSWORD', kind: 'raw',
     description: '', allowedHosts: [], allowedMethods: [], allowedPathPrefixes: [], allowHttp: false, allowedCidrs: [], createdAt: ago(5 * DAY), updatedAt: ago(5 * DAY),
     grants: [{ grantId: 'agr_bbbbbbbbbbbbbbbb', agentId: AGENT_ID, agentName: 'claude-code', actions: ['reveal'] }]
+  },
+  // 2.4: a website login and a GitHub App credential minted on use.
+  {
+    name: 'shop-login', secretName: 'payments/dev/API_KEY', project: 'payments', env: 'dev', key: 'API_KEY', kind: 'login',
+    description: 'Shop admin login', allowedHosts: [], allowedMethods: [], allowedPathPrefixes: [], allowHttp: false, allowedCidrs: [],
+    createdAt: ago(3 * DAY), updatedAt: ago(3 * DAY), grants: [], login: { urlPatterns: ['https://shop.example.com/admin'] }
+  },
+  {
+    name: 'gh-app', secretName: 'payments/dev/GH_APP_KEY', project: 'payments', env: 'dev', key: 'GH_APP_KEY', kind: 'github_app',
+    description: '', allowedHosts: ['api.github.com'], allowedMethods: ['GET'], allowedPathPrefixes: [], allowHttp: false, allowedCidrs: [],
+    createdAt: ago(2 * DAY), updatedAt: ago(2 * DAY), grants: [], githubApp: { appId: '12345', installationId: 678 }
   }
 ];
+export const TOTP_CODE = '492039';
+const loginState = (code: boolean) => ({
+  name: 'shop-login', username: 'admin@shop.example.com', hasPassword: true, hasTotpSeed: true, totpStatus: 'ok',
+  ...(code ? { totp: { credential: 'shop-login', code: TOTP_CODE, expiresAt: new Date(Date.now() + 20_000).toISOString(), secondsRemaining: 20, digits: 6, period: 30, algorithm: 'SHA256' } } : {})
+});
+const agentAnomalies = {
+  anomalies: [
+    { anomalyId: 'aan_aaaaaaaaaaaaaaaa', kind: 'new_host', detail: 'first use of host exfil.example.net', detectedAt: ago(2 * 3_600_000), suspended: false },
+    { anomalyId: 'aan_bbbbbbbbbbbbbbbb', kind: 'repeated_denials', detail: '10 refused requests in 10 minutes', detectedAt: ago(DAY), suspended: true }
+  ],
+  settings: { alertsEnabled: true, autoSuspend: false },
+  baseline: { established: true, events: 412, hosts: ['api.stripe.com'], activeHours: [9, 10, 11, 12, 13, 14, 15, 16], meanPerHour: 6.2, windowDays: 14, rateSpikeMin: 20, rateSpikeFactor: 5, denialsWindowMinutes: 10, denialsThreshold: 10 },
+  canManage: true
+};
 const agentGrants = [
   {
     grantId: 'agr_aaaaaaaaaaaaaaaa', agentId: AGENT_ID, agentName: 'claude-code', credential: 'stripe-api', actions: ['use'],
@@ -603,6 +628,8 @@ const GET: Record<string, Handler> = {
     canEdit: true
   }),
   '/v1/agents/settings': () => agentSettings,
+  '/v1/agents/credentials/login': (q) => loginState(q.get('code') === 'true'),
+  '/v1/agents/anomalies': () => agentAnomalies,
   '/v1/agents/access-requests': (q) => ({ requests: accessRequestsFor(q) }),
   '/v1/agents/leases': (q) => ({
     leases: agentLeases.filter((l) => (!q.get('agentId') || l.agentId === q.get('agentId')) && (q.get('active') === 'false' || l.status === 'active'))
@@ -758,6 +785,8 @@ const WRITE: Record<string, Handler> = {
   'POST /v1/agents/credentials': (_, b) => ({ ...agentCredentials[0], ...b, grants: [] }),
   'POST /v1/agents/credentials/update': (_, b) => ({ ...agentCredentials[0], ...b }),
   'DELETE /v1/agents/credentials': () => ({ deleted: true }),
+  'POST /v1/agents/credentials/login': () => loginState(false),
+  'POST /v1/agents/anomaly-settings': (_, b) => ({ alertsEnabled: b.alertsEnabled, autoSuspend: b.autoSuspend, updatedAt: new Date().toISOString(), updatedBy: me.username }),
   'POST /v1/agents/access-requests/approve': (_, b) => ({
     request: decided(b, 'approved'),
     lease: { ...agentLeases[0], leaseId: 'als_newnewnewnewnewne', scope: b.scope, usesLeft: b.scope === 'once' ? 1 : null, useCount: 0, requestId: b.requestId }
@@ -1032,6 +1061,10 @@ export class MockApi {
           ? { status: 403, json: { error: 'invalid_mfa_code', message: 'the MFA code is incorrect' } }
           : { status: 403, json: { error: 'mfa_required', message: 'your organization requires a current MFA code to approve agent access' } }
       );
+    }
+    // A SHA-1 TOTP seed (no algorithm= in the otpauth URI) is refused.
+    if (method === 'POST' && path === '/v1/agents/credentials/login' && body.totpSeed && !/algorithm=SHA(256|512)/i.test(String(body.totpSeed))) {
+      return route.fulfill({ status: 400, json: { error: 'totp_sha1_unsupported', message: 'this TOTP seed uses HMAC-SHA-1, which Citadel cannot compute: it runs in FIPS 140-3 mode' } });
     }
     if (method === 'GET' && RAW[path]) {
       const r = RAW[path](url.searchParams);

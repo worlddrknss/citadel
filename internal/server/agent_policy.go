@@ -69,6 +69,9 @@ type agentSecretRef struct {
 	// SecretName is the backing Secrets Manager name.
 	SecretName string
 	ARN        string
+	// VersionID is the current version (minted tokens are cached per
+	// version, so a new source secret takes effect at once).
+	VersionID string
 	// Project, Env, Path and Key are set for secrets in the native
 	// hierarchy.
 	Project, Env, Path, Key string
@@ -259,7 +262,7 @@ func (s *Server) agentSecretRef(ctx context.Context, accountID, secretName strin
 	if meta.DeletedDate != nil {
 		return agentSecretRef{}, store.ErrSecretPendingDeletion
 	}
-	ref := agentSecretRef{SecretName: meta.Name, ARN: meta.ARN}
+	ref := agentSecretRef{SecretName: meta.Name, ARN: meta.ARN, VersionID: meta.CurrentVersionID}
 	if pi, ok := parseSecretName(meta.Name); ok {
 		ref.Project, ref.Env, ref.Path, ref.Key = pi.Project, pi.Env, strings.Join(pi.Folder, "/"), pi.Key
 	}

@@ -302,6 +302,7 @@ func (s *Server) recordAudit(ctx context.Context, event store.AuditEvent) {
 		event.CorrelationID = correlation
 	}
 	event = s.completeAudit(ctx, event)
+	s.observeAgentEvent(event)
 	err := s.store.RecordAudit(ctx, event)
 	if err == nil {
 		return

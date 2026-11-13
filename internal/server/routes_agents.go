@@ -221,6 +221,9 @@ type agentGrantJSON struct {
 	// Reason says why.
 	UsableNow bool   `json:"usableNow"`
 	Reason    string `json:"reason,omitempty"`
+
+	// Scope narrows minted tokens (2.4); absent when it narrows nothing.
+	Scope *store.AgentGrantScope `json:"scope,omitempty"`
 }
 
 func agentGrantOut(g store.AgentGrant, now time.Time) agentGrantJSON {
@@ -241,6 +244,10 @@ func agentGrantOut(g store.AgentGrant, now time.Time) agentGrantJSON {
 	}
 	out.Reason = agentGrantStatus(g, now)
 	out.UsableNow = out.Reason == ""
+	if !g.Scope.IsZero() {
+		sc := g.Scope.Clone()
+		out.Scope = &sc
+	}
 	return out
 }
 
@@ -273,6 +280,9 @@ type agentCredentialJSON struct {
 	UpdatedAt           string                    `json:"updatedAt"`
 	UpdatedBy           string                    `json:"updatedBy,omitempty"`
 	Grants              []agentCredentialGrantRef `json:"grants"`
+
+	// The kind-specific settings (2.4): login, awsSts, githubApp, oauth2.
+	store.AgentCredentialConfig
 }
 
 func agentCredentialOut(c store.AgentCredential) agentCredentialJSON {
@@ -287,7 +297,7 @@ func agentCredentialOut(c store.AgentCredential) agentCredentialJSON {
 		AllowedMethods: nz(c.AllowedMethods), AllowedPathPrefixes: nz(c.AllowedPathPrefixes), HeaderName: c.HeaderName,
 		HeaderPrefix: c.HeaderPrefix, QueryParam: c.QueryParam, AllowHTTP: c.AllowHTTP, AllowedCIDRs: nz(c.AllowedCIDRs),
 		CreatedAt: fmtTime(c.CreatedAt), CreatedBy: c.CreatedBy, UpdatedAt: fmtTime(c.UpdatedAt), UpdatedBy: c.UpdatedBy,
-		Grants: []agentCredentialGrantRef{},
+		Grants: []agentCredentialGrantRef{}, AgentCredentialConfig: c.Config.Clone(),
 	}
 	if pi, ok := parseSecretName(c.SecretName); ok {
 		out.Project, out.Env, out.Path, out.Key = pi.Project, pi.Env, strings.Join(pi.Folder, "/"), pi.Key
@@ -979,6 +989,9 @@ type agentGrantRequest struct {
 	// RequiresApproval and LeaseTTLSeconds (2.3); omitted means not set.
 	RequiresApproval *bool `json:"requiresApproval"`
 	LeaseTTLSeconds  *int  `json:"leaseTtlSeconds"`
+
+	// Scope narrows minted tokens (2.4).
+	Scope *store.AgentGrantScope `json:"scope"`
 }
 
 // validateAgentGrant checks in against cred and fills g.
@@ -1079,7 +1092,7 @@ func validateAgentGrant(in agentGrantRequest, cred store.AgentCredential, g *sto
 		}
 		g.LeaseTTLSeconds = &ttl
 	}
-	return ""
+	return validateAgentGrantScope(in.Scope, cred, g)
 }
 
 func (s *Server) handleV1PutAgentGrant(w http.ResponseWriter, r *http.Request) {
@@ -1186,6 +1199,9 @@ type agentCredentialRequest struct {
 	QueryParam          string   `json:"queryParam"`
 	AllowHTTP           bool     `json:"allowHttp"`
 	AllowedCIDRs        []string `json:"allowedCidrs"`
+
+	// The kind-specific settings (2.4): login, awsSts, githubApp, oauth2.
+	store.AgentCredentialConfig
 }
 
 func isHTTPKind(kind string) bool {
@@ -1201,9 +1217,10 @@ func isHTTPKind(kind string) bool {
 func validateAgentCredential(in agentCredentialRequest, c *store.AgentCredential) string {
 	c.Kind = strings.TrimSpace(in.Kind)
 	switch c.Kind {
-	case store.AgentCredentialHTTPHeader, store.AgentCredentialHTTPBasic, store.AgentCredentialHTTPQuery, store.AgentCredentialLogin, store.AgentCredentialRaw:
+	case store.AgentCredentialHTTPHeader, store.AgentCredentialHTTPBasic, store.AgentCredentialHTTPQuery, store.AgentCredentialLogin, store.AgentCredentialRaw,
+		store.AgentCredentialAWSSTS, store.AgentCredentialGitHubApp, store.AgentCredentialOAuth2:
 	default:
-		return "kind must be http_header, http_basic, http_query, login or raw"
+		return "kind must be http_header, http_basic, http_query, login, raw, aws_sts, github_app or oauth2_client_credentials"
 	}
 	c.Description = strings.TrimSpace(in.Description)
 	if c.Description != "" && !printable(c.Description, maxAgentDescriptionLen) {
@@ -1241,7 +1258,7 @@ func validateAgentCredential(in agentCredentialRequest, c *store.AgentCredential
 			c.AllowedMethods = append(c.AllowedMethods, m)
 		}
 	}
-	if isHTTPKind(c.Kind) && len(c.AllowedMethods) == 0 {
+	if (isHTTPKind(c.Kind) || store.IsMintedAgentKind(c.Kind)) && len(c.AllowedMethods) == 0 {
 		c.AllowedMethods = []string{"GET"}
 	}
 	c.AllowedPathPrefixes = nil
@@ -1281,7 +1298,7 @@ func validateAgentCredential(in agentCredentialRequest, c *store.AgentCredential
 			return "queryParam must be 1-64 letters, digits or ._~-"
 		}
 	}
-	c.AllowHTTP = in.AllowHTTP && isHTTPKind(c.Kind)
+	c.AllowHTTP = in.AllowHTTP && (isHTTPKind(c.Kind) || store.IsMintedAgentKind(c.Kind))
 	c.AllowedCIDRs = nil
 	if len(in.AllowedCIDRs) > maxAgentCIDRs {
 		return "at most 10 allowed CIDRs"
@@ -1299,7 +1316,7 @@ func validateAgentCredential(in agentCredentialRequest, c *store.AgentCredential
 			c.AllowedCIDRs = append(c.AllowedCIDRs, v)
 		}
 	}
-	return ""
+	return validateAgentCredentialConfig(in.AgentCredentialConfig, c)
 }
 
 // resolveCredentialSecret finds the backing secret named by in.
@@ -1466,17 +1483,21 @@ func (s *Server) handleV1UpdateAgentCredential(w http.ResponseWriter, r *http.Re
 		}
 		c.SecretName = name
 	}
-	// Changing the kind can invalidate existing grants' actions.
-	if c.Kind != cur.Kind {
-		if grants, err := s.store.ListAgentGrants(ctx, acct, ""); err == nil {
-			for _, g := range grants {
-				if g.Credential != c.Name {
-					continue
-				}
-				if (g.HasAction(store.AgentActionTOTP) && c.Kind != store.AgentCredentialLogin) || (g.HasAction(store.AgentActionUse) && c.Kind == store.AgentCredentialRaw) {
-					writeNativeError(w, http.StatusConflict, "grants_conflict", "existing grants use actions this kind doesn't support; change them first")
-					return
-				}
+	// Changing the kind can invalidate existing grants' actions, and
+	// changing a minted credential's settings their scopes.
+	if grants, err := s.store.ListAgentGrants(ctx, acct, ""); err == nil {
+		for _, g := range grants {
+			if g.Credential != c.Name {
+				continue
+			}
+			if c.Kind != cur.Kind && ((g.HasAction(store.AgentActionTOTP) && c.Kind != store.AgentCredentialLogin) || (g.HasAction(store.AgentActionUse) && c.Kind == store.AgentCredentialRaw)) {
+				writeNativeError(w, http.StatusConflict, "grants_conflict", "existing grants use actions this kind doesn't support; change them first")
+				return
+			}
+			scope := g.Scope.Clone()
+			if msg := checkAgentGrantScope(&scope, c); msg != "" {
+				writeNativeError(w, http.StatusConflict, "grants_conflict", "an existing grant's scope would no longer fit: "+msg)
+				return
 			}
 		}
 	}
@@ -1623,6 +1644,8 @@ type agentUsableCredentialJSON struct {
 	// secret behind the credential is gone; Reason says why.
 	Usable bool   `json:"usable"`
 	Reason string `json:"reason,omitempty"`
+	// URLPatterns are the pages a login may be used on (2.4).
+	URLPatterns []string `json:"urlPatterns,omitempty"`
 }
 
 // handleV1AgentCredentials lists the credentials the calling agent has
@@ -1649,7 +1672,7 @@ func (s *Server) handleV1AgentCredentials(w http.ResponseWriter, r *http.Request
 		item := agentUsableCredentialJSON{
 			Name: c.Name, Kind: c.Kind, Description: c.Description, AllowedHosts: j.AllowedHosts, AllowedMethods: j.AllowedMethods,
 			AllowedPathPrefixes: j.AllowedPathPrefixes, Actions: g.Actions, MaxUsesPerHour: g.MaxUsesPerHour, NotAfter: fmtTimePtr(g.NotAfter),
-			RequiresApproval: g.RequiresApproval != nil && *g.RequiresApproval,
+			RequiresApproval: g.RequiresApproval != nil && *g.RequiresApproval, URLPatterns: loginURLPatterns(c),
 		}
 		item.Reason = agentGrantStatus(g, now)
 		if item.Reason == "" {

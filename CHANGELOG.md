@@ -6,6 +6,36 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Login credentials for browser agents (2.4): `login` usage profiles list
+  the pages a login may be used on (`login.urlPatterns`). Agents get the
+  current TOTP code with a `totp` grant (`POST /v1/agent/totp`, MCP
+  `get_totp_code`; never the seed) and the username and password for a
+  matching page with `reveal` (`POST /v1/agent/login`, MCP `get_login`).
+  SHA-1 TOTP seeds are refused with an explanation (FIPS 140-3 mode). The
+  secret drawer's Agent access tab edits a login's fields (the seed is
+  write-only, with a live code preview), and **Add login** on the Agents page
+  creates the secret and its credential in one step. Revealing a login now
+  returns only `{username, password}`.
+- Minted credentials (2.4): `aws_sts` (AssumeRole; brokered requests are
+  SigV4-signed server-side), `github_app` (installation tokens) and
+  `oauth2_client_credentials` usage profiles keep the long-lived material in
+  the secret and mint short-lived tokens on use, cached per credential and
+  grant scope until shortly before they expire. Reveal returns the token with
+  `expiresAt`, never the source. Grants narrow tokens with `scope` (GitHub
+  repositories and permissions, an AWS session policy, OAuth scopes); GitHub
+  grants must be restricted when the credential isn't.
+- Agent anomaly alerts (2.4): per-agent baselines from 14 days of activity;
+  `agent.anomaly` notifications on a new host, off-hours use, a rate spike or
+  repeated denials (once per kind per agent per hour), listed on the agent's
+  Activity tab; per-agent alert and auto-suspend settings
+  (`GET /v1/agents/anomalies`, `POST /v1/agents/anomaly-settings`).
+- OpenAPI, regenerated TypeScript types and Go SDK methods (`AgentTOTPCode`,
+  `AgentGetLogin`, `AgentReveal`, `SetAgentLogin`, `GetAgentLogin`,
+  `ListAgentAnomalies`, `SetAgentAnomalySettings`). Migration 1500 (two
+  catalog-only columns, two new tables).
+
 ## [2.3.0] - 2026-11-13
 
 Just-in-time access for AI agents: human approvals, short-lived leases and

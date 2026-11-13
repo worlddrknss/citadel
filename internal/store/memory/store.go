@@ -47,6 +47,8 @@ type Store struct {
 	parity memPKIParity
 	agents *memAgents
 	notif  *memNotifications
+
+	anomalies *memAnomalies
 }
 
 var _ store.Store = (*Store)(nil)
