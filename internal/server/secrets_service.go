@@ -89,9 +89,9 @@ type itemSummary struct {
 	RotationDue bool
 }
 
-// rotationDue reports whether a secret's rotation schedule has come due.
-// Citadel cannot run rotation Lambdas, so a schedule is metadata only: when
-// it is due the console shows it and an operator rotates the value.
+// rotationDue reports whether a secret's rotation window has opened. A
+// built-in rotator rotates within a minute; a Lambda schedule is a prompt
+// for an operator.
 func rotationDue(meta store.SecretMetadataRecord, now time.Time) bool {
 	return meta.RotationEnabled && meta.DeletedDate == nil && meta.NextRotationDate != nil && !meta.NextRotationDate.After(now)
 }

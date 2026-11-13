@@ -52,6 +52,8 @@ type describeSecretResponse struct {
 	RotationEnabled    bool                `json:"RotationEnabled,omitempty"`
 	RotationLambdaARN  string              `json:"RotationLambdaARN,omitempty"`
 	NextRotationDate   *store.AWSTimestamp `json:"NextRotationDate,omitempty"`
+	LastRotatedDate    *store.AWSTimestamp `json:"LastRotatedDate,omitempty"`
+	RotationRules      *awsRotationRules   `json:"RotationRules,omitempty"`
 	VersionIDsToStages map[string][]string `json:"VersionIdsToStages"`
 	Tags               []tagEntry          `json:"Tags,omitempty"`
 }
@@ -274,7 +276,10 @@ func (s *Server) handleDescribeSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
+	rules, lastRotated := s.awsRotationFields(r.Context(), meta)
 	writeJSON(w, http.StatusOK, describeSecretResponse{
+		LastRotatedDate:    lastRotated,
+		RotationRules:      rules,
 		ARN:                meta.ARN,
 		Name:               meta.Name,
 		Description:        meta.Description,

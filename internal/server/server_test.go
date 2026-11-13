@@ -652,51 +652,49 @@ func TestSecretsManagerLifecycle(t *testing.T) {
 		t.Fatalf("expected version list response: %#v", versionListResp)
 	}
 
+	before := callKMS(t, mux, "secretsmanager.GetSecretValue", map[string]any{"SecretId": "prod/app/database"})
+	oldVersionID, _ := before["VersionId"].(string)
 	rotateResp := callKMS(t, mux, "secretsmanager.RotateSecret", map[string]any{
-		"SecretId":               "prod/app/database",
-		"AutomaticallyAfterDays": 14,
-		"RotateImmediately":      true,
+		"SecretId":          "prod/app/database",
+		"RotationLambdaARN": "arn:citadel:rotator:us-west-2:000000000000:random",
+		"RotationRules":     map[string]any{"AutomaticallyAfterDays": 14},
+		"RotateImmediately": true,
 	})
-	pendingVersionID, _ := rotateResp["VersionId"].(string)
-	if pendingVersionID == "" {
-		t.Fatalf("expected pending rotation version id: %#v", rotateResp)
+	newVersionID, _ := rotateResp["VersionId"].(string)
+	if newVersionID == "" {
+		t.Fatalf("expected the rotation's version id: %#v", rotateResp)
 	}
-
-	versionListResp = callKMS(t, mux, "secretsmanager.ListSecretVersionIds", map[string]any{"SecretId": "prod/app/database"})
-	versions, ok = versionListResp["Versions"].([]any)
-	if !ok {
-		t.Fatalf("expected versions after rotate: %#v", versionListResp)
-	}
-	foundPending := false
-	for _, raw := range versions {
-		entry, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		if entry["VersionId"] == pendingVersionID {
-			stages, _ := entry["VersionStages"].([]any)
-			for _, stage := range stages {
-				if stage == store.PendingVersionStage {
-					foundPending = true
-				}
+	// The built-in random rotator runs in the background.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		cur := callKMS(t, mux, "secretsmanager.GetSecretValue", map[string]any{"SecretId": "prod/app/database"})
+		if cur["VersionId"] == newVersionID {
+			if v, _ := cur["SecretString"].(string); v == `{"password":"two"}` || len(v) != 32 {
+				t.Fatalf("rotated value = %q", v)
 			}
+			break
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("rotation did not finish: %#v", cur)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	if !foundPending {
-		t.Fatalf("expected pending stage after rotation: %#v", versionListResp)
+	prevResp := callKMS(t, mux, "secretsmanager.GetSecretValue", map[string]any{"SecretId": "prod/app/database", "VersionStage": store.PreviousVersionStage})
+	if prevResp["VersionId"] != oldVersionID {
+		t.Fatalf("AWSPREVIOUS = %v, want %s", prevResp["VersionId"], oldVersionID)
 	}
-
+	// Roll back with UpdateSecretVersionStage.
 	callKMS(t, mux, "secretsmanager.UpdateSecretVersionStage", map[string]any{
 		"SecretId":        "prod/app/database",
 		"VersionStage":    store.CurrentVersionStage,
-		"MoveToVersionId": pendingVersionID,
+		"MoveToVersionId": oldVersionID,
 	})
 	currentResp = callKMS(t, mux, "secretsmanager.GetSecretValue", map[string]any{
 		"SecretId":     "prod/app/database",
 		"VersionStage": store.CurrentVersionStage,
 	})
-	if got, _ := currentResp["VersionId"].(string); got != pendingVersionID {
-		t.Fatalf("expected promoted current version id: %q want %q", got, pendingVersionID)
+	if got, _ := currentResp["VersionId"].(string); got != oldVersionID {
+		t.Fatalf("expected rolled-back current version id: %q want %q", got, oldVersionID)
 	}
 
 	callKMS(t, mux, "secretsmanager.CancelRotateSecret", map[string]any{"SecretId": "prod/app/database"})
