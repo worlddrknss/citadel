@@ -11,6 +11,13 @@ All notable changes to Citadel are documented here. The format follows
 - Images are published for `linux/arm64` as well as `linux/amd64`, built by
   cross-compiling (both are FIPS builds).
 
+### Fixed
+
+- The Helm chart's `appVersion` (the default image tag) was still 2.0.0; it
+  is now 2.0.2. The release workflow fails before building an image when
+  `Chart.yaml` `appVersion` doesn't match the tag being released
+  (`scripts/check-chart-version.sh`).
+
 ## [2.0.2]
 
 ### Changed
