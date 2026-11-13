@@ -46,6 +46,7 @@ type Store interface {
 	WriteAheadStore
 	PKIParityStore
 	PKILifecycleStore
+	AgentStore
 }
 
 // KeyStore persists KMS keys, aliases, key policies and grants.

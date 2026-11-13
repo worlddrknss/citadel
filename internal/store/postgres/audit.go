@@ -139,12 +139,12 @@ ON CONFLICT (account_id) DO NOTHING`, event.AccountID); err != nil {
 	if err := tx.QueryRowContext(ctx, `
 INSERT INTO kms_audit_events (account_id, chain_seq, hash_version, action, key_id, result, error_type,
 	actor, actor_type, actor_display_name, access_key_id, resource, source_ip, user_agent,
-	prev_hash, event_hash, created_at, correlation_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+	prev_hash, event_hash, created_at, correlation_id, agent_id, agent_owner, task_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 RETURNING id`,
 		rec.AccountID, rec.ChainSeq, rec.HashVersion, rec.Action, rec.KeyID, rec.Result, rec.ErrorType,
 		rec.Actor, rec.ActorType, rec.ActorDisplayName, rec.AccessKeyID, rec.Resource, rec.SourceIP, rec.UserAgent,
-		rec.PrevHash, rec.EventHash, rec.CreatedAt, rec.CorrelationID).Scan(&rec.ID); err != nil {
+		rec.PrevHash, rec.EventHash, rec.CreatedAt, rec.CorrelationID, rec.AgentID, rec.AgentOwner, rec.TaskID).Scan(&rec.ID); err != nil {
 		return fmt.Errorf("insert audit event: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -177,7 +177,8 @@ func scanAuditRecord(row rowScanner) (store.AuditRecord, error) {
 	var r store.AuditRecord
 	err := row.Scan(&r.ID, &r.AccountID, &r.ChainSeq, &r.HashVersion, &r.Action, &r.KeyID, &r.Result,
 		&r.ErrorType, &r.Actor, &r.ActorType, &r.ActorDisplayName, &r.AccessKeyID, &r.Resource,
-		&r.SourceIP, &r.UserAgent, &r.PrevHash, &r.EventHash, &r.CreatedAt, &r.CorrelationID)
+		&r.SourceIP, &r.UserAgent, &r.PrevHash, &r.EventHash, &r.CreatedAt, &r.CorrelationID,
+		&r.AgentID, &r.AgentOwner, &r.TaskID)
 	r.CreatedAt = r.CreatedAt.UTC()
 	return r, err
 }
@@ -229,6 +230,9 @@ func auditWhere(account string, q store.AuditQuery) (string, []any) {
 	}
 	if q.Correlation != "" {
 		add("correlation_id = ?", q.Correlation)
+	}
+	if q.Agent != "" {
+		add("agent_id = ?", q.Agent)
 	}
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
@@ -433,7 +437,8 @@ FOR UPDATE OF o SKIP LOCKED`, limit)
 func prefixColumns(p string) string {
 	cols := []string{"id", "account_id", "COALESCE(" + p + "chain_seq, 0)", "hash_version", "action", "COALESCE(" + p + "key_id, '')", "result",
 		"COALESCE(" + p + "error_type, '')", "COALESCE(" + p + "actor, '')", "actor_type", "actor_display_name", "access_key_id", "resource",
-		"source_ip", "user_agent", "COALESCE(" + p + "prev_hash, '')", "COALESCE(" + p + "event_hash, '')", "created_at", "COALESCE(" + p + "correlation_id, '')"}
+		"source_ip", "user_agent", "COALESCE(" + p + "prev_hash, '')", "COALESCE(" + p + "event_hash, '')", "created_at", "COALESCE(" + p + "correlation_id, '')",
+		"COALESCE(" + p + "agent_id, '')", "COALESCE(" + p + "agent_owner, '')", "COALESCE(" + p + "task_id, '')"}
 	for i, c := range cols {
 		if !strings.HasPrefix(c, "COALESCE") {
 			cols[i] = p + c

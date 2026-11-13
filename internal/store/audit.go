@@ -50,6 +50,7 @@ const (
 	AuditActorWebIdentity = "web-identity" // OIDC web identity token (STS)
 	AuditActorAnonymous   = "anonymous"    // unauthenticated endpoint
 	AuditActorSystem      = "system"       // background job
+	AuditActorAgent       = "agent"        // AI agent (agent token or federation)
 )
 
 // AuditHashVersion is the chain format new events are written with.
@@ -69,6 +70,13 @@ type AuditOrigin struct {
 	// CorrelationID links a write-ahead attempt (Result pending) to its
 	// outcome events. Empty for events written without an attempt.
 	CorrelationID string
+	// AgentID, AgentOwner and TaskID attribute an event to an AI agent:
+	// requests the agent made, and console changes to the agent. TaskID is
+	// the agent's own task or session ID (X-Citadel-Task-Id). Empty for
+	// events that do not involve an agent.
+	AgentID    string
+	AgentOwner string
+	TaskID     string
 }
 
 // AuditEvent is an event to append to the audit log.
@@ -139,6 +147,13 @@ func AuditMAC(key []byte, rec AuditRecord) string {
 		field("correlation")
 		field(rec.CorrelationID)
 	}
+	// Added in 2.2, likewise hashed only when set.
+	if rec.AgentID != "" || rec.AgentOwner != "" || rec.TaskID != "" {
+		field("agent")
+		field(rec.AgentID)
+		field(rec.AgentOwner)
+		field(rec.TaskID)
+	}
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -197,6 +212,9 @@ func SanitizeAuditEvent(ev AuditEvent) AuditEvent {
 	ev.SourceIP = truncateAuditField(ev.SourceIP, 64)
 	ev.UserAgent = truncateAuditField(ev.UserAgent, 512)
 	ev.CorrelationID = truncateAuditField(ev.CorrelationID, 64)
+	ev.AgentID = truncateAuditField(ev.AgentID, 64)
+	ev.AgentOwner = truncateAuditField(ev.AgentOwner, 128)
+	ev.TaskID = truncateAuditField(ev.TaskID, 128)
 	if ev.Actor == "" {
 		ev.Actor = AuditActorAnonymous
 		if ev.ActorType == "" {
