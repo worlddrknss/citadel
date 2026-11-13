@@ -195,13 +195,13 @@ func testSessions(t *testing.T, st store.Store) {
 func testOrgSettings(t *testing.T, st store.Store) {
 	ctx := context.Background()
 	def, err := st.GetOrgSettings(ctx)
-	if err != nil || def.ApprovalMinApprovers != 1 || def.AllowSelfApproval || !def.UpdatedAt.IsZero() {
+	if err != nil || def.ApprovalMinApprovers != 1 || def.AllowSelfApproval || def.RequireMFA || !def.UpdatedAt.IsZero() {
 		t.Fatalf("default settings = %+v, %v", def, err)
 	}
 	when := time.Now().UTC().Truncate(time.Second)
 	in := store.OrgSettings{
 		OrganizationName: "Org", ApprovalEnvironments: []string{"prod", "staging"}, ApprovalMinApprovers: 2,
-		AllowSelfApproval: true, SessionIdleMinutes: 15, SessionMaxHours: 8, UpdatedAt: when, UpdatedBy: "root",
+		AllowSelfApproval: true, SessionIdleMinutes: 15, SessionMaxHours: 8, RequireMFA: true, UpdatedAt: when, UpdatedBy: "root",
 	}
 	if err := st.PutOrgSettings(ctx, in); err != nil {
 		t.Fatalf("PutOrgSettings: %v", err)
@@ -211,7 +211,7 @@ func testOrgSettings(t *testing.T, st store.Store) {
 		t.Fatal(err)
 	}
 	if got.OrganizationName != "Org" || len(got.ApprovalEnvironments) != 2 || got.ApprovalEnvironments[1] != "staging" ||
-		got.ApprovalMinApprovers != 2 || !got.AllowSelfApproval || got.SessionIdleMinutes != 15 || got.SessionMaxHours != 8 ||
+		got.ApprovalMinApprovers != 2 || !got.AllowSelfApproval || got.SessionIdleMinutes != 15 || got.SessionMaxHours != 8 || !got.RequireMFA ||
 		!got.UpdatedAt.Equal(when) || got.UpdatedBy != "root" {
 		t.Fatalf("settings round trip = %+v", got)
 	}

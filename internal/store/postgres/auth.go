@@ -239,10 +239,10 @@ func (s *Store) GetOrgSettings(ctx context.Context) (store.OrgSettings, error) {
 	)
 	err := s.db.QueryRowContext(ctx,
 		`SELECT organization_name, approval_environments, approval_min_approvers, allow_self_approval,
-	session_idle_minutes, session_max_hours, updated_at, updated_by
+	session_idle_minutes, session_max_hours, updated_at, updated_by, require_mfa
 FROM org_settings WHERE id = 1`,
 	).Scan(&out.OrganizationName, &envsJSON, &out.ApprovalMinApprovers, &out.AllowSelfApproval,
-		&out.SessionIdleMinutes, &out.SessionMaxHours, &updatedAt, &out.UpdatedBy)
+		&out.SessionIdleMinutes, &out.SessionMaxHours, &updatedAt, &out.UpdatedBy, &out.RequireMFA)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.OrgSettings{ApprovalMinApprovers: 1}, nil
 	}
@@ -273,8 +273,8 @@ func (s *Store) PutOrgSettings(ctx context.Context, in store.OrgSettings) error 
 	}
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO org_settings (id, organization_name, approval_environments, approval_min_approvers, allow_self_approval,
-	session_idle_minutes, session_max_hours, updated_at, updated_by)
-VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8)
+	session_idle_minutes, session_max_hours, updated_at, updated_by, require_mfa)
+VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (id) DO UPDATE SET
 	organization_name = EXCLUDED.organization_name,
 	approval_environments = EXCLUDED.approval_environments,
@@ -283,9 +283,10 @@ ON CONFLICT (id) DO UPDATE SET
 	session_idle_minutes = EXCLUDED.session_idle_minutes,
 	session_max_hours = EXCLUDED.session_max_hours,
 	updated_at = EXCLUDED.updated_at,
-	updated_by = EXCLUDED.updated_by`,
+	updated_by = EXCLUDED.updated_by,
+	require_mfa = EXCLUDED.require_mfa`,
 		in.OrganizationName, string(envsJSON), in.ApprovalMinApprovers, in.AllowSelfApproval,
-		in.SessionIdleMinutes, in.SessionMaxHours, updatedAt, in.UpdatedBy)
+		in.SessionIdleMinutes, in.SessionMaxHours, updatedAt, in.UpdatedBy, in.RequireMFA)
 	return err
 }
 

@@ -41,6 +41,7 @@ type Store interface {
 	AWSPageStore
 	IdentityStore
 	KMSLifecycleStore
+	MFAStore
 }
 
 // KeyStore persists KMS keys, aliases, key policies and grants.

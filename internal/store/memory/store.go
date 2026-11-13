@@ -42,6 +42,7 @@ type Store struct {
 	pki pkiState
 	ak  accessKeyState
 	kms *memKMS
+	mfa *memMFA
 }
 
 var _ store.Store = (*Store)(nil)
