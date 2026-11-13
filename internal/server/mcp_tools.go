@@ -138,6 +138,7 @@ func (s *Server) mcpToolsList(ctx context.Context, c *agentCaller) (any, *rpcErr
 	if hasRevealGrant(creds) {
 		tools = append(tools, mcpRevealTool)
 	}
+	tools = append(tools, mcpRequestAccessTool, mcpGetLeaseTool)
 	return mcpToolsListResult{Tools: tools}, nil
 }
 
@@ -167,8 +168,11 @@ func toolSuccess(v any) *mcpToolResult {
 
 func toolFailure(f *agentFailure) *mcpToolResult {
 	text := f.Message
+	if f.RequestID != "" {
+		text = "a person must approve this use (requestId " + f.RequestID + "); check the decision with get_lease, then retry"
+	}
 	if f.Reason != "" {
-		text = f.Reason + ": " + f.Message
+		text = f.Reason + ": " + text
 	}
 	return &mcpToolResult{
 		Content: []mcpContent{{Type: "text", Text: text}},
@@ -211,6 +215,9 @@ func (s *Server) mcpToolsCall(ctx context.Context, r *http.Request, c *agentCall
 			return toolFailure(f), nil
 		}
 		return toolSuccess(resp), nil
+	}
+	if res, ok := s.mcpAccessTool(ctx, r, &call, p.Name, p.Arguments); ok {
+		return res, nil
 	}
 	return nil, &rpcError{Code: rpcInvalidParams, Message: "unknown tool"}
 }
