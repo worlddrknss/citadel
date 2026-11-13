@@ -7491,6 +7491,12 @@ paths:
           `rate_limited`, `upstream_timeout`, `upstream_unreachable`). The
           task ID (`taskId` or the `X-Citadel-Task-Id` header) is recorded in
           the audit log.
+
+          A grant with `requiresApproval` and no usable lease is refused with
+          403, error and reason `approval_required` and the `requestId` of a
+          pending access request (poll `GET /v1/agent/access-requests/{id}`,
+          then retry). A use under a lease is attributed to it in the audit
+          log (`lease=` in the event's resource).
         x-citadel-role: agent
         x-citadel-audit: citadel.AgentHTTP
         security:
@@ -7537,6 +7543,10 @@ paths:
           For `http_basic` and `login` credentials the value is the stored
           JSON document. The disclosure is audited (`citadel.AgentReveal`)
           before the value is returned; the response is never cached.
+          Grants with `requiresApproval` answer `approval_required` with a
+          `requestId` until a person approves; a reveal under a lease returns
+          `leaseId` and `leaseExpiresAt`. Approved access (a lease) also
+          allows a reveal the agent has no grant for.
         x-citadel-role: agent
         x-citadel-audit: citadel.AgentReveal
         security:
@@ -11562,7 +11572,10 @@ components:
           type: string
         reason:
           type: string
-          description: Stable denial or failure reason, e.g. `no_grant`, `host_not_allowed`, `destination_blocked`
+          description: Stable denial or failure reason, e.g. `no_grant`, `host_not_allowed`, `destination_blocked`, `approval_required`
+        requestId:
+          type: string
+          description: For approval_required, the pending access request to poll
     AgentHttpRequest:
       type: object
       required: [credential, url]
@@ -11635,3 +11648,10 @@ components:
         value:
           type: string
           description: The secret value
+        leaseId:
+          type: string
+          description: The lease the reveal was made under (approvals and leaseTtl grants)
+        leaseExpiresAt:
+          type: string
+          format: date-time
+          description: When that lease ends; treat the value as valid only until then
