@@ -300,6 +300,8 @@ type nativeCertificateDetail struct {
 	// Chain is the full chain, leaf (this certificate) first and the root
 	// last, as far as Citadel holds the issuers.
 	Chain []nativeChainCert `json:"chain,omitempty"`
+	// Renewal is a Let's Encrypt certificate's automatic renewal state.
+	Renewal *leRenewalJSON `json:"renewal,omitempty"`
 }
 
 // handleV1CertificateDetail returns the full metadata and PEM material for a
@@ -408,7 +410,9 @@ func (s *Server) handleV1CertificateDetail(w http.ResponseWriter, r *http.Reques
 			NotBefore: fmtTime(cert.NotBefore),
 			NotAfter:  fmtTime(cert.NotAfter),
 			Domains:   cert.Domains,
+			Renewal:   leRenewalOut(cert, time.Now()),
 		}
+		clear(cert.KeyDER)
 		var leaf *x509.Certificate
 		if pemStr, parsed, perr := decodeCertB64(cert.CertB64); perr == nil {
 			detail.PEM = pemStr

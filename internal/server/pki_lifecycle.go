@@ -45,8 +45,8 @@ const (
 	caPurgeActor          = "pki-ca-purge-job"
 )
 
-// caDeletableStates are the states DeleteCertificateAuthority starts from
-// (AWS also allows CAs that never became active).
+// caDeletableStates are the states DeleteCertificateAuthority starts from:
+// disabled or expired CAs, and (as AWS allows) CAs that never became active.
 var caDeletableStates = []string{store.CAStateDisabled, "EXPIRED", "PENDING_CERTIFICATE", "CREATING", "FAILED"}
 
 func init() {
@@ -57,6 +57,8 @@ func init() {
 
 func (s *Server) registerPKILifecycle(mux *http.ServeMux) {
 	s.jobs.Every("pki-ca-purge", caPurgeInterval, s.caPurgeJob)
+	s.jobs.Every("letsencrypt-renew", leRenewInterval, s.leRenewJob)
+	mux.HandleFunc("POST /v1/certificates/letsencrypt/auto-renew", s.handleV1SetLEAutoRenew)
 	mux.HandleFunc("DELETE /v1/certificates", s.handleV1DeleteCertificate)
 	mux.HandleFunc("POST /v1/certificates/authorities/status", s.handleV1SetCAStatus)
 	mux.HandleFunc("POST /v1/certificates/authorities/delete", s.handleV1DeleteCA)

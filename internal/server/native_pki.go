@@ -128,6 +128,8 @@ type nativeCertificate struct {
 	// Outstanding counts a CA's issued certificates (and subordinate CAs)
 	// that are still valid; it must be 0 before the CA can be deleted.
 	Outstanding *int `json:"outstanding,omitempty"`
+	// Renewal is a Let's Encrypt certificate's automatic renewal state.
+	Renewal *leRenewalJSON `json:"renewal,omitempty"`
 	// ExpiringSoon: still valid but expires within 30 days.
 	ExpiringSoon bool `json:"expiringSoon"`
 }
@@ -218,7 +220,7 @@ func (s *Server) handleV1ListCertificates(w http.ResponseWriter, r *http.Request
 			out = append(out, nativeCertificate{
 				Source: "lets-encrypt", ID: c.CertID, Subject: c.Domains, CommonName: cn, Serial: c.Serial, KeyAlgorithm: alg,
 				Status: displayStatus(c.Status, c.NotAfter, now), NotBefore: fmtTime(c.NotBefore), NotAfter: fmtTime(c.NotAfter),
-				ExpiringSoon: expiringSoon(c.Status, c.NotAfter, now),
+				ExpiringSoon: expiringSoon(c.Status, c.NotAfter, now), Renewal: leRenewalOut(c, now),
 			})
 		}
 	} else if !errors.Is(err, store.ErrUnsupported) {
