@@ -265,49 +265,6 @@ func (s *Server) handleValidateSecretResourcePolicy(w http.ResponseWriter, r *ht
 	writeJSON(w, http.StatusOK, validateSecretResourcePolicyResponse{PolicyValidationPassed: policy != ""})
 }
 
-func (s *Server) handleRotateSecret(w http.ResponseWriter, r *http.Request) {
-	const action = "secretsmanager.RotateSecret"
-	var req rotateSecretRequest
-	if err := decodeJSONBody(r, &req); err != nil {
-		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
-		return
-	}
-	if req.RotationRules != nil {
-		if req.RotationRules.ScheduleExpression != "" {
-			writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", "RotationRules.ScheduleExpression is not supported; use AutomaticallyAfterDays")
-			return
-		}
-		if req.RotationRules.AutomaticallyAfterDays != 0 {
-			req.AutomaticallyAfterDays = req.RotationRules.AutomaticallyAfterDays
-		}
-	}
-	if req.AutomaticallyAfterDays < 0 || req.AutomaticallyAfterDays > 1000 {
-		writeAWSJSONError(w, http.StatusBadRequest, "InvalidParameterException", "AutomaticallyAfterDays must be between 1 and 1000")
-		return
-	}
-	rotateImmediately := true
-	if req.RotateImmediately != nil {
-		rotateImmediately = *req.RotateImmediately
-	}
-	meta, err := s.store.DescribeSecret(r.Context(), req.SecretID)
-	if err != nil {
-		secretError(w, err)
-		return
-	}
-	if err := s.authorizeSecretAction(r.Context(), r, meta, "secretsmanager:RotateSecret"); err != nil {
-		secretError(w, err)
-		s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: meta.KMSKeyID, Result: "error", ErrorType: classifySecretError(err), AuditOrigin: s.auditOrigin(r)})
-		return
-	}
-	result, err := s.store.RotateSecret(r.Context(), req.SecretID, req.RotationLambdaARN, req.AutomaticallyAfterDays, rotateImmediately, req.ClientRequestToken)
-	if err != nil {
-		secretError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, rotateSecretResponse{ARN: result.Metadata.ARN, Name: result.Metadata.Name, VersionID: result.VersionID})
-	s.recordAudit(r.Context(), store.AuditEvent{Action: action, KeyID: result.Metadata.KMSKeyID, Result: "ok", AuditOrigin: s.auditOrigin(r)})
-}
-
 func (s *Server) handleCancelRotateSecret(w http.ResponseWriter, r *http.Request) {
 	const action = "secretsmanager.CancelRotateSecret"
 	var req cancelRotateSecretRequest

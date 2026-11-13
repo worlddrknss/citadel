@@ -3031,11 +3031,65 @@ paths:
           "500":
             $ref: "#/components/responses/InternalError"
     /v1/secrets/rotation:
+      get:
+        operationId: getSecretRotation
+        tags: [Secrets]
+        summary: An item's rotation configuration, state and history
+        x-citadel-role: viewer
+        parameters:
+          - name: project
+            in: query
+            required: true
+            description: Project slug
+            schema:
+              type: string
+          - name: env
+            in: query
+            required: true
+            description: Environment slug
+            schema:
+              type: string
+          - name: path
+            in: query
+            description: "Folder path below the environment, e.g. /db/primary (default: root)"
+            schema:
+              type: string
+          - name: key
+            in: query
+            required: true
+            description: Item key
+            schema:
+              type: string
+        responses:
+          "200":
+            description: Rotation status
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/SecretRotationStatus"
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
       post:
         operationId: configureSecretRotation
         tags: [Secrets]
-        summary: Enable or update an item's rotation schedule
-        description: Citadel records rotation schedules (shown as due in listings) but cannot invoke rotation functions.
+        summary: Configure an item's built-in rotator or record a Lambda schedule
+        description: |
+          With `rotator`, a built-in rotator (random, postgresql or webhook) rotates the
+          value on the schedule, following AWS's four steps (createSecret, setSecret,
+          testSecret, finishSecret) with AWSPENDING, AWSCURRENT and AWSPREVIOUS. With
+          `lambdaArn` the schedule is recorded only (Citadel can't run Lambda functions).
+          Built-in rotators are refused (409 approval_required) where changes need
+          approval. A new webhook rotator's signing secret is returned once.
         x-citadel-role: editor
         x-citadel-audit: citadel.ConfigureItemRotation
         requestBody:
@@ -3055,6 +3109,15 @@ paths:
                   properties:
                     configured:
                       type: boolean
+                    builtin:
+                      type: boolean
+                      description: A built-in rotator is configured
+                    versionId:
+                      type: string
+                      description: Token (version ID) of the rotation started by rotateImmediately
+                    signingSecret:
+                      type: string
+                      description: A newly generated webhook signing secret, returned only once
           "400":
             $ref: "#/components/responses/BadRequest"
           "401":
@@ -3108,6 +3171,81 @@ paths:
                   properties:
                     cancelled:
                       type: boolean
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/secrets/rotation/rotate:
+      post:
+        operationId: rotateSecretNow
+        tags: [Secrets]
+        summary: Start a rotation now with the item's built-in rotator
+        description: The rotation runs in the background; poll getSecretRotation. An unfinished rotation (AWSPENDING) is resumed with its token.
+        x-citadel-role: editor
+        x-citadel-audit: citadel.RotateItemNow
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecretItemRef"
+        responses:
+          "202":
+            description: Started
+            content:
+              application/json:
+                schema:
+                  type: object
+                  required: [started, versionId]
+                  properties:
+                    started:
+                      type: boolean
+                    versionId:
+                      type: string
+          "400":
+            $ref: "#/components/responses/BadRequest"
+          "401":
+            $ref: "#/components/responses/Unauthorized"
+          "403":
+            $ref: "#/components/responses/Forbidden"
+          "404":
+            $ref: "#/components/responses/NotFound"
+          "409":
+            $ref: "#/components/responses/Conflict"
+          "500":
+            $ref: "#/components/responses/InternalError"
+    /v1/secrets/rotation/signing-secret:
+      post:
+        operationId: regenerateRotationSigningSecret
+        tags: [Secrets]
+        summary: Replace an inline webhook rotator's signing secret
+        x-citadel-role: editor
+        x-citadel-audit: citadel.RegenerateRotationSigningSecret
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecretItemRef"
+        responses:
+          "200":
+            description: The new signing secret, returned only once
+            content:
+              application/json:
+                schema:
+                  type: object
+                  required: [signingSecret]
+                  properties:
+                    signingSecret:
+                      type: string
           "400":
             $ref: "#/components/responses/BadRequest"
           "401":
@@ -6588,7 +6726,11 @@ components:
             $ref: "#/components/schemas/Tag"
         rotationDue:
           type: boolean
-          description: A rotation schedule has come due (Citadel records schedules but does not run rotation functions)
+          description: The rotation window has opened and the item has not rotated yet
+        rotationStatus:
+          type: string
+          enum: [retrying, failed]
+          description: Set when the built-in rotator needs attention
     SecretListing:
       type: object
       required: [project, env, path, folders, items, shadowed, folderCounts]
@@ -6728,7 +6870,13 @@ components:
           format: date-time
         due:
           type: boolean
-          description: "The next rotation date has passed; Citadel cannot invoke rotation functions, so this is a prompt for an operator"
+          description: "The next rotation window has opened (a built-in rotator runs within a minute; a Lambda schedule is a prompt for an operator)"
+        rotatorType:
+          type: string
+          description: The built-in rotator, absent for a Lambda schedule
+        status:
+          type: string
+          description: The built-in rotator's state (see getSecretRotation)
     SecretDetail:
       type: object
       required: [project, env, path, key, arn, description, kmsKeyId, currentVersionId, status, createdAt, updatedAt, tags, policyDocument, rotation]
@@ -6929,12 +7077,171 @@ components:
           description: Item key
         lambdaArn:
           type: string
-          description: Rotation function ARN (recorded only)
+          description: "A Lambda ARN (schedule only), or arn:citadel:rotator:<region>:<account>:<type>[/<config-id>]"
+        rotator:
+          $ref: "#/components/schemas/RotatorRef"
         afterDays:
           type: integer
-          description: Rotation interval in days
+          description: "Rotate every N days, 1 to 1000 (AWS AutomaticallyAfterDays; default 30)"
+        scheduleExpression:
+          type: string
+          description: "rate(N days), rate(N hours) or cron(Minutes Hours Day-of-month Month Day-of-week Year), instead of afterDays"
+        duration:
+          type: string
+          description: "Rotation window, 1h to 24h (default: the rest of the UTC day, or 1h for hourly schedules)"
         rotateImmediately:
           type: boolean
+    SecretItemRef:
+      type: object
+      required: [project, env, key]
+      properties:
+        project:
+          type: string
+          description: Project slug
+        env:
+          type: string
+          description: Environment slug
+        path:
+          type: string
+          description: "Folder path below the environment (default: root)"
+        key:
+          type: string
+          description: Item key
+    RotatorRef:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [random, postgresql, webhook]
+        config:
+          $ref: "#/components/schemas/RotatorConfig"
+        configSecret:
+          type: string
+          description: Name of a secret in the same account whose JSON value is the configuration
+    RotatorConfig:
+      type: object
+      description: Rotator options; members that don't apply to the type are refused.
+      properties:
+        length:
+          type: integer
+          description: Generated password length (default 32)
+        excludeCharacters:
+          type: string
+        excludeNumbers:
+          type: boolean
+        excludePunctuation:
+          type: boolean
+        excludeUppercase:
+          type: boolean
+        excludeLowercase:
+          type: boolean
+        includeSpace:
+          type: boolean
+        requireEachIncludedType:
+          type: boolean
+        jsonKey:
+          type: string
+          description: "random: rotate this field of a JSON object value"
+        strategy:
+          type: string
+          enum: [single-user, alternating-users]
+          description: "postgresql: how the password is changed"
+        adminSecretArn:
+          type: string
+          description: "postgresql, alternating users: the admin secret (default: the secret's masterarn field)"
+        url:
+          type: string
+          description: "webhook: the https endpoint called for each step"
+    SecretRotationEvent:
+      type: object
+      required: [versionId, rotator, trigger, status, step, startedAt, finishedAt]
+      properties:
+        versionId:
+          type: string
+        rotator:
+          type: string
+        trigger:
+          type: string
+          enum: [schedule, immediate, retry]
+        status:
+          type: string
+          enum: [succeeded, failed]
+        step:
+          type: string
+          description: The step that failed, or finishSecret
+        error:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+    SecretRotationStatus:
+      type: object
+      required: [enabled, mode, schedule, status, due, history]
+      properties:
+        enabled:
+          type: boolean
+        mode:
+          type: string
+          enum: [builtin, lambda, none]
+          description: "builtin: a Citadel rotator runs; lambda: a schedule is recorded only"
+        lambdaArn:
+          type: string
+        rotator:
+          type: object
+          required: [type]
+          properties:
+            type:
+              type: string
+            config:
+              $ref: "#/components/schemas/RotatorConfig"
+            configSecret:
+              type: string
+            hasSigningSecret:
+              type: boolean
+        schedule:
+          type: object
+          properties:
+            afterDays:
+              type: integer
+            expression:
+              type: string
+            duration:
+              type: string
+        nextRotationDate:
+          type: string
+          format: date-time
+          description: Start of the next rotation window
+        windowEnd:
+          type: string
+          format: date-time
+        lastRotatedDate:
+          type: string
+          format: date-time
+        status:
+          type: string
+          description: "Empty (never run), running, succeeded, retrying or failed"
+        lastStep:
+          type: string
+        lastError:
+          type: string
+        attempts:
+          type: integer
+        nextAttemptAt:
+          type: string
+          format: date-time
+        pendingVersionId:
+          type: string
+          description: Version carrying AWSPENDING from an unfinished rotation
+        due:
+          type: boolean
+        history:
+          type: array
+          items:
+            $ref: "#/components/schemas/SecretRotationEvent"
     BulkSecretsRequest:
       type: object
       required: [project, env, keys, action]

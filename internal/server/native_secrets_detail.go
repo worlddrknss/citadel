@@ -56,10 +56,13 @@ type nativeRotation struct {
 	LambdaARN        string `json:"lambdaArn,omitempty"`
 	AfterDays        int    `json:"afterDays,omitempty"`
 	NextRotationDate string `json:"nextRotationDate,omitempty"`
-	// Due is set when NextRotationDate has passed. Citadel records rotation
-	// schedules but cannot invoke rotation Lambdas, so a due rotation is a
-	// prompt for an operator, not something that happens by itself.
+	// Due is set when NextRotationDate has passed: a built-in rotator runs
+	// within a minute; a Lambda schedule is a prompt for an operator.
 	Due bool `json:"due,omitempty"`
+	// RotatorType is the built-in rotator ("" for a Lambda schedule) and
+	// Status its state (see GET /v1/secrets/rotation).
+	RotatorType string `json:"rotatorType,omitempty"`
+	Status      string `json:"status,omitempty"`
 }
 
 // handleV1SecretDetail returns the full metadata projection for one item.
@@ -92,6 +95,9 @@ func (s *Server) handleV1SecretDetail(w http.ResponseWriter, r *http.Request) {
 	if d.NextRotationDate != nil {
 		rot.NextRotationDate = d.NextRotationDate.Format(time.RFC3339)
 		rot.Due = d.RotationEnabled && d.DeletionDate == nil && !d.NextRotationDate.After(time.Now())
+	}
+	if rr, err := s.store.GetSecretRotation(ctx, coord.backingName()); err == nil {
+		rot.RotatorType, rot.Status = rr.RotatorType, rr.Status
 	}
 	out := nativeItemDetail{
 		Project:           d.Project,
@@ -365,40 +371,6 @@ func (s *Server) handleV1PutSecretPolicy(w http.ResponseWriter, r *http.Request)
 	}
 	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.PutItemPolicy", Result: "ok", AuditOrigin: s.auditOrigin(r)})
 	writeNativeJSON(w, http.StatusOK, map[string]any{"saved": true})
-}
-
-type nativeRotationRequest struct {
-	Project           string `json:"project"`
-	Env               string `json:"env"`
-	Path              string `json:"path"`
-	Key               string `json:"key"`
-	LambdaARN         string `json:"lambdaArn"`
-	AfterDays         int    `json:"afterDays"`
-	RotateImmediately bool   `json:"rotateImmediately"`
-}
-
-// handleV1ConfigureRotation enables or updates rotation configuration.
-func (s *Server) handleV1ConfigureRotation(w http.ResponseWriter, r *http.Request) {
-	_, ctx, ok := s.secretsSession(w, r, "editor")
-	if !ok {
-		return
-	}
-	var req nativeRotationRequest
-	if err := decodeJSONBody(r, &req); err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	coord, err := coordFromParts(req.Project, req.Env, req.Path, req.Key)
-	if err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	if err := s.secretsSvc().ConfigureItemRotation(ctx, coord, req.LambdaARN, req.AfterDays, req.RotateImmediately); err != nil {
-		writeSecretsFailure(w, http.StatusBadRequest, "rotation_failed", err)
-		return
-	}
-	s.recordAudit(ctx, store.AuditEvent{Action: "citadel.ConfigureItemRotation", Result: "ok", AuditOrigin: s.auditOrigin(r)})
-	writeNativeJSON(w, http.StatusOK, map[string]any{"configured": true})
 }
 
 // handleV1CancelRotation disables rotation for an item.

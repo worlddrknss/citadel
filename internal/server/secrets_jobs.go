@@ -19,11 +19,9 @@ import (
 // Parameters have no deletion schedule (deletes are immediate), so there is
 // nothing to purge for them. KMS key deletion is not handled here.
 //
-// Rotation: rotation schedules are metadata only. Citadel cannot invoke AWS
-// rotation Lambdas, so nothing rotates by itself; RotateSecret records the
-// Lambda ARN, interval and next date, and once that date passes the console
-// shows the secret as "rotation due" (list rotationDue, detail rotation.due)
-// for an operator to rotate. No job runs for it.
+// Rotation: built-in rotators run from their own job (see rotation.go).
+// Schedules with a Lambda ARN are recorded only: once their date passes the
+// console shows the secret as "rotation due" for an operator to rotate.
 
 // secretsPurgeInterval is how often the purge job (registered with s.jobs in
 // New) runs; the job runner also runs it once at startup.

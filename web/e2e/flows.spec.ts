@@ -119,6 +119,46 @@ test.describe('secrets', () => {
   });
 });
 
+test.describe('secret rotation', () => {
+  test('the table flags a failing rotation; the Rotation tab shows it and sets up a webhook rotator', async ({ page, api }) => {
+    await open(page, '/secrets/payments/dev');
+    const row = page.getByRole('row', { name: /STRIPE_KEY/ });
+    await expect(row.getByText('Rotation failed')).toBeVisible();
+    await expect(page.getByRole('row', { name: /API_KEY/ }).getByText(/Rotation/)).toHaveCount(0);
+
+    await row.getByRole('button', { name: 'Open details for STRIPE_KEY' }).click();
+    await page.getByRole('tab', { name: 'Rotation' }).click();
+    await expect(page).toHaveURL(/[?&]tab=rotation(&|$)/);
+    const panel = page.getByRole('tabpanel');
+    await expect(panel.getByText('Failed', { exact: true })).toBeVisible();
+    await expect(panel.getByText(/Rotation failed at Test/)).toBeVisible();
+    await expect(panel.getByText('the pending value is empty').first()).toBeVisible();
+    await expect(panel.getByText('Failed at Test', { exact: true })).toBeVisible();
+    await expect(panel.getByText('Rotated', { exact: true })).toBeVisible();
+
+    // Rotate now.
+    await panel.getByRole('button', { name: 'Rotate now' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Rotate now' }).click();
+    await expect.poll(() => api.log.includes('POST /v1/secrets/rotation/rotate')).toBe(true);
+
+    // Switch to a webhook rotator: the signing secret is shown once.
+    await panel.getByRole('button', { name: 'Edit rotation' }).click();
+    await expect(panel.getByLabel('Password length')).toHaveValue('40');
+    await panel.getByText('Webhook', { exact: true }).click();
+    const save = panel.getByRole('button', { name: 'Save rotation' });
+    await expect(save).toBeDisabled();
+    await panel.getByLabel('Webhook URL').fill('https://rotate.example.com/hook');
+    await panel.getByRole('combobox', { name: 'Schedule' }).selectOption('cron');
+    await panel.getByLabel('Cron expression').fill('cron(0 4 ? * MON *)');
+    await panel.getByLabel('Window (hours)').fill('2');
+    await save.click();
+    const once = page.getByRole('dialog', { name: 'Webhook signing secret' });
+    await expect(once).toBeVisible();
+    await expect(once.getByText('whsec_mock0123456789abcdef0123456789abcdef')).toBeVisible();
+    expect(api.log).toContain('POST /v1/secrets/rotation');
+  });
+});
+
 test.describe('KMS', () => {
   test('filter by status, open a key, schedule deletion only after typing its name', async ({ page, api }) => {
     await open(page, '/kms');

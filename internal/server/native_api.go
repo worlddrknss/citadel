@@ -272,9 +272,12 @@ type nativeItem struct {
 	Version   int         `json:"version,omitempty"`
 	UpdatedBy string      `json:"updatedBy,omitempty"`
 	Tags      []nativeTag `json:"tags"`
-	// RotationDue is set when a rotation schedule has come due (Citadel
-	// records schedules but cannot run rotation functions).
+	// RotationDue is set when a rotation window has opened and the secret
+	// has not been rotated yet.
 	RotationDue bool `json:"rotationDue,omitempty"`
+	// RotationStatus is the built-in rotator's state when it needs
+	// attention: "retrying" or "failed" (omitted otherwise).
+	RotationStatus string `json:"rotationStatus,omitempty"`
 }
 
 // ---- handlers --------------------------------------------------------------
@@ -353,9 +356,17 @@ func (s *Server) handleV1ListSecrets(w http.ResponseWriter, r *http.Request) {
 		}
 		return ni
 	}
+	rotations := s.rotationSummaries(ctx)
 	items := make([]nativeItem, 0, len(found))
 	for _, it := range found {
-		items = append(items, toNative(it))
+		ni := toNative(it)
+		if folder, err := normalizeFolder(it.Path); err == nil {
+			switch st := rotations[flatSecretName(it.Project, it.Env, folder, it.Key)].Status; st {
+			case store.RotationStatusRetrying, store.RotationStatusFailed:
+				ni.RotationStatus = st
+			}
+		}
+		items = append(items, ni)
 	}
 	// Reported apart from items so the UI can show it for what it is: an object
 	// wearing this folder's name, shadowing the folder's JSON projection, and
