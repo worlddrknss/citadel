@@ -72,6 +72,15 @@ func Code(key []byte, step int64) string {
 	return hotp(sha256.New, key, uint64(step), Digits)
 }
 
+// CodeWith returns the HOTP value for counter with an arbitrary HMAC hash
+// and digit count, for one-time passwords whose parameters are set by a
+// third-party site rather than by Citadel (agent login credentials). The
+// caller must only pass a SHA-2 or SHA-3 constructor: HMAC-SHA-1 panics
+// under fips140=only. digits must be between 1 and 9.
+func CodeWith(h func() hash.Hash, key []byte, counter uint64, digits int) string {
+	return hotp(h, key, counter, digits)
+}
+
 // Verify checks code against the steps within Skew of now and returns the
 // matching step. Steps at or before lastStep are refused, so a code (or an
 // older one) can never be used twice. Every candidate is compared, in
