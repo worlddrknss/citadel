@@ -121,7 +121,7 @@ test('agent broker: REST and the MCP stdio bridge against the real server', asyn
     bridge.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
     const tools = await bridge.call(2, 'tools/list');
     const names = ((tools.result as { tools: { name: string }[] }).tools ?? []).map((t) => t.name);
-    expect(names).toEqual(['list_credentials', 'http_request']);
+    expect(names).toEqual(['list_credentials', 'http_request', 'request_access', 'get_lease']);
     const listed = await bridge.call(3, 'tools/call', { name: 'list_credentials', arguments: {} });
     expect(JSON.stringify(listed)).not.toContain(SECRET);
     expect((listed.result as { structuredContent: { credentials: { name: string }[] } }).structuredContent.credentials.map((c) => c.name)).toEqual(['live-upstream']);
