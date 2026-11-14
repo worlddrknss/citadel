@@ -6,6 +6,8 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-11-13
+
 ### Added
 
 - TypeScript SDK: `CitadelAgent`, a typed Agent API client authenticated
