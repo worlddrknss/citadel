@@ -35,6 +35,14 @@ export const NAV: NavGroup[] = [
     ]
   },
   {
+    label: 'SDKs',
+    items: [
+      { slug: 'sdks', label: 'Choosing an SDK' },
+      { slug: 'sdk-typescript', label: 'TypeScript SDK' },
+      { slug: 'sdk-go', label: 'Go SDK' }
+    ]
+  },
+  {
     label: 'Secrets & keys',
     items: [
       { slug: 'rotation', label: 'Secret rotation' },

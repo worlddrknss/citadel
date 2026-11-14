@@ -186,8 +186,9 @@ The docs below are built into the console: open **Docs** in the sidebar, or
 | AWS API compatibility | [docs/aws-compatibility.md](docs/aws-compatibility.md) |
 | Security model | [docs/security-model.md](docs/security-model.md) |
 | Native API reference (OpenAPI 3.1) | [docs/openapi.yaml](docs/openapi.yaml), served at `GET /v1/openapi.yaml` and rendered in the console under Help, API reference |
-| Go SDK | [sdk/citadel/README.md](sdk/citadel/README.md) |
-| TypeScript SDK (`@worlddrknss/citadel`, Next.js) | [sdk/typescript/README.md](sdk/typescript/README.md) |
+| SDKs: which to use, authentication, versions | [docs/sdks.md](docs/sdks.md) |
+| TypeScript SDK (`@worlddrknss/citadel`): Next.js, caching, KMS, Agent API, MCP bridge | [docs/sdk-typescript.md](docs/sdk-typescript.md) |
+| Go SDK: secrets, agents, approvals, notifications, audit | [docs/sdk-go.md](docs/sdk-go.md) |
 | Release notes | [CHANGELOG.md](CHANGELOG.md) |
 
 ## Project layout

@@ -269,6 +269,11 @@ curl -s https://citadel.example.com/v1/agent/http \
   -d '{"credential": "github-pat", "method": "GET", "url": "https://api.github.com/user"}'
 ```
 
+From code, the [Go SDK](sdk-go.md#agents-the-agent-api) has typed Agent API
+methods, and the [TypeScript SDK](sdk-typescript.md#the-agent-api) page has
+a typed wrapper. To create agents, tokens and grants from code instead of
+the console, see [Agents: management](sdk-go.md#agents-management).
+
 ## Step 6: Try it
 
 Ask the agent, in plain language:

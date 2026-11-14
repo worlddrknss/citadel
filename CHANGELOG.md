@@ -6,6 +6,26 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+### Documentation
+
+- SDK docs in the console: a new **SDKs** group with
+  [Choosing an SDK](docs/sdks.md) (TypeScript, Go, the AWS SDKs or plain
+  HTTP; which credentials each API accepts; versions and compatibility),
+  [TypeScript SDK](docs/sdk-typescript.md) (install, configuration,
+  runtimes, Next.js route handlers, server components and `next.config`,
+  caching, KMS, a typed Agent API wrapper, errors and retries, generated
+  types, the `citadel mcp` bridge) and [Go SDK](docs/sdk-go.md) (secrets,
+  agent management and the Agent API, approvals, logins, notifications and
+  webhook signatures, audit retention). The examples are compiled: the Go
+  ones are `Example` functions in `sdk/citadel/example_test.go`, and the
+  TypeScript ones run in `sdk/typescript/test/docs-examples.test.ts`. The SDK
+  READMEs now link to these pages.
+- The docs now say plainly that `@worlddrknss/citadel` isn't published to
+  npm yet and show how to install it from the repository, including for the
+  `citadel mcp` bridge. They also explain why the Go SDK needs an explicit
+  version (`@main` or a release commit): the module path has no `/v2`
+  suffix, so a bare `go get` resolves to an old `v1` release.
+
 ## [2.5.1] - 2026-11-13
 
 ### Fixed

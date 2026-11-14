@@ -68,7 +68,8 @@ export const PAGES = [
   { path: '/docs', heading: 'Documentation' },
   { path: '/docs/getting-started-agents', heading: 'Getting started with AI agents' },
   { path: '/docs/agents', heading: 'Credentials for AI agents' },
-  { path: '/docs/audit', heading: 'Audit log and retention' }
+  { path: '/docs/audit', heading: 'Audit log and retention' },
+  { path: '/docs/sdk-typescript', heading: 'TypeScript SDK' }
 ] as const;
 
 /** Opens a console page and waits for its first heading. */

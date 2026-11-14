@@ -81,6 +81,20 @@ Supported actions and the differences from AWS are in
 console and the Go and TypeScript SDKs use, is described in the
 [API reference](openapi.yaml).
 
+From a Next.js or Node.js app, the [TypeScript SDK](sdk-typescript.md) reads
+a secret with the same access key:
+
+```ts
+import { Citadel } from '@worlddrknss/citadel';
+
+// CITADEL_URL, CITADEL_ACCESS_KEY_ID and CITADEL_SECRET_ACCESS_KEY
+const citadel = new Citadel();
+const databaseUrl = await citadel.secrets.getValue({ project: 'payments', env: 'prod', key: 'DATABASE_URL' });
+```
+
+[SDKs and client libraries](sdks.md) compares the TypeScript and
+[Go](sdk-go.md) SDKs and the AWS SDKs.
+
 ## 5. Sync secrets into Kubernetes with External Secrets
 
 The [External Secrets Operator](https://external-secrets.io) reads Citadel
@@ -114,6 +128,8 @@ Secret.
 
 ## Next steps
 
+- **SDKs.** Read secrets from Next.js, Node.js or Go:
+  [SDKs and client libraries](sdks.md).
 - **AI agents.** Let coding and browser agents use credentials without
   holding them: [Getting started with AI agents](getting-started-agents.md).
 - **Keys and certificates.** KMS keys, signing, a private CA and an ACME
