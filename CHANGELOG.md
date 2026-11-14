@@ -31,9 +31,18 @@ All notable changes to Citadel are documented here. The format follows
   TypeScript `VERSION`, `package.json`, `package-lock.json`) don't match it
   (`scripts/check-sdk-version.sh`). The release steps are in
   CONTRIBUTING.md.
+- The TypeScript SDK is published to npm as `@worlddrknss/citadel`, with
+  provenance, for each release (`.github/workflows/release-sdks.yaml`), so
+  `npm install @worlddrknss/citadel` and the `npx -y @worlddrknss/citadel
+  mcp` bridge configurations work.
 
 ### Changed
 
+- The Go SDK is its own module, `github.com/worlddrknss/citadel/sdk/citadel/v2`,
+  tagged `sdk/citadel/vX.Y.Z` with each release, so
+  `go get github.com/worlddrknss/citadel/sdk/citadel/v2@v2.6.0` installs it
+  (the old path resolved to a v1 release). Update imports to
+  `citadel "github.com/worlddrknss/citadel/sdk/citadel/v2"`.
 - SDK versions are 2.6.0, the next release (they were stuck at 2.1.0).
 - Both SDKs no longer repeat non-idempotent calls after a failure that may
   have come after the request took effect. The broker answers 502 or 504

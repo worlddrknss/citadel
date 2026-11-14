@@ -170,6 +170,12 @@ TypeScript SDKs carry the release version too.
    ([.github/workflows/release-image.yaml](.github/workflows/release-image.yaml))
    runs both checks first and fails without building or pushing anything if
    the chart or an SDK version doesn't match the tag.
+4. The same tag starts
+   [.github/workflows/release-sdks.yaml](.github/workflows/release-sdks.yaml),
+   which tags `sdk/citadel/vX.Y.Z` (the Go SDK is its own module,
+   `sdk/citadel/go.mod`) and publishes `@worlddrknss/citadel@X.Y.Z` to npm
+   using the `NPM_TOKEN` repository secret. Both steps are idempotent: re-run
+   the workflow, or start it by hand with the tag, if a step fails.
 
 By contributing, you agree that your contributions are licensed under the
 GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).

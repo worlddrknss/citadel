@@ -186,10 +186,9 @@ appears in the file.
 citadel mcp [--url <url>] [--token-env <name>]
 ```
 
-The bridge is the `citadel` command of the TypeScript SDK package. The
-package is not on npm yet, so `npx -y @worlddrknss/citadel mcp` can't
-download it: install it from the repository first and use `citadel mcp` (or
-`npx citadel mcp` in the project you installed it in) as the command. See
+The bridge is the `citadel` command of the TypeScript SDK package
+(`@worlddrknss/citadel` on npm), so `npx -y @worlddrknss/citadel mcp` runs it
+without a separate install. See
 [TypeScript SDK](sdk-typescript.md#the-citadel-mcp-stdio-bridge).
 
 | Setting | Meaning |

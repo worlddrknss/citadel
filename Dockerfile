@@ -22,6 +22,7 @@ ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
+COPY sdk/citadel/go.mod ./sdk/citadel/go.mod
 RUN go mod download
 COPY . .
 COPY --from=web /web/build/ ./cmd/server/webdist/

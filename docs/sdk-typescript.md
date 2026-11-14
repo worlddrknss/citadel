@@ -16,8 +16,17 @@ where it is typechecked and run against a mocked server.
 
 ## Install
 
-The package is **not published to npm yet**, so `npm install
-@worlddrknss/citadel` fails. Build it from the repository and install the
+```sh
+npm install @worlddrknss/citadel
+npm install server-only   # recommended for Next.js; see "Keep it on the server"
+```
+
+The package is published to npm from 2.6.0, with
+[provenance](https://docs.npmjs.com/generating-provenance-statements), for
+every Citadel release. Install the version that matches your server (see
+[Versions and compatibility](sdks.md#versions-and-compatibility)).
+
+To use an unreleased commit, build it from the repository and install the
 tarball:
 
 ```sh
@@ -28,20 +37,9 @@ npm run build
 npm pack              # writes worlddrknss-citadel-<version>.tgz
 ```
 
-Copy the tarball into your project so CI and hosting builds can install it,
-then add it as a dependency:
-
-```sh
-mkdir -p vendor && cp /path/to/citadel/sdk/typescript/worlddrknss-citadel-*.tgz vendor/
-npm install ./vendor/worlddrknss-citadel-2.6.0.tgz
-npm install server-only   # recommended for Next.js; see "Keep it on the server"
-```
-
-`package.json` then records `"@worlddrknss/citadel": "file:vendor/worlddrknss-citadel-2.6.0.tgz"`.
-Build the tarball from the same release as your server (see
-[Versions and compatibility](sdks.md#versions-and-compatibility)). Installing
-straight from GitHub (`npm install github:worlddrknss/citadel`) doesn't work:
-the package is in a sub-directory and its build output isn't committed.
+Installing straight from GitHub (`npm install github:worlddrknss/citadel`)
+doesn't work: the package is in a sub-directory and its build output isn't
+committed.
 
 ## Configure
 
@@ -587,11 +585,8 @@ example). It needs Node.js 20 or later and an agent token:
 CITADEL_URL=https://citadel.example.com CITADEL_AGENT_TOKEN=cagt_... npx citadel mcp
 ```
 
-Until the package is on npm, `npx -y @worlddrknss/citadel mcp` (used in
-[Connecting MCP clients](agents-mcp.md)) can't download it. Install the
-tarball first, globally (`npm install -g ./worlddrknss-citadel-2.6.0.tgz`,
-then run `citadel mcp`) or in a project (then `npx citadel mcp`), and use
-that command in the client's configuration. Settings, behaviour and
+In an MCP client's configuration, use `npx -y @worlddrknss/citadel mcp` as
+the command; `npx` downloads the package on first use. Settings, behaviour and
 per-client configuration are in [Connecting MCP clients](agents-mcp.md#the-stdio-bridge).
 
 ## Development

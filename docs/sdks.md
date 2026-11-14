@@ -7,7 +7,7 @@ server versions.
 | You are building | Use | API |
 | --- | --- | --- |
 | A Next.js site, a Node.js service, or code on an edge runtime | [TypeScript SDK](sdk-typescript.md) (`@worlddrknss/citadel`) | Native `/v1` |
-| A Go service, CLI or operator | [Go SDK](sdk-go.md) (`github.com/worlddrknss/citadel/sdk/citadel`) | Native `/v1` |
+| A Go service, CLI or operator | [Go SDK](sdk-go.md) (`github.com/worlddrknss/citadel/sdk/citadel/v2`) | Native `/v1` |
 | Code that already uses AWS Secrets Manager, SSM Parameter Store or KMS, Terraform, External Secrets, or the AWS CLI | The official AWS SDKs and tools with a custom endpoint | AWS-compatible ([AWS compatibility](aws-compatibility.md)) |
 | Another language, or a quick script | Plain HTTP against the [API reference](openapi.yaml) | Native `/v1` |
 | An AI agent (Claude Code, Cursor, a browser agent) | The MCP server, directly or through the `citadel mcp` stdio bridge | `/mcp` ([Connecting MCP clients](agents-mcp.md)) |
@@ -110,8 +110,8 @@ never send it, or a secret it reads, to a browser.
 
 | SDK | Install |
 | --- | --- |
-| TypeScript | Not yet published to npm. Build it from the repository; see [Install](sdk-typescript.md#install). |
-| Go | `go get github.com/worlddrknss/citadel/sdk/citadel@main`, or pin a release; see [Install](sdk-go.md#install). |
+| TypeScript | `npm install @worlddrknss/citadel`; see [Install](sdk-typescript.md#install). |
+| Go | `go get github.com/worlddrknss/citadel/sdk/citadel/v2@latest`; see [Install](sdk-go.md#install). |
 | AWS SDKs | Your language's official AWS SDK, unchanged. |
 
 ## Versions and compatibility
@@ -134,11 +134,10 @@ with it. Use the SDK from the same release as your server, or an older one:
   the Citadel release the SDK ships with, from 2.6.0 on; the release
   workflow refuses a tag the SDKs don't match. (Before 2.6.0 it stayed at
   `2.1.0`.)
-- **Go module versions.** The repository's Go module is
-  `github.com/worlddrknss/citadel`, without a `/v2` suffix, so Go can't use
-  the `v2.x.y` release tags directly and a bare `go get` resolves to an old
-  `v1` release. Install from `@main` or from a release's commit, as shown in
-  [Install](sdk-go.md#install).
+- **Go module versions.** The Go SDK is its own module,
+  `github.com/worlddrknss/citadel/sdk/citadel/v2`, tagged
+  `sdk/citadel/vX.Y.Z` with each release, so `go get ...@vX.Y.Z` installs
+  the SDK of release X.Y.Z. See [Install](sdk-go.md#install).
 - **The AWS-compatible APIs** follow the AWS wire protocols, so current AWS
   SDK versions work. Members Citadel doesn't model are ignored. The
   supported actions are listed in [AWS compatibility](aws-compatibility.md).

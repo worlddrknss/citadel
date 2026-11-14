@@ -1,11 +1,11 @@
-package citadel_test
+package sdkgotest_test
 
 import (
 	"context"
 	"testing"
 
 	"github.com/worlddrknss/citadel/internal/servertest"
-	"github.com/worlddrknss/citadel/sdk/citadel"
+	citadel "github.com/worlddrknss/citadel/sdk/citadel/v2"
 )
 
 func TestAuditRetention(t *testing.T) {

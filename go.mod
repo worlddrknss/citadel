@@ -22,4 +22,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.12 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.25 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.12 // indirect
+	github.com/worlddrknss/citadel/sdk/citadel/v2 v2.0.0
 )
+
+replace github.com/worlddrknss/citadel/sdk/citadel/v2 => ./sdk/citadel

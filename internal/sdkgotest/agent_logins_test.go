@@ -1,4 +1,4 @@
-package citadel_test
+package sdkgotest_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/servertest"
-	"github.com/worlddrknss/citadel/sdk/citadel"
+	citadel "github.com/worlddrknss/citadel/sdk/citadel/v2"
 )
 
 func TestAgentLoginsAndAnomalies(t *testing.T) {

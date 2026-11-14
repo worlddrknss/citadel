@@ -125,7 +125,7 @@ app.listen(8080);
 The Go SDK has `citadel.VerifyNotificationSignature`:
 
 ```go
-import "github.com/worlddrknss/citadel/sdk/citadel"
+import citadel "github.com/worlddrknss/citadel/sdk/citadel/v2"
 
 http.HandleFunc("/citadel", func(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))

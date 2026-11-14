@@ -14,16 +14,11 @@ TypeScript client for [Citadel](https://github.com/worlddrknss/citadel)'s native
 
 ## Install
 
-The package is not published to npm yet. Build it from the repository and install the tarball:
-
 ```sh
-git clone https://github.com/worlddrknss/citadel.git
-cd citadel/sdk/typescript && npm ci && npm run build && npm pack
-# in your app:
-npm install /path/to/worlddrknss-citadel-2.6.0.tgz
+npm install @worlddrknss/citadel
 ```
 
-See [Install](https://github.com/worlddrknss/citadel/blob/main/docs/sdk-typescript.md#install) for vendoring the tarball so CI can install it.
+See [Install](https://github.com/worlddrknss/citadel/blob/main/docs/sdk-typescript.md#install) for building an unreleased commit.
 
 ## Quick start
 

@@ -1,6 +1,6 @@
 # Citadel Go SDK
 
-`github.com/worlddrknss/citadel/sdk/citadel` is a typed client for Citadel's
+`github.com/worlddrknss/citadel/sdk/citadel/v2` is a typed client for Citadel's
 native `/v1` API: secrets, parameters, KMS, certificates, workload identity,
 agents and the Agent API, access requests and leases, notifications, and
 audit retention. It uses only the Go standard library. For the
@@ -13,12 +13,15 @@ authenticates: [docs/sdks.md](../../docs/sdks.md).
 ## Install
 
 ```sh
-go get github.com/worlddrknss/citadel/sdk/citadel@main
+go get github.com/worlddrknss/citadel/sdk/citadel/v2@latest
 ```
 
-Name a version (`@main`, or a release's commit): the module path has no
-`/v2` suffix, so a bare `go get` resolves to an old `v1` release. See
-[Install](../../docs/sdk-go.md#install).
+```go
+import citadel "github.com/worlddrknss/citadel/sdk/citadel/v2"
+```
+
+The SDK is its own module, tagged `sdk/citadel/vX.Y.Z` with each Citadel
+release. See [Install](../../docs/sdk-go.md#install).
 
 ## Quick start
 

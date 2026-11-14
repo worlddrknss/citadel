@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/worlddrknss/citadel/sdk/citadel"
+	citadel "github.com/worlddrknss/citadel/sdk/citadel/v2"
 )
 
 func ExampleNew() {

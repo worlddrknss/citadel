@@ -1,6 +1,6 @@
 # Go SDK
 
-`github.com/worlddrknss/citadel/sdk/citadel` is the Go client for Citadel's
+`github.com/worlddrknss/citadel/sdk/citadel/v2` is the Go client for Citadel's
 native `/v1` API. It uses only the standard library and covers secrets,
 parameters, KMS, certificates, workload identity, agent management and the
 Agent API, access requests and leases, logins and TOTP, notification
@@ -18,21 +18,19 @@ compiled and vetted with the SDK's tests.
 ## Install
 
 ```sh
-go get github.com/worlddrknss/citadel/sdk/citadel@main
+go get github.com/worlddrknss/citadel/sdk/citadel/v2@latest
 ```
 
-Always name a version. The repository's module path has no `/v2` suffix, so
-Go ignores the `v2.x.y` release tags, and a bare `go get
-github.com/worlddrknss/citadel/sdk/citadel` resolves to the last `v1`
-release, whose SDK predates most of this page. To pin a release, use its
-commit instead of `main`:
-
-```sh
-git ls-remote https://github.com/worlddrknss/citadel.git 'refs/tags/v2.5.1^{}'   # the release's commit
-go get github.com/worlddrknss/citadel/sdk/citadel@<commit>
+```go
+import citadel "github.com/worlddrknss/citadel/sdk/citadel/v2"
 ```
 
-Go records it as a pseudo-version such as `v1.33.2-0.20261113203938-3001f2142816`.
+The SDK is its own Go module (`sdk/citadel/go.mod`), tagged
+`sdk/citadel/vX.Y.Z` alongside each Citadel release `vX.Y.Z`, so
+`@latest` or `@v2.6.0` resolves to a release. The package name is
+`citadel`. Releases before 2.6.0 shipped the SDK inside the server module
+and are not installable this way.
+
 The SDK needs Go 1.26 or later. It imports only the standard library, so it
 adds no other packages to your build.
 
@@ -615,9 +613,12 @@ Retries and timeouts:
 
 ## Tests
 
-The SDK's tests run against the real Citadel server over the in-memory
-store, so they check real API behaviour:
+Most of the SDK's tests run against the real Citadel server over the
+in-memory store, so they check real API behaviour. They live in the server
+module (`internal/sdkgotest`), since the SDK's own module can't import the
+server:
 
 ```sh
-go test ./sdk/citadel/
+(cd sdk/citadel && go test ./...)   # unit tests and examples
+go test ./internal/sdkgotest/         # against an in-process server
 ```
