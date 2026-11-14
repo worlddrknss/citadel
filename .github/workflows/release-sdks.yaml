@@ -4,9 +4,9 @@ name: Release SDKs
 #   - Go: tags sdk/citadel/vX.Y.Z on the same commit, so
 #     `go get github.com/worlddrknss/citadel/sdk/citadel/v2@vX.Y.Z` resolves
 #     (the SDK is its own module, sdk/citadel/go.mod).
-#   - TypeScript: publishes @worlddrknss/citadel@X.Y.Z to npm with provenance.
-#     Needs the NPM_TOKEN repository secret (an npm automation token that can
-#     publish @worlddrknss/citadel).
+#   - TypeScript: publishes @worlddrknss/citadel@X.Y.Z to npm with provenance,
+#     using npm Trusted Publishing (OIDC): npm trusts this workflow file in
+#     this repository, so there is no npm token to store or rotate.
 # Both steps are idempotent, so a failed run can be re-run, or started by hand
 # for an existing tag (workflow_dispatch), once the cause is fixed.
 
@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # npm provenance
+      id-token: write # npm Trusted Publishing and provenance
     defaults:
       run:
         working-directory: sdk/typescript
@@ -91,15 +91,10 @@ jobs:
             echo "@worlddrknss/citadel@$v is already on npm"
             echo "done=true" >> "$GITHUB_OUTPUT"
           fi
-      - name: NPM_TOKEN is set
+      - name: npm with Trusted Publishing support
         if: steps.published.outputs.done != 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::error::Add the NPM_TOKEN repository secret (an npm automation token for @worlddrknss) and re-run this job."
-            exit 1
-          fi
+        # Trusted Publishing needs npm 11.5.1 or later; Node 22 ships npm 10.
+        run: npm install -g npm@11
       - if: steps.published.outputs.done != 'true'
         run: npm ci --no-audit --no-fund
       # The tag's commit passed CI (including the integration tests, which
@@ -111,6 +106,4 @@ jobs:
           npm run build
       - name: Publish
         if: steps.published.outputs.done != 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --provenance --access public --ignore-scripts

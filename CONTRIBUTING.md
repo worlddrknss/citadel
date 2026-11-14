@@ -174,7 +174,8 @@ TypeScript SDKs carry the release version too.
    [.github/workflows/release-sdks.yaml](.github/workflows/release-sdks.yaml),
    which tags `sdk/citadel/vX.Y.Z` (the Go SDK is its own module,
    `sdk/citadel/go.mod`) and publishes `@worlddrknss/citadel@X.Y.Z` to npm
-   using the `NPM_TOKEN` repository secret. Both steps are idempotent: re-run
+   with npm Trusted Publishing (no token; npm trusts `release-sdks.yaml` in
+   this repository). Both steps are idempotent: re-run
    the workflow, or start it by hand with the tag, if a step fails.
 
 By contributing, you agree that your contributions are licensed under the
