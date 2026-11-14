@@ -4,7 +4,8 @@ TypeScript client for [Citadel](https://github.com/worlddrknss/citadel)'s native
 
 - No runtime dependencies. It uses the global `fetch` and runs on Node 18+ and edge runtimes.
 - ESM and CommonJS builds with types generated from Citadel's OpenAPI spec.
-- Retries 429 and 5xx responses with backoff, honours `Retry-After`, and times out each attempt.
+- Retries rate limits and transient failures with backoff (never repeating a POST that may have taken effect), honours `Retry-After`, and times out each attempt.
+- `CitadelAgent`: typed Agent API client for AI agents (brokered HTTP, reveal, logins, TOTP, access requests and leases).
 - `loadSecrets` loads a folder of secrets with an in-memory cache.
 - Includes the `citadel mcp` stdio bridge for AI agents.
 - **Server-only.** The client holds an access key and returns secret values; it refuses to load in a browser.
@@ -13,16 +14,11 @@ TypeScript client for [Citadel](https://github.com/worlddrknss/citadel)'s native
 
 ## Install
 
-The package is not published to npm yet. Build it from the repository and install the tarball:
-
 ```sh
-git clone https://github.com/worlddrknss/citadel.git
-cd citadel/sdk/typescript && npm ci && npm run build && npm pack
-# in your app:
-npm install /path/to/worlddrknss-citadel-2.1.0.tgz
+npm install @worlddrknss/citadel
 ```
 
-See [Install](https://github.com/worlddrknss/citadel/blob/main/docs/sdk-typescript.md#install) for vendoring the tarball so CI can install it.
+See [Install](https://github.com/worlddrknss/citadel/blob/main/docs/sdk-typescript.md#install) for building an unreleased commit.
 
 ## Quick start
 

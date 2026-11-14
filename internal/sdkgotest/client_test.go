@@ -1,4 +1,4 @@
-package citadel_test
+package sdkgotest_test
 
 import (
 	"bytes"
@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/worlddrknss/citadel/internal/servertest"
-	"github.com/worlddrknss/citadel/sdk/citadel"
+	citadel "github.com/worlddrknss/citadel/sdk/citadel/v2"
 )
 
 // These tests run the SDK against the real server (memory store) from

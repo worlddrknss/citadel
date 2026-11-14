@@ -1,0 +1,116 @@
+name: Release SDKs
+
+# Publishes the SDKs for a release tag vX.Y.Z:
+#   - Go: tags sdk/citadel/vX.Y.Z on the same commit, so
+#     `go get github.com/worlddrknss/citadel/sdk/citadel/v2@vX.Y.Z` resolves
+#     (the SDK is its own module, sdk/citadel/go.mod).
+#   - TypeScript: publishes @worlddrknss/citadel@X.Y.Z to npm with provenance.
+#     Needs the NPM_TOKEN repository secret (an npm automation token that can
+#     publish @worlddrknss/citadel).
+# Both steps are idempotent, so a failed run can be re-run, or started by hand
+# for an existing tag (workflow_dispatch), once the cause is fixed.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (vX.Y.Z)
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+      - name: SDK versions match the tag
+        run: scripts/check-sdk-version.sh "$TAG"
+      - name: Tag sdk/citadel/${{ env.TAG }}
+        run: |
+          sdk_tag="sdk/citadel/$TAG"
+          if git ls-remote --exit-code --tags origin "refs/tags/$sdk_tag" >/dev/null; then
+            echo "$sdk_tag already exists"
+          else
+            git tag "$sdk_tag" "$(git rev-parse HEAD)"
+            git push origin "refs/tags/$sdk_tag"
+          fi
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+      - name: Fetch through the Go module proxy
+        # Makes the version visible on proxy.golang.org and pkg.go.dev now
+        # rather than on the first user's request. The proxy can lag a new
+        # tag briefly, so retry.
+        run: |
+          cd "$(mktemp -d)"
+          for i in 1 2 3 4 5 6; do
+            GOPROXY=https://proxy.golang.org GOFLAGS= go list -m "github.com/worlddrknss/citadel/sdk/citadel/v2@$TAG" && exit 0
+            sleep 20
+          done
+          exit 1
+
+  npm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - name: SDK versions match the tag
+        working-directory: .
+        run: scripts/check-sdk-version.sh "$TAG"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - name: Skip if already published
+        id: published
+        run: |
+          v="${TAG#v}"
+          if npm view "@worlddrknss/citadel@$v" version >/dev/null 2>&1; then
+            echo "@worlddrknss/citadel@$v is already on npm"
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: NPM_TOKEN is set
+        if: steps.published.outputs.done != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::Add the NPM_TOKEN repository secret (an npm automation token for @worlddrknss) and re-run this job."
+            exit 1
+          fi
+      - if: steps.published.outputs.done != 'true'
+        run: npm ci --no-audit --no-fund
+      # The tag's commit passed CI (including the integration tests, which
+      # need Postgres), so this repeats only the checks that need no server.
+      - if: steps.published.outputs.done != 'true'
+        run: |
+          npm run lint
+          npm run typecheck
+          npm run build
+      - name: Publish
+        if: steps.published.outputs.done != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public --ignore-scripts

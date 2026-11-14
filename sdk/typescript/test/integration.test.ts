@@ -10,7 +10,9 @@
 // Both build the server with `go build`; they are skipped when Go is not
 // installed or CITADEL_SDK_SKIP_INTEGRATION=1.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Citadel, CitadelError, clearSecretsCache, loadSecrets } from '../src/index.js';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { Citadel, CitadelAgent, CitadelError, clearSecretsCache, loadSecrets } from '../src/index.js';
 import { cleanupBuild, goAvailable, randomKeyB64, startServer, type RunningServer } from './server.js';
 
 const hasGo = goAvailable();
@@ -177,6 +179,87 @@ describe.skipIf(!hasGo)('integration: memory store with bearer access keys', () 
     const id = (citadel.transport.authorization ?? '').slice('Bearer '.length).split(':')[0]!;
     const wrong = new Citadel({ baseUrl: server.url, accessKeyId: id, secretAccessKey: 'wrong-secret', maxRetries: 0 });
     await expect(wrong.me()).rejects.toMatchObject({ status: 401, code: 'unauthorized' });
+  });
+
+  it('drives the Agent API with CitadelAgent', async () => {
+    const secret = 'sdk-ts-upstream-token-0123456789';
+    // A local upstream, reachable through the credential's allowHttp and
+    // allowedCidrs (the broker refuses loopback otherwise).
+    const upstream = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        if (req.headers.authorization !== `Bearer ${secret}`) {
+          res.writeHead(401).end('no credential');
+          return;
+        }
+        if (req.url === '/leak') {
+          res.writeHead(200, { 'Content-Type': 'text/plain' }).end(`token=${secret}`);
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'X-Method': req.method ?? '' }).end(Buffer.concat(chunks));
+      });
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    const host = `127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    try {
+      await citadel.projects.create({ slug: 'agents' });
+      await citadel.environments.create({ project: 'agents', slug: 'dev' });
+      await citadel.secrets.put({ project: 'agents', env: 'dev', key: 'API_TOKEN', value: secret });
+      const a = await citadel.request<{ agentId: string }>({ method: 'POST', path: '/v1/agents', body: { name: 'sdk-ts' } });
+      for (const name of ['upstream', 'gated']) {
+        await citadel.request({
+          method: 'POST',
+          path: '/v1/agents/credentials',
+          body: {
+            name,
+            project: 'agents',
+            env: 'dev',
+            key: 'API_TOKEN',
+            kind: 'http_header',
+            headerPrefix: 'Bearer ',
+            allowedHosts: [host],
+            allowedMethods: ['GET', 'POST'],
+            allowHttp: true,
+            allowedCidrs: ['127.0.0.1/32'],
+          },
+        });
+      }
+      await citadel.request({ method: 'POST', path: '/v1/agents/grants', body: { agentId: a.agentId, credential: 'upstream', actions: ['use', 'reveal'] } });
+      await citadel.request({ method: 'POST', path: '/v1/agents/grants', body: { agentId: a.agentId, credential: 'gated', requiresApproval: true } });
+      const tok = await citadel.request<{ token: string }>({ method: 'POST', path: '/v1/agents/tokens', body: { agentId: a.agentId, name: 'sdk', expiresInDays: 1 } });
+
+      const agent = new CitadelAgent({ baseUrl: server.url, token: tok.token, taskId: 'sdk-ts-run' });
+      const me = await agent.whoami();
+      expect(me.agentId).toBe(a.agentId);
+      expect(me.taskId).toBe('sdk-ts-run');
+      const creds = await agent.listCredentials();
+      expect(creds.map((c) => c.name).sort()).toEqual(['gated', 'upstream']);
+
+      const res = await agent.http({ credential: 'upstream', method: 'POST', url: `http://${host}/echo`, json: { hello: 'world' } });
+      expect(res.ok).toBe(true);
+      expect(res.headers['X-Method']).toBe('POST');
+      expect(res.json<{ hello: string }>()).toEqual({ hello: 'world' });
+      const leak = await agent.http({ credential: 'upstream', url: `http://${host}/leak` });
+      expect(leak.redacted).toBe(true);
+      expect(leak.text()).not.toContain(secret);
+      expect((await agent.reveal('upstream')).value).toBe(secret);
+
+      const denied = (await agent.http({ credential: 'upstream', url: 'https://elsewhere.example.com/' }).catch((e: unknown) => e)) as CitadelError;
+      expect(denied).toMatchObject({ status: 403, code: 'forbidden', reason: 'host_not_allowed' });
+
+      const gated = (await agent.http({ credential: 'gated', url: `http://${host}/echo` }).catch((e: unknown) => e)) as CitadelError;
+      expect(gated.isApprovalRequired).toBe(true);
+      expect(gated.reason).toBe('approval_required');
+      expect(gated.requestId).toBeTruthy();
+      const pending = await agent.getAccessRequest(gated.requestId!);
+      expect(pending).toMatchObject({ status: 'pending', credential: 'gated', origin: 'policy' });
+      const asked = await agent.requestAccess({ credential: 'gated', reason: 'sdk test', durationSeconds: 600 });
+      expect(asked.status).toBe('pending');
+      expect(await agent.listLeases()).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
   });
 });
 

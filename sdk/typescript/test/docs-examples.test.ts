@@ -3,7 +3,7 @@
 // change an example in the docs, change it here too, and the other way round.
 // Doc-only lines (`import 'server-only'`, JSX) are left out.
 import { afterEach, describe, expect, it } from 'vitest';
-import { Citadel, CitadelError, clearSecretsCache, loadSecrets, type components, type RequestOptions } from '../src/index.js';
+import { Citadel, CitadelAgent, CitadelError, clearSecretsCache, loadSecrets, type components } from '../src/index.js';
 import { json, mockFetch, type Handler } from './helpers.js';
 
 type S = components['schemas'];
@@ -16,7 +16,7 @@ function configured(fetchImpl: typeof fetch): Citadel {
     accessKeyId: process.env.CITADEL_ACCESS_KEY_ID ?? 'AKIAEXAMPLE',
     secretAccessKey: process.env.CITADEL_SECRET_ACCESS_KEY ?? 'example-secret',
     timeoutMs: 10_000, // per attempt (default 30 s; 0 disables)
-    maxRetries: 3, // 429/5xx and network errors (default 3)
+    maxRetries: 3, // see Errors, retries and timeouts (default 3)
     retryBaseDelayMs: 1, // default 200 ms (shortened for the test)
     retryMaxDelayMs: 5, // default 10 s
     headers: { 'X-Request-Source': 'shop-web' },
@@ -113,96 +113,103 @@ async function kmsRoundTrip(citadel: Citadel) {
 
 // ---- Agent API --------------------------------------------------------------
 
-// lib/citadel-agent.ts: typed wrappers for the Agent API, using the
-// generated OpenAPI types. The token goes in each call's Authorization
-// header, so no access key is needed.
-function agentApi(token: string, client: Citadel = new Citadel()) {
-  const authorization = `Bearer ${token}`;
-  const get = <T>(path: string, query?: Record<string, string>, opts?: RequestOptions) =>
-    client.request<T>({ method: 'GET', path, query, authorization }, opts);
-  const post = <T>(path: string, body: unknown, opts?: RequestOptions) =>
-    client.request<T>({ method: 'POST', path, body, authorization }, opts);
-  return {
-    whoami: (opts?: RequestOptions) => get<S['AgentWhoAmI']>('/v1/agent/whoami', undefined, opts),
-    credentials: async (opts?: RequestOptions) => (await get<S['AgentUsableCredentialList']>('/v1/agent/credentials', undefined, opts)).credentials,
-    http: (input: S['AgentHttpRequest'], opts?: RequestOptions) => post<S['AgentHttpResponse']>('/v1/agent/http', input, opts),
-    reveal: (input: S['AgentRevealRequest'], opts?: RequestOptions) => post<S['AgentRevealResponse']>('/v1/agent/credentials/reveal', input, opts),
-    login: (input: S['AgentLoginRequest'], opts?: RequestOptions) => post<S['AgentLogin']>('/v1/agent/login', input, opts),
-    totp: (input: S['AgentTOTPRequest'], opts?: RequestOptions) => post<S['AgentTOTPCode']>('/v1/agent/totp', input, opts),
-    requestAccess: (input: S['AgentAccessRequestInput'], opts?: RequestOptions) => post<S['AgentAccessRequest']>('/v1/agent/access-requests', input, opts),
-    accessRequest: (id: string, opts?: RequestOptions) => get<S['AgentAccessRequest']>(`/v1/agent/access-requests/${encodeURIComponent(id)}`, undefined, opts),
-    leases: async (credential?: string, opts?: RequestOptions) =>
-      (await get<S['AgentLeaseList']>('/v1/agent/leases', credential ? { credential } : undefined, opts)).leases,
-  };
+// lib/citadel-agent.ts
+function makeAgent(fetchImpl: typeof fetch) {
+  // In the app: `export const agent = new CitadelAgent();` (reads CITADEL_URL
+  // and CITADEL_AGENT_TOKEN).
+  return new CitadelAgent({
+    baseUrl: 'https://citadel.example.com',
+    token: process.env.CITADEL_AGENT_TOKEN ?? 'cagt_example',
+    taskId: 'fix-issue-1234', // optional: X-Citadel-Task-Id on every call
+    fetch: fetchImpl,
+  });
 }
 
-async function agentBasics(agent: ReturnType<typeof agentApi>) {
+async function agentBasics(agent: CitadelAgent) {
   const me = await agent.whoami();
-  const usable = (await agent.credentials()).filter((c) => c.usable).map((c) => c.name);
+  const usable = (await agent.listCredentials()).filter((c) => c.usable).map((c) => c.name);
 
   // Brokered HTTP: Citadel injects the credential; the agent never sees it.
-  const res = await agent.http(
-    {
-      credential: 'github-pat',
-      method: 'GET',
-      url: 'https://api.github.com/user/repos',
-      headers: { Accept: 'application/vnd.github+json' },
-      bodyEncoding: 'text',
-      taskId: 'fix-issue-1234',
-    },
-    { maxRetries: 0 }, // don't repeat upstream side effects on a 502/504
-  );
-  const repos: unknown = res.bodyEncoding === 'text' ? JSON.parse(res.body) : null;
-  return { agentId: me.agentId, usable, status: res.status, repos };
+  const res = await agent.http({
+    credential: 'github-pat',
+    url: 'https://api.github.com/user/repos',
+    headers: { Accept: 'application/vnd.github+json' },
+  });
+  const repos = res.ok ? res.json<unknown[]>() : [];
+
+  // A JSON body (`json`), text (`body: string`) or bytes (`body: Uint8Array`).
+  const issue = await agent.http({
+    credential: 'github-pat',
+    method: 'POST',
+    url: 'https://api.github.com/repos/acme/app/issues',
+    json: { title: 'Flaky test in CI' },
+  });
+  return { agentId: me.agentId, usable, status: res.status, repos, created: issue.status };
 }
 
-async function agentSecrets(agent: ReturnType<typeof agentApi>) {
+async function agentSecrets(agent: CitadelAgent) {
   // Needs a grant with `reveal`. Prefer brokered use when you only call an API.
   const deployKey = await agent.reveal({ credential: 'deploy-key', taskId: 'release-42' });
 
   // Browser agents: a login for one page (`reveal`), and its TOTP code (`totp`).
-  const login = await agent.login({ credential: 'acme-admin', url: 'https://admin.acme.example/login' });
-  const { code, secondsRemaining } = await agent.totp({ credential: 'acme-admin' });
+  const login = await agent.getLogin({ credential: 'acme-admin', url: 'https://admin.acme.example/login' });
+  const { code, secondsRemaining } = await agent.getTotpCode('acme-admin');
 
   return { value: deployKey.value, expiresAt: deployKey.expiresAt, username: login.username, code, secondsRemaining };
 }
 
-async function waitForAccess(agent: ReturnType<typeof agentApi>, sleep: (ms: number) => Promise<void>) {
-  // Ask a person for access. Asking again while it is pending returns the
-  // same request, which is also how to find the request behind an
-  // `approval_required` error.
-  let request = await agent.requestAccess({
+async function askForAccess(agent: CitadelAgent) {
+  // Ask a person for access, then wait for the decision (polls every 5 s by
+  // default; pass `signal` to give up).
+  const request = await agent.requestAccess({
     credential: 'deploy-key',
     actions: ['reveal'],
     reason: 'Tag the release; the pipeline needs the deploy key',
     duration: '15m',
     taskId: 'release-42',
   });
-  while (request.status === 'pending') {
-    await sleep(5_000);
-    request = await agent.accessRequest(request.requestId);
+  const decided = await agent.waitForAccess(request.requestId, { intervalMs: 1 /* default 5000 */ });
+  if (decided.status !== 'approved') {
+    throw new Error(`access ${decided.status}: ${decided.decisionComment ?? ''}`);
   }
-  if (request.status !== 'approved') {
-    throw new Error(`access ${request.status}: ${request.decisionComment ?? ''}`);
-  }
-  const leases = await agent.leases('deploy-key');
-  return { lease: request.lease?.leaseId, active: leases.length };
+  const leases = await agent.listLeases({ credential: 'deploy-key' });
+  return { lease: decided.lease?.leaseId, active: leases.length };
 }
 
-async function revealOrAsk(agent: ReturnType<typeof agentApi>) {
+async function revealWithApproval(agent: CitadelAgent): Promise<string> {
   try {
-    return (await agent.reveal({ credential: 'deploy-key' })).value;
+    return (await agent.reveal('deploy-key')).value;
   } catch (err) {
-    if (CitadelError.is(err, 'approval_required')) {
-      const pending = await agent.requestAccess({ credential: 'deploy-key', actions: ['reveal'], reason: 'release' });
-      return `waiting for ${pending.requestId}`;
+    // A grant with requiresApproval: the error names the access request
+    // Citadel opened. Wait for it, then retry under the lease.
+    if (CitadelError.is(err, 'approval_required') && err.requestId) {
+      const decided = await agent.waitForAccess(err.requestId, { intervalMs: 1 /* default 5000 */ });
+      if (decided.status === 'approved') return (await agent.reveal('deploy-key')).value;
+      return `not approved: ${decided.decisionComment ?? decided.status}`;
     }
     if (CitadelError.is(err) && err.isForbidden) {
-      // no_grant, host_not_allowed, agent_suspended...: err.message explains.
-      return `refused: ${err.message}`;
+      // err.reason: no_grant, action_not_granted, host_not_allowed, agent_suspended...
+      return `refused: ${err.reason ?? err.code}`;
     }
     throw err;
   }
+}
+
+async function chargeOnce(agent: CitadelAgent) {
+  // Not retried after a 502/504 or a timeout: the upstream may have acted.
+  const once = await agent.http({ credential: 'payments', method: 'POST', url: 'https://pay.example.com/charges', json: { amount: 100 } });
+  // An idempotent upstream call (an Idempotency-Key header): safe to retry.
+  const retried = await agent.http(
+    {
+      credential: 'payments',
+      method: 'POST',
+      url: 'https://pay.example.com/charges',
+      headers: { 'Idempotency-Key': 'order-42' },
+      json: { amount: 100 },
+    },
+    { retryNonIdempotent: true },
+  );
+  return [once.status, retried.status];
 }
 
 // ---- Management -------------------------------------------------------------
@@ -302,7 +309,7 @@ describe('docs/sdk-typescript.md examples', () => {
     expect(m.calls[0]!.body).toMatchObject({ keyId: 'alias/payments', encryptionContext: { tenant: '42' } });
   });
 
-  it('call the Agent API with an agent token', async () => {
+  it('call the Agent API with CitadelAgent', async () => {
     let polls = 0;
     const lease = { leaseId: 'als_1', agentId: 'agt_1', credential: 'deploy-key', actions: ['reveal'], scope: 'duration', usesLeft: null, useCount: 0, expiresAt: '', createdAt: '', createdBy: 'alice', status: 'active' };
     const pending = { requestId: 'aar_1', credential: 'deploy-key', actions: ['reveal'], origin: 'agent', status: 'pending', createdAt: '', expiresAt: '' };
@@ -311,7 +318,8 @@ describe('docs/sdk-typescript.md examples', () => {
         'GET /v1/agent/whoami': () => json(200, { agentId: 'agt_1', name: 'ci', owner: 'alice', accountId: 'a', status: 'active', authMethod: 'token' }),
         'GET /v1/agent/credentials': () =>
           json(200, { credentials: [{ name: 'github-pat', kind: 'http_header', description: '', allowedHosts: [], allowedMethods: [], allowedPathPrefixes: [], actions: ['use'], maxUsesPerHour: 0, requiresApproval: false, usable: true }] }),
-        'POST /v1/agent/http': () => json(200, { status: 200, headers: {}, body: '[]', bodyEncoding: 'text', truncated: false, redacted: false }),
+        'POST /v1/agent/http': (b) =>
+          json(200, { status: (b as { method: string }).method === 'POST' ? 201 : 200, headers: {}, body: '[]', bodyEncoding: 'text', truncated: false, redacted: false }),
         'POST /v1/agent/credentials/reveal': () => json(200, { credential: 'deploy-key', kind: 'raw', value: 'k3y' }),
         'POST /v1/agent/login': () => json(200, { credential: 'acme-admin', username: 'bot', password: 'pw', urlPattern: 'https://admin.acme.example' }),
         'POST /v1/agent/totp': () => json(200, { credential: 'acme-admin', code: '123456', expiresAt: '', secondsRemaining: 20, digits: 6, period: 30, algorithm: 'SHA256' }),
@@ -320,26 +328,43 @@ describe('docs/sdk-typescript.md examples', () => {
         'GET /v1/agent/leases': () => json(200, { leases: [lease] }),
       }),
     );
-    const agent = agentApi('cagt_example', new Citadel({ baseUrl: 'https://citadel.example.com', fetch: m.fetch }));
-    expect(await agentBasics(agent)).toEqual({ agentId: 'agt_1', usable: ['github-pat'], status: 200, repos: [] });
-    expect(m.calls.every((c) => c.headers['authorization'] === 'Bearer cagt_example')).toBe(true);
+    const agent = makeAgent(m.fetch);
+    expect(await agentBasics(agent)).toEqual({ agentId: 'agt_1', usable: ['github-pat'], status: 200, repos: [], created: 201 });
+    expect(m.calls.every((c) => c.headers['authorization'] === 'Bearer cagt_example' && c.headers['x-citadel-task-id'] === 'fix-issue-1234')).toBe(true);
+    expect(m.calls[3]!.body).toMatchObject({ method: 'POST', body: '{"title":"Flaky test in CI"}', headers: { 'Content-Type': 'application/json' } });
     expect((await agentSecrets(agent)).code).toBe('123456');
-    expect(await waitForAccess(agent, async () => {})).toEqual({ lease: 'als_1', active: 1 });
+    expect(await askForAccess(agent)).toEqual({ lease: 'als_1', active: 1 });
     expect(m.calls.find((c) => c.url.pathname === '/v1/agent/leases')!.url.searchParams.get('credential')).toBe('deploy-key');
   });
 
-  it('turn approval_required and refusals into decisions', async () => {
-    let answer: Response = json(403, { error: 'approval_required', reason: 'approval_required', requestId: 'aar_9', message: 'a person must approve this use' });
+  it('wait for approval and turn refusals into decisions', async () => {
+    let reveals = 0;
+    let answer: () => Response = () =>
+      ++reveals === 1 ? json(403, { error: 'approval_required', reason: 'approval_required', requestId: 'aar_9', message: 'a person must approve this use' }) : json(200, { credential: 'deploy-key', kind: 'raw', value: 'k3y' });
     const m = mockFetch(
       route({
-        'POST /v1/agent/credentials/reveal': () => answer,
-        'POST /v1/agent/access-requests': () => json(200, { requestId: 'aar_9', credential: 'deploy-key', actions: ['reveal'], origin: 'policy', status: 'pending', createdAt: '', expiresAt: '' }),
+        'POST /v1/agent/credentials/reveal': () => answer(),
+        'GET /v1/agent/access-requests/aar_9': () => json(200, { requestId: 'aar_9', credential: 'deploy-key', actions: ['reveal'], origin: 'policy', status: 'approved', createdAt: '', expiresAt: '' }),
       }),
     );
-    const agent = agentApi('cagt_example', new Citadel({ baseUrl: 'https://citadel.example.com', fetch: m.fetch }));
-    expect(await revealOrAsk(agent)).toBe('waiting for aar_9');
-    answer = json(403, { error: 'forbidden', reason: 'no_grant', message: 'the agent has no grant for this credential' });
-    expect(await revealOrAsk(agent)).toBe('refused: the agent has no grant for this credential');
+    const agent = makeAgent(m.fetch);
+    expect(await revealWithApproval(agent)).toBe('k3y');
+    expect(m.calls.map((c) => `${c.method} ${c.url.pathname}`)).toEqual(['POST /v1/agent/credentials/reveal', 'GET /v1/agent/access-requests/aar_9', 'POST /v1/agent/credentials/reveal']);
+    answer = () => json(403, { error: 'forbidden', reason: 'no_grant', message: 'the agent has no grant for this credential' });
+    expect(await revealWithApproval(agent)).toBe('refused: no_grant');
+  });
+
+  it('retry brokered calls only when asked', async () => {
+    let n = 0;
+    const m = mockFetch(() => (++n % 2 === 1 ? json(502, { error: 'upstream_error', reason: 'upstream_unreachable', message: 'x' }) : json(200, { status: 201, headers: {}, body: '', bodyEncoding: 'text', truncated: false, redacted: false })));
+    const agent = new CitadelAgent({ baseUrl: 'https://citadel.example.com', token: 'cagt_example', retryBaseDelayMs: 1, fetch: m.fetch });
+    await expect(chargeOnce(agent)).rejects.toMatchObject({ status: 502, reason: 'upstream_unreachable' });
+    expect(m.calls).toHaveLength(1);
+    n = 0;
+    m.calls.length = 0;
+    const retried = await agent.http({ credential: 'payments', method: 'POST', url: 'https://pay.example.com/charges', json: {} }, { retryNonIdempotent: true });
+    expect(retried.status).toBe(201);
+    expect(m.calls).toHaveLength(2);
   });
 
   it('manage projects, secrets and parameters, and call untyped operations', async () => {

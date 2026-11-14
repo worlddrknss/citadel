@@ -43,6 +43,46 @@ export type GeneratedCertificate = Schemas['CertificateGenerateResponse'];
 export type WorkloadTokenInput = Schemas['WorkloadTokenRequest'];
 export type WorkloadToken = Schemas['WorkloadToken'];
 
+// Agent API (CitadelAgent).
+export type AgentErrorBody = Schemas['AgentError'];
+export type AgentWhoAmI = Schemas['AgentWhoAmI'];
+export type AgentUsableCredential = Schemas['AgentUsableCredential'];
+/** The wire shape of POST /v1/agent/http; {@link AgentHttpInput} is the friendlier input. */
+export type AgentHttpRequestBody = Schemas['AgentHttpRequest'];
+/** The wire shape of a brokered response; `CitadelAgent.http` returns an {@link AgentHttpResult}. */
+export type AgentHttpResponseBody = Schemas['AgentHttpResponse'];
+export type AgentHttpMethod = NonNullable<AgentHttpRequestBody['method']>;
+export type AgentRevealResult = Schemas['AgentRevealResponse'];
+export type AgentTotpCode = Schemas['AgentTOTPCode'];
+export type AgentLogin = Schemas['AgentLogin'];
+export type AgentAccessRequestInput = Schemas['AgentAccessRequestInput'];
+export type AgentAccessRequest = Schemas['AgentAccessRequest'];
+export type AgentLease = Schemas['AgentLease'];
+
+/** A brokered HTTP request for `CitadelAgent.http`. */
+export interface AgentHttpInput {
+  /** The credential to inject (the agent needs a grant with the `use` action). */
+  credential: string;
+  /** Absolute https URL (http only when the credential allows it). */
+  url: string;
+  /** Default GET. */
+  method?: AgentHttpMethod;
+  /** Sent upstream, minus headers that would collide with the credential. */
+  headers?: Record<string, string>;
+  /**
+   * Request body, at most 1 MiB: a string is sent as text, bytes as
+   * base64 (the SDK sets `bodyEncoding`). Use `json` for a JSON body.
+   */
+  body?: string | Uint8Array | ArrayBuffer;
+  /**
+   * A value to send as JSON (instead of `body`); sets
+   * `Content-Type: application/json` unless `headers` has one.
+   */
+  json?: unknown;
+  /** Task or session ID recorded in the audit log; defaults to the client's `taskId`. */
+  taskId?: string;
+}
+
 /** Addresses a folder: project, environment and an optional folder path. */
 export interface FolderRef {
   project: string;

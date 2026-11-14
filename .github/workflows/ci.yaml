@@ -38,7 +38,9 @@ jobs:
           unformatted="$(gofmt -l $(git ls-files '*.go'))"
           if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
       - name: go vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          (cd sdk/citadel && go vet ./...)
       # Production runs the Go Cryptographic Module with GODEBUG=fips140=only
       # (FIPS 140-3), where non-approved algorithms panic. Tests run the same
       # way so a non-approved primitive fails CI rather than a deployment.
@@ -46,11 +48,17 @@ jobs:
         env:
           GOFIPS140: latest
           GODEBUG: fips140=only
-        run: go test -race -count=1 -coverprofile=coverage.out ./...
+        run: |
+          go test -race -count=1 -coverprofile=coverage.out ./...
+          # The Go SDK is its own module (sdk/citadel/go.mod); its
+          # server-backed tests live in internal/sdkgotest.
+          (cd sdk/citadel && go test -race -count=1 ./...)
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
       - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+          (cd sdk/citadel && go run golang.org/x/vuln/cmd/govulncheck@latest ./...)
 
   web:
     runs-on: ubuntu-latest

@@ -1,6 +1,7 @@
 import { base64ToBytes, bytesToBase64, utf8Decode, utf8Encode } from './base64.js';
 import { CitadelError } from './errors.js';
 import { assertServerRuntime } from './guard.js';
+import { VERSION } from './version.js';
 import { call, DEFAULT_TIMEOUT_MS, type CallSpec, type RequestOptions, type RetryOptions, type TransportConfig } from './http.js';
 import type {
   CertificateSummary,
@@ -51,7 +52,11 @@ export interface CitadelOptions {
   secretAccessKey?: string;
   /** Per-attempt timeout in milliseconds (default 30000; 0 disables). */
   timeoutMs?: number;
-  /** Retries after the first attempt for 429/5xx and network errors (default 3). */
+  /**
+   * Retries after the first attempt (default 3): 429 and 503 with
+   * Retry-After for every call; other 5xx and network errors only for
+   * idempotent calls (see {@link RequestOptions.retryNonIdempotent}).
+   */
   maxRetries?: number;
   /** First backoff delay in milliseconds (default 200). */
   retryBaseDelayMs?: number;
@@ -63,13 +68,61 @@ export interface CitadelOptions {
   headers?: Record<string, string>;
 }
 
-function env(name: string): string | undefined {
+/** Reads a non-empty, trimmed environment variable (undefined off Node). */
+export function env(name: string): string | undefined {
   try {
     const value = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[name];
     return value && value.trim() !== '' ? value.trim() : undefined;
   } catch {
     return undefined;
   }
+}
+
+/** Connection options shared by {@link Citadel} and `CitadelAgent`. */
+export type TransportOptions = Pick<CitadelOptions, 'baseUrl' | 'timeoutMs' | 'maxRetries' | 'retryBaseDelayMs' | 'retryMaxDelayMs' | 'fetch' | 'headers'>;
+
+/**
+ * Validates the connection options and builds the transport. `name` prefixes
+ * error messages. The authorization value never appears in them.
+ * @internal
+ */
+export function buildTransport(name: string, options: TransportOptions, authorization: string | undefined): TransportConfig {
+  const baseUrl = (options.baseUrl ?? env('CITADEL_URL') ?? '').trim();
+  if (!baseUrl) {
+    throw new TypeError(`${name}: baseUrl is required (or set CITADEL_URL)`);
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new TypeError(`${name}: baseUrl is not a valid URL: ${baseUrl}`);
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new TypeError(`${name}: baseUrl must be an http(s) URL`);
+  }
+  const fetchImpl = options.fetch ?? (globalThis.fetch as typeof fetch | undefined);
+  if (typeof fetchImpl !== 'function') {
+    throw new TypeError(`${name}: no global fetch; use Node 18+ or pass options.fetch`);
+  }
+  const retry: RetryOptions = {
+    maxRetries: options.maxRetries ?? 3,
+    baseDelayMs: options.retryBaseDelayMs ?? 200,
+    maxDelayMs: options.retryMaxDelayMs ?? 10_000,
+  };
+  return {
+    baseUrl: trimSlashes(baseUrl, false, true),
+    authorization,
+    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    retry,
+    // Bind so runtimes that require fetch's `this` to be the global work.
+    fetch: (input, init) => fetchImpl.call(globalThis, input, init),
+    headers: withUserAgent(options.headers),
+  };
+}
+
+function withUserAgent(headers: Record<string, string> = {}): Record<string, string> {
+  if (Object.keys(headers).some((k) => k.toLowerCase() === 'user-agent')) return { ...headers };
+  return { 'User-Agent': `citadel-ts/${VERSION}`, ...headers };
 }
 
 /**
@@ -98,21 +151,6 @@ export class Citadel {
 
   constructor(options: CitadelOptions = {}) {
     assertServerRuntime();
-    const baseUrl = (options.baseUrl ?? env('CITADEL_URL') ?? '').trim();
-    if (!baseUrl) {
-      throw new TypeError('Citadel: baseUrl is required (or set CITADEL_URL)');
-    }
-    let parsed: URL;
-    try {
-      parsed = new URL(baseUrl);
-    } catch {
-      throw new TypeError(`Citadel: baseUrl is not a valid URL: ${baseUrl}`);
-    }
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-      throw new TypeError('Citadel: baseUrl must be an http(s) URL');
-    }
-    this.baseUrl = trimSlashes(baseUrl, false, true);
-
     const accessKeyId = options.accessKeyId ?? env('CITADEL_ACCESS_KEY_ID');
     const secretAccessKey = options.secretAccessKey ?? env('CITADEL_SECRET_ACCESS_KEY');
     if (Boolean(accessKeyId) !== Boolean(secretAccessKey)) {
@@ -121,24 +159,8 @@ export class Citadel {
     if (accessKeyId?.includes(':')) {
       throw new TypeError('Citadel: accessKeyId must not contain ":"');
     }
-    const fetchImpl = options.fetch ?? (globalThis.fetch as typeof fetch | undefined);
-    if (typeof fetchImpl !== 'function') {
-      throw new TypeError('Citadel: no global fetch; use Node 18+ or pass options.fetch');
-    }
-    const retry: RetryOptions = {
-      maxRetries: options.maxRetries ?? 3,
-      baseDelayMs: options.retryBaseDelayMs ?? 200,
-      maxDelayMs: options.retryMaxDelayMs ?? 10_000,
-    };
-    this.transport = {
-      baseUrl: this.baseUrl,
-      authorization: accessKeyId ? `Bearer ${accessKeyId}:${secretAccessKey}` : undefined,
-      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      retry,
-      // Bind so runtimes that require fetch's `this` to be the global work.
-      fetch: (input, init) => fetchImpl.call(globalThis, input, init),
-      headers: { ...options.headers },
-    };
+    this.transport = buildTransport('Citadel', options, accessKeyId ? `Bearer ${accessKeyId}:${secretAccessKey}` : undefined);
+    this.baseUrl = this.transport.baseUrl;
   }
 
   /** Low-level call to any /v1 operation; prefer the typed methods. */
