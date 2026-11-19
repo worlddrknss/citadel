@@ -24,7 +24,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Chart appVersion matches the tag
         run: scripts/check-chart-version.sh "$GITHUB_REF_NAME"
       - name: SDK versions match the tag
