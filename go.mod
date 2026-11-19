@@ -9,11 +9,11 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/acmpca v1.57.0
 	github.com/aws/aws-sdk-go-v2/service/kms v1.62.6
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.51.0
-	github.com/aws/aws-sdk-go-v2/service/ssm v1.82.1
+	github.com/aws/aws-sdk-go-v2/service/ssm v1.83.0
 	github.com/aws/aws-sdk-go-v2/service/sts v1.52.0
 	github.com/aws/smithy-go v1.28.9
 	github.com/lib/pq v1.12.3
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.59.0
 )
 
 require (
