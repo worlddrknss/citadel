@@ -80,7 +80,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
-          registry-url: https://registry.npmjs.org
+          # No registry-url: it writes an .npmrc with _authToken=${NODE_AUTH_TOKEN},
+          # which Trusted Publishing doesn't use and can shadow the OIDC exchange.
           cache: npm
           cache-dependency-path: sdk/typescript/package-lock.json
       - name: Skip if already published
@@ -106,4 +107,4 @@ jobs:
           npm run build
       - name: Publish
         if: steps.published.outputs.done != 'true'
-        run: npm publish --provenance --access public --ignore-scripts
+        run: npm publish --provenance --access public --ignore-scripts --loglevel verbose
