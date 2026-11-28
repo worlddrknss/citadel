@@ -1468,8 +1468,9 @@ paths:
           and is clamped to 900-43200. An OIDC trust policy needs a registered
           provider URL, audiences that are client IDs of that provider and at least
           one subject (`*` only as a trailing wildcard); an account trust policy
-          needs 12-digit principal account IDs. 409 `already_exists` when the name
-          is taken.
+          needs 12-digit principal account IDs. permissionsPolicy limits what
+          the role's sessions may do (see IamPermissionsPolicy). 409
+          `already_exists` when the name is taken.
         x-citadel-role: admin
         x-citadel-audit: citadel.CreateRole
         requestBody:
@@ -8445,12 +8446,56 @@ components:
           $ref: "#/components/schemas/IamTrustPolicy"
         maxSessionSeconds:
           type: integer
+        permissionsPolicy:
+          $ref: "#/components/schemas/IamPermissionsPolicy"
         createdAt:
           type: string
           format: date-time
         updatedAt:
           type: string
           format: date-time
+    IamPermissionsPolicy:
+      type: object
+      description: |
+        An IAM identity policy limiting what the role's temporary credentials
+        may do. Deny by default: a request needs an Allow statement matching its
+        action and resource and no matching Deny. `*` and `?` are wildcards in
+        Action and Resource. Resources are checked for Secrets Manager (ListSecrets
+        and BatchGetSecretValue return only allowed secrets); other actions need
+        Resource `*`. Principal, NotAction, NotResource and Condition are rejected.
+        Absent: the role's sessions are unrestricted in the account.
+      required: [Statement]
+      properties:
+        Version:
+          type: string
+          enum: ["2012-10-17"]
+        Statement:
+          oneOf:
+            - $ref: "#/components/schemas/IamPolicyStatement"
+            - type: array
+              items:
+                $ref: "#/components/schemas/IamPolicyStatement"
+    IamPolicyStatement:
+      type: object
+      required: [Effect, Action, Resource]
+      properties:
+        Sid:
+          type: string
+        Effect:
+          type: string
+          enum: [Allow, Deny]
+        Action:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+        Resource:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
     IamRoleInput:
       type: object
       required: [roleName, trust]
@@ -8465,6 +8510,14 @@ components:
         maxSessionSeconds:
           type: integer
           description: Defaults to 3600; clamped to 900-43200
+        permissionsPolicy:
+          description: |
+            The role's permissions policy. Omitted on an update: unchanged.
+            null or {}: removed, so the role's sessions are unrestricted in the
+            account.
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/IamPermissionsPolicy"
     SsoRoleMapping:
       type: object
       required: [group, accountId, role]

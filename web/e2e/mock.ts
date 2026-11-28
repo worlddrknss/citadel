@@ -268,6 +268,17 @@ const roles = [
     description: 'CI deploys',
     trust: { type: 'oidc', providerUrl: 'https://token.actions.githubusercontent.com', audiences: ['sts.amazonaws.com'], subjects: ['repo:acme/app:*'] },
     maxSessionSeconds: 3600,
+    permissionsPolicy: {
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Sid: 'ReadSecrets',
+          Effect: 'Allow',
+          Action: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret', 'secretsmanager:ListSecrets', 'secretsmanager:BatchGetSecretValue'],
+          Resource: ['arn:aws:secretsmanager:*:*:secret:app/prod/*']
+        }
+      ]
+    },
     createdAt: ago(40 * DAY),
     updatedAt: ago(4 * DAY)
   },

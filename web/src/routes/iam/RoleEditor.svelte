@@ -1,5 +1,7 @@
 <!-- Create or edit a role. The trust policy can be edited as a form or as
-     its JSON document; both are validated against the registered providers. -->
+     its JSON document; both are validated against the registered providers.
+     The permissions policy limits what the role's sessions may do: secret
+     paths (a generated read policy), a JSON policy, or the whole account. -->
 <script lang="ts">
   import { untrack } from 'svelte';
   import Modal from '#lib/components/Modal.svelte';
@@ -9,6 +11,7 @@
   import Seg from './Seg.svelte';
   import { iamApi } from './api';
   import { validateTrust, hasErrors, trustToJson, parseTrustJson, splitList, type TrustErrors } from './trust';
+  import { parsePrefixes, prefixError, readPathsPolicy, prefixesFromPolicy, policyToJson, parsePolicyJson } from './permissions';
 
   let {
     open = $bindable(false),
@@ -41,6 +44,9 @@
   let subjects = $state('');
   let principals = $state('');
   let json = $state('');
+  let permMode = $state<'paths' | 'json' | 'account'>('paths');
+  let prefixesText = $state('');
+  let permJson = $state('');
   let touched = $state(false);
   let busy = $state(false);
   let error = $state('');
@@ -57,6 +63,13 @@
     mode = 'form';
     fromTrust(t);
     json = trustToJson(t);
+    const pol = role?.permissionsPolicy ?? null;
+    const prefixes = prefixesFromPolicy(pol);
+    // A new role starts limited to secret paths; an existing role without a
+    // policy shows that it has the whole account.
+    permMode = !role ? 'paths' : !pol ? 'account' : prefixes ? 'paths' : 'json';
+    prefixesText = (prefixes ?? []).join('\n');
+    permJson = policyToJson(pol ?? readPathsPolicy(prefixes ?? ['app/prod/']));
     touched = false;
     error = '';
   }
@@ -79,6 +92,35 @@
   const errors = $derived<TrustErrors>(parsed.error ? { json: parsed.error } : trust ? validateTrust(trust, providers) : {});
   const nameError = $derived(!name.trim() ? 'A role name is required.' : !/^[A-Za-z0-9._-]{1,64}$/.test(name.trim()) ? "Use letters, numbers, '.', '_' and '-' (up to 64)." : '');
   const jsonErrorList = $derived(Object.entries(errors).filter(([, v]) => v).map(([k, v]) => (k === 'json' ? v : `${k}: ${v}`)));
+
+  const prefixes = $derived(parsePrefixes(prefixesText));
+  const permParsed = $derived(permMode === 'json' ? parsePolicyJson(permJson) : {});
+  const permError = $derived(permMode === 'paths' ? prefixError(prefixes) : permMode === 'json' ? (permParsed.error ?? '') : '');
+  const permissionsPolicy = $derived(
+    permMode === 'account' ? null : permMode === 'paths' ? readPathsPolicy(prefixes) : (permParsed.policy ?? null)
+  );
+
+  // Seg sets permMode before calling this, so the mode being left is kept.
+  let lastPermMode: 'paths' | 'json' | 'account' = 'paths';
+  $effect(() => {
+    if (open) untrack(() => (lastPermMode = permMode));
+  });
+
+  function switchPermMode(m: 'paths' | 'json' | 'account') {
+    const from = lastPermMode;
+    if (m === 'json' && from === 'paths' && !prefixError(prefixes)) permJson = policyToJson(readPathsPolicy(prefixes));
+    if (m === 'paths' && from === 'json') {
+      const p = prefixesFromPolicy(parsePolicyJson(permJson).policy);
+      if (!p) {
+        toast.error('This policy is more than secret paths; keep editing it as JSON.');
+        permMode = 'json';
+        return;
+      }
+      prefixesText = p.join('\n');
+    }
+    permMode = m;
+    lastPermMode = m;
+  }
 
   function switchMode(m: 'form' | 'json') {
     if (m === 'json') json = trustToJson(formTrust);
@@ -103,15 +145,15 @@
   async function submit(e: SubmitEvent) {
     e.preventDefault();
     touched = true;
-    if ((!role && nameError) || !trust || hasErrors(errors)) return;
+    if ((!role && nameError) || !trust || hasErrors(errors) || permError) return;
     busy = true;
     error = '';
     try {
       if (role) {
-        await iamApi.updateRole({ roleName: role.roleName, description: description.trim(), trust, maxSessionSeconds: maxSession });
+        await iamApi.updateRole({ roleName: role.roleName, description: description.trim(), trust, maxSessionSeconds: maxSession, permissionsPolicy });
         toast.success(`Saved ${role.roleName}`);
       } else {
-        await api.createRole({ roleName: name.trim(), description: description.trim(), trust, maxSessionSeconds: maxSession });
+        await api.createRole({ roleName: name.trim(), description: description.trim(), trust, maxSessionSeconds: maxSession, permissionsPolicy });
         toast.success(`Created ${name.trim()}`);
       }
       open = false;
@@ -235,6 +277,61 @@
               {#if show('principals')}<span class="field-error">{show('principals')}</span>{:else}<span class="field-hint">Comma-separated. Callers signed with access keys from these accounts may assume the role.</span>{/if}
             </div>
           {/if}
+        {/if}
+      </div>
+    </section>
+
+    <section class="trust" aria-labelledby="perm-title">
+      <div class="trust-head">
+        <h3 id="perm-title">Permissions</h3>
+        <Seg
+          label="Permissions"
+          bind:value={permMode}
+          onchange={switchPermMode}
+          options={[
+            { value: 'paths', label: 'Secret paths' },
+            { value: 'json', label: 'JSON' },
+            { value: 'account', label: 'Whole account' }
+          ]}
+        />
+      </div>
+      <div class="trust-body">
+        {#if permMode === 'paths'}
+          <div class="field">
+            <label class="field-label" for="r-paths">Secrets this role can read</label>
+            <textarea
+              id="r-paths"
+              class="textarea mono"
+              rows="3"
+              bind:value={prefixesText}
+              placeholder="shop/prod/"
+              spellcheck="false"
+              aria-invalid={touched && !!permError}
+            ></textarea>
+            {#if touched && permError}
+              <span class="field-error">{permError}</span>
+            {:else}
+              <span class="field-hint">One path per line. Sessions can list, describe and read secrets under these paths and nothing else in the account.</span>
+            {/if}
+          </div>
+        {:else if permMode === 'json'}
+          <div class="field">
+            <label class="field-label" for="r-perm-json">Permissions policy</label>
+            <textarea id="r-perm-json" class="textarea mono code" rows="12" spellcheck="false" bind:value={permJson} aria-invalid={!!permError}></textarea>
+            {#if permError}
+              <span class="field-error">{permError}</span>
+            {:else}
+              <span class="field-hint">
+                Deny by default. <code>*</code> and <code>?</code> are wildcards. Resources are checked for Secrets Manager; other actions need
+                <code>"Resource": "*"</code>. Checked again when you save.
+              </span>
+            {/if}
+          </div>
+        {:else}
+          <div class="callout callout-warning">
+            <Icon name="alert-triangle" size={16} />
+            <span>Sessions from this role can read and change every secret, key and parameter in the account. Limit it to the secret paths it needs.</span>
+          </div>
         {/if}
       </div>
     </section>

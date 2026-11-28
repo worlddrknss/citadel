@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -40,8 +42,11 @@ type nativeRole struct {
 	Description    string            `json:"description"`
 	Trust          nativeTrustPolicy `json:"trust"`
 	MaxSessionSecs int               `json:"maxSessionSeconds"`
-	CreatedAt      string            `json:"createdAt"`
-	UpdatedAt      string            `json:"updatedAt"`
+	// PermissionsPolicy limits what the role's sessions may do; absent when
+	// the role has none (its sessions are unrestricted in the account).
+	PermissionsPolicy json.RawMessage `json:"permissionsPolicy,omitempty"`
+	CreatedAt         string          `json:"createdAt"`
+	UpdatedAt         string          `json:"updatedAt"`
 }
 
 // ---- OIDC providers --------------------------------------------------------
@@ -223,6 +228,9 @@ type createRoleRequest struct {
 	Description    string            `json:"description"`
 	Trust          nativeTrustPolicy `json:"trust"`
 	MaxSessionSecs int               `json:"maxSessionSeconds"`
+	// PermissionsPolicy is an IAM policy document (a JSON object). Omitted
+	// on an update: keep the role's policy. null or {}: remove it.
+	PermissionsPolicy json.RawMessage `json:"permissionsPolicy"`
 }
 
 func (s *Server) handleV1CreateRole(w http.ResponseWriter, r *http.Request) {
@@ -252,7 +260,7 @@ func (s *Server) saveRole(w http.ResponseWriter, r *http.Request, update bool) {
 	}
 	// The store upserts, so existence decides create (409 when taken) vs
 	// update (404 when missing) here.
-	_, err := s.store.GetIAMRole(ctx, sess.AccountID, roleName)
+	existing, err := s.store.GetIAMRole(ctx, sess.AccountID, roleName)
 	switch {
 	case err != nil && !errors.Is(err, store.ErrIAMRoleNotFound):
 		writeNativeError(w, http.StatusInternalServerError, "lookup_failed", err.Error())
@@ -268,6 +276,14 @@ func (s *Server) saveRole(w http.ResponseWriter, r *http.Request, update bool) {
 	if err != nil {
 		writeNativeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
+	}
+	permissions := existing.PermissionsPolicy
+	if req.PermissionsPolicy != nil || !update {
+		permissions, err = normalizeRolePermissions(req.PermissionsPolicy)
+		if err != nil {
+			writeNativeError(w, http.StatusBadRequest, "invalid_request", "permissionsPolicy: "+err.Error())
+			return
+		}
 	}
 	maxSecs := req.MaxSessionSecs
 	if maxSecs <= 0 {
@@ -286,6 +302,8 @@ func (s *Server) saveRole(w http.ResponseWriter, r *http.Request, update bool) {
 		Description:    strings.TrimSpace(req.Description),
 		Trust:          trust,
 		MaxSessionSecs: maxSecs,
+
+		PermissionsPolicy: permissions,
 	}
 	if err := s.store.CreateIAMRole(ctx, role); err != nil {
 		writeNativeError(w, http.StatusInternalServerError, "save_failed", err.Error())
@@ -336,10 +354,40 @@ func toNativeRole(role store.IAMRole) nativeRole {
 			Subjects:    role.Trust.Subjects,
 			Principals:  role.Trust.Principals,
 		},
-		MaxSessionSecs: role.MaxSessionSecs,
-		CreatedAt:      role.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:      role.UpdatedAt.UTC().Format(time.RFC3339),
+		MaxSessionSecs:    role.MaxSessionSecs,
+		PermissionsPolicy: rolePermissionsJSON(role.PermissionsPolicy),
+		CreatedAt:         role.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:         role.UpdatedAt.UTC().Format(time.RFC3339),
 	}
+}
+
+// normalizeRolePermissions validates a permissions policy from the API and
+// returns it as stored: compact JSON, or "" for none (null, {} or absent).
+func normalizeRolePermissions(raw json.RawMessage) (string, error) {
+	t := strings.TrimSpace(string(raw))
+	if t == "" || t == "null" || t == "{}" {
+		return "", nil
+	}
+	if !strings.HasPrefix(t, "{") {
+		return "", errors.New("must be a policy document (a JSON object)")
+	}
+	if _, err := parseRolePolicy(t); err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+// rolePermissionsJSON renders a stored policy for the API; nil when none.
+func rolePermissionsJSON(doc string) json.RawMessage {
+	doc = strings.TrimSpace(doc)
+	if doc == "" || !json.Valid([]byte(doc)) {
+		return nil
+	}
+	return json.RawMessage(doc)
 }
 
 // validateTrustPolicy normalizes and validates a UI-supplied trust policy. For

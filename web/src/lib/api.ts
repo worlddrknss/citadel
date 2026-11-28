@@ -397,12 +397,27 @@ export interface TrustPolicy {
   principals?: string[];
 }
 
+// An IAM-style identity policy limiting what a role's sessions may do.
+export interface PolicyStatement {
+  Sid?: string;
+  Effect: 'Allow' | 'Deny';
+  Action: string | string[];
+  Resource: string | string[];
+}
+
+export interface PermissionsPolicy {
+  Version?: string;
+  Statement: PolicyStatement | PolicyStatement[];
+}
+
 export interface Role {
   roleArn: string;
   roleName: string;
   description: string;
   trust: TrustPolicy;
   maxSessionSeconds: number;
+  // Absent: the role's sessions act with the whole account's access.
+  permissionsPolicy?: PermissionsPolicy;
   createdAt: string;
   updatedAt: string;
 }
@@ -830,6 +845,7 @@ export const api = {
     description?: string;
     trust: TrustPolicy;
     maxSessionSeconds?: number;
+    permissionsPolicy?: PermissionsPolicy | null;
   }) =>
     req<{ roleArn: string }>('/v1/iam/roles', {
       method: 'POST',

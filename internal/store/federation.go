@@ -10,6 +10,9 @@ import (
 // STSSessionResolver is implemented by stores that persist STS sessions.
 type STSSessionResolver interface {
 	GetSTSSessionSecret(ctx context.Context, keyID string) (accountID, secret, sessionToken string, expiresAt time.Time, err error)
+	// GetSTSSession returns the session's metadata (the role it was minted
+	// for, its session name and subject) without its secret.
+	GetSTSSession(ctx context.Context, keyID string) (STSSession, error)
 }
 
 var (
@@ -56,8 +59,11 @@ type IAMRole struct {
 	Description    string
 	Trust          TrustPolicy
 	MaxSessionSecs int
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// PermissionsPolicy is an IAM-style identity policy (JSON) limiting what
+	// the role's sessions may do. Empty: unrestricted within the account.
+	PermissionsPolicy string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // STSSession is a minted set of temporary credentials.

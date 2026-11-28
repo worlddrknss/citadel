@@ -130,7 +130,7 @@ func (s *Server) handleBatchGetSecretValue(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		items, next, err := s.scanSecrets(ctx, after, limit, false, func(m store.SecretMetadataRecord) bool {
-			return secretMatchesFilters(m, req.Filters)
+			return secretMatchesFilters(m, req.Filters) && !roleDenies(r, "secretsmanager:ListSecrets", m.ARN)
 		})
 		if err != nil {
 			writeAWSJSONError(w, http.StatusInternalServerError, "InternalServiceError", "list secrets: "+err.Error())

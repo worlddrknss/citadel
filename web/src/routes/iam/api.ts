@@ -1,10 +1,16 @@
 // Page-local client for IAM edits the shared #lib/api client lacks. Targets
 // the contracts documented in the console redesign report.
 
-import { req, type TrustPolicy } from '#lib/api.ts';
+import { req, type PermissionsPolicy, type TrustPolicy } from '#lib/api.ts';
 
 export const iamApi = {
-  updateRole: (body: { roleName: string; description: string; trust: TrustPolicy; maxSessionSeconds: number }) =>
+  updateRole: (body: {
+    roleName: string;
+    description: string;
+    trust: TrustPolicy;
+    maxSessionSeconds: number;
+    permissionsPolicy: PermissionsPolicy | null;
+  }) =>
     req<{ roleArn: string; updated: boolean }>('/v1/iam/roles/update', { method: 'POST', body: JSON.stringify(body) }),
   updateOIDCProvider: (providerArn: string, clientIds: string[]) =>
     req<{ providerArn: string; updated: boolean }>('/v1/iam/oidc-providers/update', {

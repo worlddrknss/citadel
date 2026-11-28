@@ -19,7 +19,7 @@ type rowScanner interface {
 func scanIAMRole(sc rowScanner) (store.IAMRole, error) {
 	var role store.IAMRole
 	var policy string
-	if err := sc.Scan(&role.RoleARN, &role.AccountID, &role.RoleName, &role.Description, &policy, &role.MaxSessionSecs, &role.CreatedAt, &role.UpdatedAt); err != nil {
+	if err := sc.Scan(&role.RoleARN, &role.AccountID, &role.RoleName, &role.Description, &policy, &role.MaxSessionSecs, &role.PermissionsPolicy, &role.CreatedAt, &role.UpdatedAt); err != nil {
 		return store.IAMRole{}, err
 	}
 	_ = json.Unmarshal([]byte(policy), &role.Trust)
@@ -104,17 +104,17 @@ func (s *Store) CreateIAMRole(ctx context.Context, role store.IAMRole) error {
 		role.MaxSessionSecs = 3600
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO iam_roles (role_arn, account_id, role_name, description, trust_policy, max_session_seconds, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-ON CONFLICT (role_arn) DO UPDATE SET description = EXCLUDED.description, trust_policy = EXCLUDED.trust_policy, max_session_seconds = EXCLUDED.max_session_seconds, updated_at = NOW()`,
-		role.RoleARN, role.AccountID, role.RoleName, role.Description, string(policy), role.MaxSessionSecs,
+		`INSERT INTO iam_roles (role_arn, account_id, role_name, description, trust_policy, max_session_seconds, permissions_policy, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+ON CONFLICT (role_arn) DO UPDATE SET description = EXCLUDED.description, trust_policy = EXCLUDED.trust_policy, max_session_seconds = EXCLUDED.max_session_seconds, permissions_policy = EXCLUDED.permissions_policy, updated_at = NOW()`,
+		role.RoleARN, role.AccountID, role.RoleName, role.Description, string(policy), role.MaxSessionSecs, role.PermissionsPolicy,
 	)
 	return err
 }
 
 func (s *Store) ListIAMRoles(ctx context.Context, accountID string) ([]store.IAMRole, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT role_arn, account_id, role_name, description, trust_policy, max_session_seconds, created_at, updated_at
+		`SELECT role_arn, account_id, role_name, description, trust_policy, max_session_seconds, permissions_policy, created_at, updated_at
 FROM iam_roles WHERE account_id = $1 ORDER BY role_name`,
 		strings.TrimSpace(accountID),
 	)
@@ -135,7 +135,7 @@ FROM iam_roles WHERE account_id = $1 ORDER BY role_name`,
 
 func (s *Store) GetIAMRole(ctx context.Context, accountID, roleName string) (store.IAMRole, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT role_arn, account_id, role_name, description, trust_policy, max_session_seconds, created_at, updated_at
+		`SELECT role_arn, account_id, role_name, description, trust_policy, max_session_seconds, permissions_policy, created_at, updated_at
 FROM iam_roles WHERE account_id = $1 AND role_name = $2`,
 		strings.TrimSpace(accountID), strings.TrimSpace(roleName),
 	)
@@ -149,7 +149,7 @@ FROM iam_roles WHERE account_id = $1 AND role_name = $2`,
 // GetIAMRoleByARN resolves a role by its full ARN regardless of account scope.
 func (s *Store) GetIAMRoleByARN(ctx context.Context, roleARN string) (store.IAMRole, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT role_arn, account_id, role_name, description, trust_policy, max_session_seconds, created_at, updated_at
+		`SELECT role_arn, account_id, role_name, description, trust_policy, max_session_seconds, permissions_policy, created_at, updated_at
 FROM iam_roles WHERE role_arn = $1`,
 		strings.TrimSpace(roleARN),
 	)
@@ -214,6 +214,27 @@ FROM sts_sessions WHERE access_key_id = $1`,
 		return "", "", "", expiresAt, fmt.Errorf("unwrap temp secret: %w", err)
 	}
 	return accountID, string(secretBytes), sessionToken, expiresAt, nil
+}
+
+// GetSTSSession returns a temporary credential's metadata, without its
+// secret. It returns ErrSTSSessionExpired once past expires_at.
+func (s *Store) GetSTSSession(ctx context.Context, keyID string) (store.STSSession, error) {
+	var sess store.STSSession
+	err := s.db.QueryRowContext(ctx,
+		`SELECT access_key_id, account_id, role_arn, role_session_name, subject, expires_at, created_at
+FROM sts_sessions WHERE access_key_id = $1`,
+		strings.TrimSpace(keyID),
+	).Scan(&sess.AccessKeyID, &sess.AccountID, &sess.RoleARN, &sess.RoleSessionName, &sess.Subject, &sess.ExpiresAt, &sess.CreatedAt)
+	if err == sql.ErrNoRows {
+		return store.STSSession{}, store.ErrSTSSessionNotFound
+	}
+	if err != nil {
+		return store.STSSession{}, err
+	}
+	if time.Now().UTC().After(sess.ExpiresAt.UTC()) {
+		return store.STSSession{}, store.ErrSTSSessionExpired
+	}
+	return sess, nil
 }
 
 // DeleteExpiredSTSSessions garbage-collects sessions past their expiry.

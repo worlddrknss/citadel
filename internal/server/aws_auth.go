@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -28,11 +30,24 @@ type awsCaller struct {
 	Username    string
 	AccountID   string
 	Temporary   bool // STS-issued (ASIA) credentials
+
+	// For temporary credentials: the role and session they were minted
+	// for, and the role's permissions policy. Restricted is set when the
+	// role has a policy; Policy is then nil if it no longer parses, which
+	// denies everything.
+	RoleName    string
+	SessionName string
+	Restricted  bool
+	Policy      *rolePolicy
 }
 
 // PrincipalARN renders the caller as an IAM principal for policy evaluation.
+// An assumed role renders as arn:aws:sts::<account>:assumed-role/<role>/<session>.
 func (c awsCaller) PrincipalARN() string {
 	if c.Temporary {
+		if c.RoleName != "" {
+			return arn.Build("sts", "", c.AccountID, "assumed-role/"+c.RoleName+"/"+c.SessionName)
+		}
 		return arn.Build("sts", "", c.AccountID, "assumed-role/"+c.Username)
 	}
 	return arn.Build("iam", "", c.AccountID, "user/"+c.Username)
@@ -95,6 +110,9 @@ func (s *Server) verifyAWSRequest(r *http.Request, bodyHash string) (awsCaller, 
 			return awsCaller{}, errors.New("missing or invalid security token")
 		}
 		caller = awsCaller{AccessKeyID: comp.AccessKey, Username: comp.AccessKey, AccountID: acct, Temporary: true}
+		if err := s.attachRoleToCaller(r.Context(), resolver, &caller); err != nil {
+			return awsCaller{}, err
+		}
 		secret = sec
 	default:
 		username, acct, sec, status, err := s.store.GetAccessKeyByID(r.Context(), comp.AccessKey)
@@ -142,4 +160,38 @@ func (s *Server) authenticateAWSJSON(w http.ResponseWriter, r *http.Request) (*h
 		return nil, false
 	}
 	return r.WithContext(withAWSCaller(r.Context(), caller)), true
+}
+
+// attachRoleToCaller resolves the role a temporary credential was minted
+// for and its permissions policy. A session whose role was deleted is
+// refused: deleting a role revokes its sessions.
+func (s *Server) attachRoleToCaller(ctx context.Context, resolver store.STSSessionResolver, c *awsCaller) error {
+	sess, err := resolver.GetSTSSession(ctx, c.AccessKeyID)
+	if err != nil {
+		return err
+	}
+	role, err := s.store.GetIAMRoleByARN(ctx, sess.RoleARN)
+	if err != nil {
+		return fmt.Errorf("role of temporary credential: %w", err)
+	}
+	c.RoleName = role.RoleName
+	c.SessionName = sess.RoleSessionName
+	if strings.TrimSpace(role.PermissionsPolicy) == "" {
+		return nil
+	}
+	c.Restricted = true
+	p, perr := parseRolePolicy(role.PermissionsPolicy)
+	if perr != nil {
+		slog.Error("role permissions policy does not parse; denying its sessions", "role", role.RoleARN, "error", perr)
+		return nil
+	}
+	c.Policy = p
+	return nil
+}
+
+// roleDenies reports whether the request comes from a restricted role
+// session whose permissions policy does not allow action on resource.
+func roleDenies(r *http.Request, action, resource string) bool {
+	c, ok := awsCallerFromContext(r.Context())
+	return ok && c.Restricted && !c.Policy.allows(action, resource)
 }

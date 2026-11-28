@@ -56,6 +56,10 @@ of running. CI runs the full test suite in that mode.
   `AssumeRoleWithWebIdentity` is unsigned by design: the OIDC token is the
   credential, checked against the provider's keys, audience and the role's
   trust policy.
+  What temporary credentials may then do is the role's permissions policy,
+  evaluated on every request (deny by default; Secrets Manager resources are
+  checked per secret). A role without one acts with the whole account's
+  access, so give every workload role a policy limited to its paths.
 - **Console:** username and password (rate limited per IP and per username,
   with lockout and identical responses for every failure), or an external OIDC
   provider with PKCE, state and nonce. Sessions are server-side, expire after

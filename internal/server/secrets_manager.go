@@ -233,6 +233,11 @@ func (s *Server) handleCreateSecret(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("%q names a folder that already holds secrets; a secret stored there would shadow the folder's JSON projection and be invisible in the UI", req.Name))
 		return
 	}
+	if roleDenies(r, "secretsmanager:CreateSecret", s.store.SecretARNForCtx(r.Context(), req.Name)) {
+		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "denied", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
+		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "the role's permissions policy does not allow secretsmanager:CreateSecret on this secret")
+		return
+	}
 	if s.awsWriteNeedsApproval(r.Context(), req.Name) {
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "denied", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
 		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", awsApprovalRequiredMessage)
@@ -671,7 +676,7 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, next, err := s.scanSecretsOrdered(r.Context(), after, limit, req.IncludePlannedDeletion, descending, func(m store.SecretMetadataRecord) bool {
-		return listableSecret(m, req)
+		return listableSecret(m, req) && !roleDenies(r, "secretsmanager:ListSecrets", m.ARN)
 	})
 	if err != nil {
 		s.recordAudit(r.Context(), store.AuditEvent{Action: action, Result: "error", ErrorType: "InternalServiceError", AuditOrigin: s.auditOrigin(r)})
@@ -817,6 +822,9 @@ func secretError(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) authorizeSecretAction(ctx context.Context, r *http.Request, meta store.SecretMetadataRecord, action string) error {
+	if roleDenies(r, action, meta.ARN) {
+		return errAccessDenied
+	}
 	policy := strings.TrimSpace(meta.PolicyDocument)
 	if policy == "" {
 		var err error

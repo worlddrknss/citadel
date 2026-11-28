@@ -164,6 +164,19 @@ func (s *Store) GetSTSSessionSecret(_ context.Context, keyID string) (accountID,
 	return m.sess.AccountID, m.secret, m.sessionToken, m.sess.ExpiresAt, nil
 }
 
+func (s *Store) GetSTSSession(_ context.Context, keyID string) (store.STSSession, error) {
+	s.fedMu.Lock()
+	defer s.fedMu.Unlock()
+	m, ok := s.stsSessions[keyID]
+	if !ok {
+		return store.STSSession{}, store.ErrSTSSessionNotFound
+	}
+	if time.Now().UTC().After(m.sess.ExpiresAt.UTC()) {
+		return store.STSSession{}, store.ErrSTSSessionExpired
+	}
+	return m.sess, nil
+}
+
 func (s *Store) DeleteExpiredSTSSessions(_ context.Context) (int64, error) {
 	s.fedMu.Lock()
 	defer s.fedMu.Unlock()
