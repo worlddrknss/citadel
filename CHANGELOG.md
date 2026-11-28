@@ -6,6 +6,8 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-11-28
+
 ### Added
 
 - Role permissions policies. A role's `permissionsPolicy` (an IAM identity

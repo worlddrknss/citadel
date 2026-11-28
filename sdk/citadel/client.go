@@ -42,7 +42,7 @@ import (
 // Version is the SDK version, sent in the User-Agent header. It is the
 // Citadel release the SDK ships with; the release workflow
 // (scripts/check-sdk-version.sh) fails a tag it doesn't match.
-const Version = "2.6.0"
+const Version = "2.7.0"
 
 // Environment variables read by New when the Config leaves a field empty.
 const (
