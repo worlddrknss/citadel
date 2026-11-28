@@ -15,6 +15,7 @@
   import RoleDrawer from './RoleDrawer.svelte';
   import ProviderModal from './ProviderModal.svelte';
   import { sessionLabel, fmtDate } from './trust';
+  import { permissionsSummary } from './permissions';
 
   let providers = $state<OIDCProvider[]>([]);
   let roles = $state<Role[]>([]);
@@ -128,6 +129,7 @@
     { id: 'name', label: 'Role', sort: (r) => r.roleName },
     { id: 'trust', label: 'Trusted principal', sort: (r) => r.trust.type },
     { id: 'cond', label: 'Conditions', hideOnMobile: true },
+    { id: 'perm', label: 'Permissions', sort: (r) => permissionsSummary(r.permissionsPolicy).label },
     { id: 'max', label: 'Max session', sort: (r) => r.maxSessionSeconds, hideOnMobile: true },
     { id: 'updated', label: 'Updated', sort: (r) => r.updatedAt, hideOnMobile: true },
     { id: 'act', label: '', align: 'end', width: '96px' }
@@ -238,6 +240,13 @@
             <span class="subtle small">+{((r.trust.type === 'oidc' ? r.trust.subjects : r.trust.principals)?.length ?? 0) - 2}</span>
           {/if}
         </span>
+      </td>
+      <td>
+        {#if r.permissionsPolicy}
+          <span class="mono small">{permissionsSummary(r.permissionsPolicy).label}</span>
+        {:else}
+          <Badge tone="warning" dot={false}>Whole account</Badge>
+        {/if}
       </td>
       <td class="num hide-sm">{sessionLabel(r.maxSessionSeconds)}</td>
       <td class="subtle hide-sm">{fmtDate(r.updatedAt)}</td>

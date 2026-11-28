@@ -6,6 +6,35 @@ All notable changes to Citadel are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Role permissions policies. A role's `permissionsPolicy` (an IAM identity
+  policy) limits what its temporary credentials may do, deny by default.
+  Secrets Manager resources are checked per secret: a role allowed
+  `arn:aws:secretsmanager:*:*:secret:shop/prod/*` can list, describe and read
+  only those secrets, and `ListSecrets` and `BatchGetSecretValue` return
+  nothing else. Other actions need `"Resource": "*"`. Restricted sessions can
+  chain into another role only with `sts:AssumeRole` on it. Policy changes
+  apply to existing sessions at once, and deleting a role ends its sessions.
+  The console's role editor sets it as **Secret paths**, JSON, or **Whole
+  account**, and the roles list shows each role's permissions. Native API:
+  `permissionsPolicy` on `POST /v1/iam/roles` and `/v1/iam/roles/update`
+  (omitted on update: unchanged; `null`: removed).
+
+### Changed
+
+- Assumed-role principals are `arn:aws:sts::<account>:assumed-role/<role>/<session>`
+  (they were `assumed-role/<temporary key ID>`), in `GetCallerIdentity`, the
+  audit log, and key and secret resource policies.
+
+### Security
+
+- Roles had no permissions: any role's temporary credentials could read and
+  change every secret in the account, so one workload could read another's
+  secrets by editing its ExternalSecret. Roles without a policy keep that
+  behaviour for compatibility; give each workload role a policy limited to
+  its paths (the console marks the others **Whole account**).
+
 ## [2.6.0] - 2026-11-13
 
 ### Added

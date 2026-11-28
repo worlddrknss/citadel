@@ -85,28 +85,25 @@ func isSTSRequest(r *http.Request) bool {
 // ---- caller resolution -----------------------------------------------------
 
 // resolveSignedSTSCaller verifies the request's SigV4 signature and returns
-// the caller's account and principal. Only KMS_INSECURE_DEV accepts unsigned
-// requests, attributing them to the deployment account.
-func (s *Server) resolveSignedSTSCaller(r *http.Request, bodyHash string) (accountID, principalARN string, err error) {
+// the caller. Only KMS_INSECURE_DEV accepts unsigned requests, attributing
+// them to the deployment account.
+func (s *Server) resolveSignedSTSCaller(r *http.Request, bodyHash string) (awsCaller, error) {
 	if s.cfg.InsecureDev && strings.TrimSpace(r.Header.Get("Authorization")) == "" {
 		_, acct := s.store.DeploymentIdentity()
-		return acct, arn.Build("iam", "", acct, "user/local"), nil
+		return awsCaller{Username: "local", AccountID: acct}, nil
 	}
-	caller, err := s.verifyAWSRequest(r, bodyHash)
-	if err != nil {
-		return "", "", err
-	}
-	return caller.AccountID, caller.PrincipalARN(), nil
+	return s.verifyAWSRequest(r, bodyHash)
 }
 
 // ---- GetCallerIdentity -----------------------------------------------------
 
 func (s *Server) handleSTSGetCallerIdentity(w http.ResponseWriter, r *http.Request, bodyHash string) {
-	accountID, principalARN, err := s.resolveSignedSTSCaller(r, bodyHash)
+	caller, err := s.resolveSignedSTSCaller(r, bodyHash)
 	if err != nil {
 		writeSTSError(w, http.StatusForbidden, "InvalidClientTokenId", "the security token included in the request is invalid")
 		return
 	}
+	accountID, principalARN := caller.AccountID, caller.PrincipalARN()
 	resp := stsGetCallerIdentityResponse{}
 	resp.XMLNS = stsXMLNamespace
 	resp.Result.Account = accountID
@@ -119,15 +116,22 @@ func (s *Server) handleSTSGetCallerIdentity(w http.ResponseWriter, r *http.Reque
 // ---- AssumeRole ------------------------------------------------------------
 
 func (s *Server) handleSTSAssumeRole(w http.ResponseWriter, r *http.Request, bodyHash string) {
-	callerAccount, callerARN, err := s.resolveSignedSTSCaller(r, bodyHash)
+	caller, err := s.resolveSignedSTSCaller(r, bodyHash)
 	if err != nil {
 		writeSTSError(w, http.StatusForbidden, "AccessDenied", "the caller is not authorized to perform sts:AssumeRole")
 		return
 	}
+	callerAccount, callerARN := caller.AccountID, caller.PrincipalARN()
 	roleARN := strings.TrimSpace(r.PostForm.Get("RoleArn"))
 	sessionName := strings.TrimSpace(r.PostForm.Get("RoleSessionName"))
 	if roleARN == "" || sessionName == "" {
 		writeSTSError(w, http.StatusBadRequest, "ValidationError", "RoleArn and RoleSessionName are required")
+		return
+	}
+	// A restricted role session may assume another role (role chaining)
+	// only when its permissions policy allows sts:AssumeRole on it.
+	if caller.Restricted && !caller.Policy.allows("sts:AssumeRole", roleARN) {
+		writeSTSError(w, http.StatusForbidden, "AccessDenied", "the caller is not authorized to perform sts:AssumeRole")
 		return
 	}
 	ctx := context.Background()

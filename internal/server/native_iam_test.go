@@ -94,3 +94,50 @@ func TestNativeIAMRoleLifecycle(t *testing.T) {
 	wantStatus(t, e.do("DELETE", "/v1/iam/roles?roleName=deploy", nil, alice), http.StatusOK)
 	wantStatus(t, e.do("DELETE", "/v1/iam/roles?roleName=deploy", nil, alice), http.StatusNotFound)
 }
+
+func TestNativeIAMRolePermissionsPolicy(t *testing.T) {
+	e := newAuthEnv(t)
+	alice := e.session("alice", e.acctA)
+	policy := map[string]any{"Version": "2012-10-17", "Statement": []any{map[string]any{
+		"Effect": "Allow", "Action": []string{"secretsmanager:GetSecretValue", "secretsmanager:ListSecrets"},
+		"Resource": "arn:aws:secretsmanager:*:*:secret:shop/prod/*",
+	}}}
+	role := map[string]any{"roleName": "shop", "trust": map[string]any{"type": "account", "principals": []string{e.acctA}}, "permissionsPolicy": policy}
+	wantStatus(t, e.do("POST", "/v1/iam/roles", role, alice), http.StatusOK)
+	got := func() any {
+		roles := decode(t, e.do("GET", "/v1/iam/roles", nil, alice))["roles"].([]any)
+		return roles[0].(map[string]any)["permissionsPolicy"]
+	}
+	p, ok := got().(map[string]any)
+	if !ok || p["Version"] != "2012-10-17" {
+		t.Fatalf("permissionsPolicy after create = %v", got())
+	}
+
+	// An update that omits permissionsPolicy keeps it.
+	upd := map[string]any{"roleName": "shop", "description": "x", "trust": map[string]any{"type": "account", "principals": []string{e.acctA}}}
+	wantStatus(t, e.do("POST", "/v1/iam/roles/update", upd, alice), http.StatusOK)
+	if got() == nil {
+		t.Fatal("an update without permissionsPolicy removed it")
+	}
+	// Invalid policies are refused, and the stored one is unchanged.
+	for name, bad := range map[string]any{
+		"principal": map[string]any{"Statement": []any{map[string]any{"Effect": "Allow", "Action": "*", "Resource": "*", "Principal": "*"}}},
+		"condition": map[string]any{"Statement": []any{map[string]any{"Effect": "Allow", "Action": "*", "Resource": "*", "Condition": map[string]any{}}}},
+		"string":    "{}",
+		"no action": map[string]any{"Statement": []any{map[string]any{"Effect": "Allow", "Resource": "*"}}},
+	} {
+		upd["permissionsPolicy"] = bad
+		if rec := e.do("POST", "/v1/iam/roles/update", upd, alice); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400", name, rec.Code)
+		}
+	}
+	if got() == nil {
+		t.Fatal("a refused update changed the policy")
+	}
+	// null removes it.
+	upd["permissionsPolicy"] = nil
+	wantStatus(t, e.do("POST", "/v1/iam/roles/update", upd, alice), http.StatusOK)
+	if got() != nil {
+		t.Fatalf("permissionsPolicy after null = %v", got())
+	}
+}

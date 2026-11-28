@@ -126,6 +126,41 @@ spec:
 Each key in `payments/prod` becomes a key of the `payments` Kubernetes
 Secret.
 
+The `find` regexp only chooses what ESO copies; it is not access control.
+Anyone who can edit the ExternalSecret can change it. To keep each app to its
+own secrets, give each one a role whose **permissions** allow only its path,
+and a namespaced `SecretStore` that assumes it with the namespace's service
+account:
+
+1. In **IAM → Roles**, create a role per app. Trust: the Kubernetes OIDC
+   provider, audience `sts.amazonaws.com`, subject
+   `system:serviceaccount:payments:eso-payments`. Permissions: **Secret paths**
+   `payments/prod/`.
+2. In the app's namespace, a `SecretStore` that uses that service account:
+
+```yaml
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: citadel
+  namespace: payments
+spec:
+  provider:
+    aws:
+      service: SecretsManager
+      region: us-east-1
+      role: arn:aws:iam::<account-id>:role/payments-prod-secrets
+      auth:
+        jwt:
+          serviceAccountRef:
+            name: eso-payments
+```
+
+The role's sessions can then list, describe and read only `payments/prod/...`;
+`ListSecrets` returns nothing else, and reading another app's secret is
+refused. A role with no permissions (shown as **Whole account** in the console)
+can use everything in the account, as before 2.7.
+
 ## Next steps
 
 - **SDKs.** Read secrets from Next.js, Node.js or Go:

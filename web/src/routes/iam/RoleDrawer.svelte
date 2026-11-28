@@ -8,6 +8,7 @@
   import type { Role } from '#lib/api.ts';
   import Seg from './Seg.svelte';
   import { trustToJson, usage, sessionLabel, fmtDate } from './trust';
+  import { permissionsSummary, policyToJson } from './permissions';
 
   let {
     open = $bindable(false),
@@ -65,6 +66,22 @@
         <dd>{fmtDate(role.updatedAt)}</dd>
       </dl>
 
+      <section class="box" aria-labelledby="perm-title">
+        <div class="box-head">
+          <h3 id="perm-title">Permissions</h3>
+          {#if role.permissionsPolicy}<CopyButton value={policyToJson(role.permissionsPolicy)} label="Copy permissions policy" />{/if}
+        </div>
+        {#if role.permissionsPolicy}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable code must be keyboard-reachable) -->
+          <pre class="code" tabindex="0" aria-label="Permissions policy document">{policyToJson(role.permissionsPolicy)}</pre>
+        {:else}
+          <p class="perm-open">
+            <Badge tone="warning" dot={false}>{permissionsSummary(undefined).label}</Badge>
+            Sessions from this role can use everything in the account. Edit the role to limit it to the secret paths it needs.
+          </p>
+        {/if}
+      </section>
+
       <section class="box" aria-labelledby="tp-title">
         <div class="box-head">
           <h3 id="tp-title">Trust policy</h3>
@@ -105,6 +122,14 @@
 </Drawer>
 
 <style>
+  .perm-open {
+    margin: 0;
+    padding: 12px;
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
   .wrap {
     display: flex;
     flex-direction: column;

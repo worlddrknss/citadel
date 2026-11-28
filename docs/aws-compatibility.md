@@ -147,6 +147,21 @@ overwritten through the console's edit, and deleted.
 | AssumeRoleWithWebIdentity | 🟡 | Uses trust policies of type `oidc`. The issuer must be registered, and the audience and subject must match. Tokens are verified against the issuer's JWKS (RS256/384/512, ES256/384/512). Works with `stscreds.WebIdentityRoleProvider` (IRSA-style). |
 | AssumeRoleWithSAML, GetSessionToken, GetFederationToken, DecodeAuthorizationMessage, GetAccessKeyInfo | ❌ | |
 
+**Role permissions.** A role's permissions policy (an IAM identity policy:
+`Effect`, `Action`, `Resource`, with `*` and `?` wildcards) limits what its
+temporary credentials may do, deny by default: a request needs an Allow that
+matches its action and resource and no matching Deny. Resources are checked
+for Secrets Manager, using the secret ARN
+`arn:aws:secretsmanager:<region>:<account>:secret:<name>`; `ListSecrets` and
+`BatchGetSecretValue` return only the secrets the policy allows
+`secretsmanager:ListSecrets` (or, for each value, `GetSecretValue`) on. Every
+other action is checked against the resource `*`, so it needs a statement with
+`"Resource": "*"`. A restricted session can assume another role only if its
+policy allows `sts:AssumeRole` on that role. Policy changes apply to existing
+sessions at once, and deleting a role ends its sessions. A role with no policy
+keeps account-wide access. Assumed-role principals are
+`arn:aws:sts::<account>:assumed-role/<role>/<session>`.
+
 ## ACM and ACM PCA
 
 These are served on the same endpoint (AWS JSON 1.1, `X-Amz-Target`

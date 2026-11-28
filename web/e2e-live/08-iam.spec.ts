@@ -56,6 +56,8 @@ test('admin creates and edits a role trusting the provider', async ({ page }) =>
   await dlg.getByLabel('Identity provider').selectOption(ISSUER);
   await dlg.getByLabel('Audiences').fill('sts.citadel');
   await dlg.getByLabel('Subjects').fill('repo:acme/app:ref:refs/heads/main');
+  // New roles are limited to secret paths; one is required.
+  await dlg.getByLabel('Secrets this role can read').fill('acme/prod');
   await dlg.getByRole('button', { name: 'Create role' }).click();
   await expect(dlg).toBeHidden();
   // The new role opens in its drawer.
@@ -77,6 +79,8 @@ test('admin creates and edits a role trusting the provider', async ({ page }) =>
   const role = roles.roles.find((r: { roleName: string }) => r.roleName === 'gha-deploy');
   expect(role.description).toBe('Any ref of acme/app');
   expect(role.trust.subjects).toEqual(['repo:acme/app:*']);
+  // Editing the trust left the permissions as created.
+  expect(role.permissionsPolicy.Statement[0].Resource).toEqual(['arn:aws:secretsmanager:*:*:secret:acme/prod/*']);
   await page.waitForLoadState('networkidle');
   await checkA11y(page);
 });

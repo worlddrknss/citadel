@@ -270,6 +270,14 @@ func (s *Server) handleKMS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	target := r.Header.Get("X-Amz-Target")
+	// A role session with a permissions policy is deny by default: refuse
+	// any action the policy can't allow before the handler runs. Handlers
+	// of resource-checked actions then check the resource (role_policy.go).
+	if c, ok := awsCallerFromContext(r.Context()); ok && c.Restricted && !roleActionAllowed(c.Policy, iamActionForTarget(target)) {
+		s.recordAudit(r.Context(), store.AuditEvent{Action: target, Result: "denied", ErrorType: "AccessDeniedException", AuditOrigin: s.auditOrigin(r)})
+		writeAWSJSONError(w, http.StatusBadRequest, "AccessDeniedException", "the role's permissions policy does not allow "+iamActionForTarget(target))
+		return
+	}
 	// Write-ahead audit: a state-changing action is recorded as attempted
 	// before it runs, or refused (audit_writeahead.go).
 	if awsWriteAhead(target) {
